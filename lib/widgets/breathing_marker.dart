@@ -43,7 +43,7 @@ class _BreathingMarkerState extends State<BreathingMarker>
             shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
-                color: Colors.orange.withOpacity(0.6),
+                color: Colors.orange.withValues(alpha: 0.6),
                 blurRadius: _animation.value, // Breathing blur
                 spreadRadius: _animation.value / 2, // Breathing spread
               ),

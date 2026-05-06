@@ -1,0 +1,100 @@
+import 'dart:ui';
+
+enum MissionMode { objects, record, plan, run, logs }
+
+enum RecordObjectType { zone, risk, channel }
+
+enum CoveragePatternKind { zigzag, spiral }
+
+enum NavMockStatus { idle, executing, paused, failed }
+
+class MapPoint {
+  const MapPoint(this.x, this.y);
+
+  final double x;
+  final double y;
+
+  static MapPoint lerp(MapPoint a, MapPoint b, double t) {
+    return MapPoint(
+      lerpDouble(a.x, b.x, t) ?? a.x,
+      lerpDouble(a.y, b.y, t) ?? a.y,
+    );
+  }
+}
+
+class MissionZone {
+  const MissionZone({
+    required this.id,
+    required this.name,
+    required this.points,
+    this.hasCoveragePath = false,
+  });
+
+  final int id;
+  final String name;
+  final List<MapPoint> points;
+  final bool hasCoveragePath;
+}
+
+class ChannelPath {
+  const ChannelPath({
+    required this.id,
+    required this.name,
+    required this.points,
+  });
+
+  final int id;
+  final String name;
+  final List<MapPoint> points;
+}
+
+class InvalidSegment {
+  const InvalidSegment({required this.id, required this.points});
+
+  final int id;
+  final List<MapPoint> points;
+}
+
+class MissionLogEntry {
+  const MissionLogEntry({
+    required this.time,
+    required this.level,
+    required this.message,
+  });
+
+  final String time;
+  final String level;
+  final String message;
+}
+
+class MissionLayerVisibility {
+  const MissionLayerVisibility({
+    this.zones = true,
+    this.risks = true,
+    this.channels = true,
+    this.coverage = true,
+    this.invalidSegments = true,
+  });
+
+  final bool zones;
+  final bool risks;
+  final bool channels;
+  final bool coverage;
+  final bool invalidSegments;
+
+  MissionLayerVisibility copyWith({
+    bool? zones,
+    bool? risks,
+    bool? channels,
+    bool? coverage,
+    bool? invalidSegments,
+  }) {
+    return MissionLayerVisibility(
+      zones: zones ?? this.zones,
+      risks: risks ?? this.risks,
+      channels: channels ?? this.channels,
+      coverage: coverage ?? this.coverage,
+      invalidSegments: invalidSegments ?? this.invalidSegments,
+    );
+  }
+}

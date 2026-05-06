@@ -61,7 +61,9 @@ class MockDataProvider {
       // Simulate movement: slowly moving northeast
       final double dlat = 0.00002 * (0.5 + _random.nextDouble());
       final double dlon = 0.00003 * (0.5 + _random.nextDouble());
-      double newBattery = (_status.batteryPercent - 0.02).clamp(0, 100);
+      final double newBattery = (_status.batteryPercent - 0.02)
+          .clamp(0, 100)
+          .toDouble();
       _status = _status.copyWith(
         latitude: _status.latitude + dlat,
         longitude: _status.longitude + dlon,
@@ -77,7 +79,9 @@ class MockDataProvider {
 
   CoveragePath getCoveragePath() {
     if (_isMowing && _coveragePath.progress < 1.0) {
-      double newProgress = (_coveragePath.progress + 0.008).clamp(0, 1);
+      final double newProgress = (_coveragePath.progress + 0.008)
+          .clamp(0, 1)
+          .toDouble();
       // Covered area: rectangle expanding with progress
       final double size = 0.00015 * newProgress;
       final List<PathPoint> polygon = [

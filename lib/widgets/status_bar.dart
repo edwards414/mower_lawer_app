@@ -23,10 +23,12 @@ class StatusBar extends StatelessWidget {
   }
 
   Color _batteryColor() {
-    if (status.batteryPercent <= AppConstants.lowBatteryThreshold)
+    if (status.batteryPercent <= AppConstants.lowBatteryThreshold) {
       return Colors.red;
-    if (status.batteryPercent <= AppConstants.warningBatteryThreshold)
+    }
+    if (status.batteryPercent <= AppConstants.warningBatteryThreshold) {
       return Colors.orange;
+    }
     return Colors.green;
   }
 

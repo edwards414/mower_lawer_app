@@ -73,7 +73,7 @@ class _SettingsFormState extends State<SettingsForm> {
           style: Theme.of(context).textTheme.titleSmall,
         ),
         DropdownButtonFormField<CoveragePattern>(
-          value: _coveragePattern,
+          initialValue: _coveragePattern,
           items: const [
             DropdownMenuItem(
               value: CoveragePattern.parallel,

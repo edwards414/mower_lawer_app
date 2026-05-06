@@ -31,7 +31,7 @@ class MapWidget extends StatefulWidget {
 
 class _MapWidgetState extends State<MapWidget> {
   final MapController _mapController = MapController();
-  bool _shouldFollowMower = true;
+  final bool _shouldFollowMower = true;
 
   @override
   void didUpdateWidget(covariant MapWidget oldWidget) {
@@ -84,7 +84,7 @@ class _MapWidgetState extends State<MapWidget> {
                     .map(
                       (points) => Polygon(
                         points: points,
-                        color: Colors.green.withOpacity(0.3),
+                        color: Colors.green.withValues(alpha: 0.3),
                         borderStrokeWidth: 0,
                       ),
                     )
@@ -98,7 +98,7 @@ class _MapWidgetState extends State<MapWidget> {
                   Polyline(
                     points: pathPoints,
                     strokeWidth: 2.0,
-                    color: Colors.blueAccent.withOpacity(0.7),
+                    color: Colors.blueAccent.withValues(alpha: 0.7),
                   ),
                 ],
               ),
