@@ -30,7 +30,7 @@ class _MissionMapPainter extends CustomPainter {
   final MissionMockProvider mission;
   final double bottomInset;
 
-  static const Rect _worldBounds = Rect.fromLTWH(0, 12, 104, 128);
+  static const Rect _fallbackWorldBounds = Rect.fromLTWH(0, 12, 104, 128);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -43,10 +43,13 @@ class _MissionMapPainter extends CustomPainter {
     final mapRect = Rect.fromLTWH(0, 0, size.width, mapHeight);
 
     _drawGrid(canvas, mapRect);
-    final project = _projector(mapRect);
+    final project = _projector(mapRect, _worldBounds());
 
     if (mission.layers.zones) {
       for (final zone in mission.zones) {
+        if (zone.points.length < 3) {
+          continue;
+        }
         _drawPolygon(
           canvas,
           zone.points,
@@ -118,18 +121,24 @@ class _MissionMapPainter extends CustomPainter {
       _drawRecordingTrace(canvas, project);
     }
 
-    _drawRobot(canvas, project(mission.robotPosition), mission.robotHeadingRad);
+    if (mission.shouldShowRobot) {
+      _drawRobot(
+        canvas,
+        project(mission.robotPosition),
+        mission.robotHeadingRad,
+      );
+    }
     _drawScalePill(canvas, mapRect);
   }
 
-  Offset Function(MapPoint point) _projector(Rect mapRect) {
+  Offset Function(MapPoint point) _projector(Rect mapRect, Rect worldBounds) {
     final scale = math.min(
-      (mapRect.width - 44) / _worldBounds.width,
-      (mapRect.height - 44) / _worldBounds.height,
+      (mapRect.width - 44) / worldBounds.width,
+      (mapRect.height - 44) / worldBounds.height,
     );
     final contentSize = Size(
-      _worldBounds.width * scale,
-      _worldBounds.height * scale,
+      worldBounds.width * scale,
+      worldBounds.height * scale,
     );
     final offset = Offset(
       mapRect.left + (mapRect.width - contentSize.width) / 2,
@@ -138,10 +147,43 @@ class _MissionMapPainter extends CustomPainter {
 
     return (MapPoint point) {
       return Offset(
-        offset.dx + (point.x - _worldBounds.left) * scale,
-        offset.dy + (point.y - _worldBounds.top) * scale,
+        offset.dx + (point.x - worldBounds.left) * scale,
+        offset.dy + (point.y - worldBounds.top) * scale,
       );
     };
+  }
+
+  Rect _worldBounds() {
+    final points = <MapPoint>[
+      if (mission.shouldShowRobot) mission.robotPosition,
+      for (final zone in mission.zones) ...zone.points,
+      for (final risk in mission.riskZones) ...risk.points,
+      for (final channel in mission.channels) ...channel.points,
+      for (final row in mission.coverageRows) ...row,
+      for (final segment in mission.invalidSegments) ...segment.points,
+    ];
+    if (points.length < 2) {
+      return _fallbackWorldBounds;
+    }
+    var minX = points.first.x;
+    var maxX = points.first.x;
+    var minY = points.first.y;
+    var maxY = points.first.y;
+    for (final point in points.skip(1)) {
+      minX = math.min(minX, point.x);
+      maxX = math.max(maxX, point.x);
+      minY = math.min(minY, point.y);
+      maxY = math.max(maxY, point.y);
+    }
+    final width = math.max(maxX - minX, 1.0);
+    final height = math.max(maxY - minY, 1.0);
+    final padding = math.max(math.max(width, height) * 0.12, 2.0);
+    return Rect.fromLTRB(
+      minX - padding,
+      minY - padding,
+      maxX + padding,
+      maxY + padding,
+    );
   }
 
   void _drawGrid(Canvas canvas, Rect rect) {

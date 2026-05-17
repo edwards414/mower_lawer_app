@@ -34,8 +34,16 @@ class TopStatusPill extends StatelessWidget {
           children: [
             _StatusItem(
               icon: Icons.hub_outlined,
-              label: 'ROS',
-              color: const Color(0xFF19A763),
+              label: mission.rosConnected
+                  ? 'ROS'
+                  : mission.mockDataEnabled
+                  ? 'Mock'
+                  : 'Wait',
+              color: mission.rosConnected
+                  ? const Color(0xFF19A763)
+                  : mission.mockDataEnabled
+                  ? const Color(0xFFE08C1A)
+                  : const Color(0xFF607D8B),
             ),
             const SizedBox(width: 10),
             _StatusItem(

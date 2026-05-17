@@ -4,7 +4,9 @@ import 'package:provider/provider.dart';
 import 'providers/mission_mock_provider.dart';
 import 'providers/mower_status_provider.dart';
 import 'screens/home_screen.dart';
+import 'services/rosbridge_service.dart';
 import 'services/ros_service.dart';
+import 'widgets/iphone_12_template.dart';
 
 void main() {
   runApp(const MowerApp());
@@ -18,8 +20,13 @@ class MowerApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         Provider<RosService>(create: (_) => RosService()),
+        Provider<RosbridgeService>(
+          create: (_) => RosbridgeService(),
+          dispose: (_, service) => service.dispose(),
+        ),
         ChangeNotifierProvider<MissionMockProvider>(
-          create: (_) => MissionMockProvider(),
+          create: (ctx) =>
+              MissionMockProvider(rosbridge: ctx.read<RosbridgeService>()),
         ),
         ChangeNotifierProvider<MowerStatusProvider>(
           create: (ctx) => MowerStatusProvider(ctx.read<RosService>()),
@@ -28,6 +35,9 @@ class MowerApp extends StatelessWidget {
       child: MaterialApp(
         title: '割草任務控制台',
         debugShowCheckedModeBanner: false,
+        builder: (context, child) {
+          return IPhone12Template(child: child ?? const SizedBox.shrink());
+        },
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
             seedColor: const Color(0xFF167A4A),

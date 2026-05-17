@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
+
+import '../providers/mission_mock_provider.dart';
+import '../services/rosbridge_service.dart';
 
 /// Mower configuration screen for setting robot IP
 class MowerConfigScreen extends StatefulWidget {
@@ -21,23 +24,28 @@ class _MowerConfigScreenState extends State<MowerConfigScreen> {
   }
 
   Future<void> _loadConfig() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedIp = prefs.getString('robot_ip') ?? '';
     setState(() {
-      _ipController.text = savedIp;
+      _ipController.text = context.read<MissionMockProvider>().robotIp;
       _isLoading = false;
     });
   }
 
   Future<void> _saveConfig() async {
     if (_formKey.currentState!.validate()) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('robot_ip', _ipController.text);
+      final error = await context.read<MissionMockProvider>().updateRobotIp(
+        _ipController.text,
+      );
 
       if (mounted) {
+        if (error != null) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(error)));
+          return;
+        }
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('Configuration saved')));
+        ).showSnackBar(const SnackBar(content: Text('機器人 IP 已更新')));
         Navigator.pop(context);
       }
     }
@@ -86,17 +94,8 @@ class _MowerConfigScreenState extends State<MowerConfigScreen> {
                           prefixIcon: Icon(Icons.router),
                         ),
                         keyboardType: TextInputType.text,
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Please enter IP address';
-                          }
-                          // Basic IP validation
-                          final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
-                          if (!ipRegex.hasMatch(value)) {
-                            return 'Please enter a valid IP address';
-                          }
-                          return null;
-                        },
+                        validator: (value) =>
+                            RosbridgeService.validateRobotIp(value ?? ''),
                       ),
                       const SizedBox(height: 24),
                       SizedBox(

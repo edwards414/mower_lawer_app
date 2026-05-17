@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -5,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
+import '../services/rosbridge_service.dart';
 import '../widgets/add_object_sheet.dart';
 import '../widgets/execution_control_sheet.dart';
 import '../widgets/map_objects_sheet.dart';
@@ -333,11 +335,39 @@ class _LayerSwitch extends StatelessWidget {
   }
 }
 
-class _SettingsQuickSheet extends StatelessWidget {
+class _SettingsQuickSheet extends StatefulWidget {
   const _SettingsQuickSheet();
 
   @override
+  State<_SettingsQuickSheet> createState() => _SettingsQuickSheetState();
+}
+
+class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _ipController = TextEditingController();
+  bool _initialized = false;
+  bool _saving = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialized) {
+      return;
+    }
+    _ipController.text = context.read<MissionMockProvider>().robotIp;
+    _initialized = true;
+  }
+
+  @override
+  void dispose() {
+    _ipController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final mission = context.watch<MissionMockProvider>();
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
@@ -352,10 +382,70 @@ class _SettingsQuickSheet extends StatelessWidget {
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 14),
+            Form(
+              key: _formKey,
+              child: TextFormField(
+                controller: _ipController,
+                keyboardType: TextInputType.text,
+                validator: (value) =>
+                    RosbridgeService.validateRobotIp(value ?? ''),
+                decoration: const InputDecoration(
+                  labelText: '機器人 IP',
+                  hintText: '192.168.1.100',
+                  prefixIcon: Icon(Icons.router_outlined),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _saving ? null : () => _saveRobotIp(context),
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.wifi_tethering),
+                label: Text(_saving ? '儲存中' : '儲存並重連'),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _InfoRow(
+              icon: Icons.link_outlined,
+              title: 'rosbridge',
+              detail: mission.rosbridgeUrl,
+            ),
             _InfoRow(
               icon: Icons.storage_outlined,
               title: '資料來源',
-              detail: 'UI mock + 假資料',
+              detail: mission.rosConnected
+                  ? 'ROS 即時資料'
+                  : mission.mockDataEnabled
+                  ? 'Mock fallback'
+                  : '等待 ROS 真實資料',
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'Mock 資料',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+              subtitle: Text(
+                mission.mockDataEnabled
+                    ? 'rosbridge 未連線時使用 demo fallback'
+                    : '關閉 demo，畫面只吃 ROS 真實 topic',
+                style: const TextStyle(
+                  color: Color(0xFF78909C),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              value: mission.mockDataEnabled,
+              onChanged: (value) {
+                unawaited(mission.setMockDataEnabled(value));
+              },
             ),
             _InfoRow(icon: Icons.map_outlined, title: '底圖模式', detail: '灰底任務地圖'),
             _InfoRow(
@@ -367,6 +457,27 @@ class _SettingsQuickSheet extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _saveRobotIp(BuildContext context) async {
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
+    setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final mission = context.read<MissionMockProvider>();
+    final error = await mission.updateRobotIp(_ipController.text);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _saving = false);
+    if (error != null) {
+      messenger.showSnackBar(SnackBar(content: Text(error)));
+      return;
+    }
+    messenger.showSnackBar(const SnackBar(content: Text('機器人 IP 已更新')));
+    navigator.pop();
   }
 }
 

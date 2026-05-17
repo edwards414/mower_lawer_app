@@ -11,6 +11,10 @@ class ExecutionControlSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
     final executing = mission.navStatus == NavMockStatus.executing;
+    final selectedZoneId =
+        mission.zones.any((zone) => zone.id == mission.selectedZoneId)
+        ? mission.selectedZoneId
+        : null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -36,7 +40,8 @@ class ExecutionControlSheet extends StatelessWidget {
           child: DropdownButtonHideUnderline(
             child: DropdownButton<int>(
               isExpanded: true,
-              value: mission.selectedZoneId,
+              value: selectedZoneId,
+              hint: const Text('尚未收到 Zone'),
               items: mission.zones
                   .map(
                     (zone) => DropdownMenuItem<int>(
@@ -45,7 +50,7 @@ class ExecutionControlSheet extends StatelessWidget {
                     ),
                   )
                   .toList(),
-              onChanged: executing
+              onChanged: executing || mission.zones.isEmpty
                   ? null
                   : (value) {
                       if (value != null) {
