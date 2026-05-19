@@ -8,6 +8,8 @@ enum CoveragePatternKind { zigzag, spiral }
 
 enum NavMockStatus { idle, executing, paused, failed }
 
+enum CameraFeed { front, rear }
+
 class MapPoint {
   const MapPoint(this.x, this.y);
 
@@ -83,6 +85,28 @@ class MapGridLayer {
   final double originX;
   final double originY;
   final ui.Image image;
+
+  void dispose() => image.dispose();
+}
+
+class CameraFrame {
+  CameraFrame({
+    required this.feed,
+    required this.topic,
+    required this.encoding,
+    required this.width,
+    required this.height,
+    required this.image,
+    required this.receivedAt,
+  });
+
+  final CameraFeed feed;
+  final String topic;
+  final String encoding;
+  final int width;
+  final int height;
+  final ui.Image image;
+  final DateTime receivedAt;
 
   void dispose() => image.dispose();
 }

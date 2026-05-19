@@ -12,7 +12,10 @@ import '../services/rosbridge_service.dart';
 class MissionMockProvider extends ChangeNotifier {
   static const _mockDataPreferenceKey = 'mock_data_enabled';
   static const manualVelocityTopic = '/joy_cmd';
+  static const frontCameraTopic = '/front_depth_camera/image_raw';
+  static const rearCameraTopic = '/back_camera/image_raw';
   static const _manualVelocityType = 'geometry_msgs/msg/TwistStamped';
+  static const _cameraImageType = 'sensor_msgs/msg/Image';
 
   MissionMockProvider({RosbridgeService? rosbridge})
     : _rosbridge = rosbridge ?? RosbridgeService(),
@@ -45,6 +48,7 @@ class MissionMockProvider extends ChangeNotifier {
   double coverageProgress = 0.42;
   double stripWidthM = 0.8;
   double waypointSpacingM = 0.2;
+  double zigzagAngleDeg = 0.0;
   int selectedZoneId = 1;
   int currentSegment = 3;
   int recordPointCount = 0;
@@ -57,12 +61,17 @@ class MissionMockProvider extends ChangeNotifier {
   MapGridLayer? freeSpaceLayer;
   MapGridLayer? riskMapLayer;
   MapGridLayer? channelMapLayer;
+  CameraFrame? frontCameraFrame;
+  CameraFrame? rearCameraFrame;
+  String? frontCameraError;
+  String? rearCameraError;
 
   bool _isDisposed = false;
 
   DateTime? _stripWidthEditedAt;
   DateTime? _waypointSpacingEditedAt;
   DateTime? _coveragePatternEditedAt;
+  DateTime? _zigzagAngleEditedAt;
   static const _editGrace = Duration(seconds: 2);
   bool liveDataActive = false;
   bool mockDataEnabled = true;
@@ -82,6 +91,27 @@ class MissionMockProvider extends ChangeNotifier {
   String get rosbridgeUrl => _rosbridge.url;
   String get robotIp => _rosbridge.robotIp;
   bool get shouldShowRobot => mockDataEnabled || _hasLiveRobotPose;
+
+  CameraFrame? cameraFrame(CameraFeed feed) {
+    return switch (feed) {
+      CameraFeed.front => frontCameraFrame,
+      CameraFeed.rear => rearCameraFrame,
+    };
+  }
+
+  String? cameraError(CameraFeed feed) {
+    return switch (feed) {
+      CameraFeed.front => frontCameraError,
+      CameraFeed.rear => rearCameraError,
+    };
+  }
+
+  String cameraTopic(CameraFeed feed) {
+    return switch (feed) {
+      CameraFeed.front => frontCameraTopic,
+      CameraFeed.rear => rearCameraTopic,
+    };
+  }
 
   Duration get recordingElapsed {
     final startedAt = _recordingStartedAt;
@@ -144,6 +174,16 @@ class MissionMockProvider extends ChangeNotifier {
       type: 'geometry_msgs/msg/PoseStamped',
       throttleRateMs: 100,
     );
+    _rosbridge.subscribe(
+      frontCameraTopic,
+      type: _cameraImageType,
+      throttleRateMs: 150,
+    );
+    _rosbridge.subscribe(
+      rearCameraTopic,
+      type: _cameraImageType,
+      throttleRateMs: 150,
+    );
 
     _rosMessages = _rosbridge.messages.listen(_handleRosMessage);
     _rosStates = _rosbridge.states.listen(_handleRosState);
@@ -169,6 +209,7 @@ class MissionMockProvider extends ChangeNotifier {
     rosConnected = false;
     liveDataActive = false;
     _hasLiveRobotPose = false;
+    _clearCameraFrames();
     if (mockDataEnabled) {
       _restoreDemoData();
     } else {
@@ -227,6 +268,14 @@ class MissionMockProvider extends ChangeNotifier {
   void _handleRosMessage(RosbridgeTopicMessage event) {
     try {
       switch (event.topic) {
+        case frontCameraTopic:
+          unawaited(
+            _decodeAndStoreCameraFrame(CameraFeed.front, event.message),
+          );
+          break;
+        case rearCameraTopic:
+          unawaited(_decodeAndStoreCameraFrame(CameraFeed.rear, event.message));
+          break;
         case '/adapter/robot_pose':
           _applyRobotPose(event.message);
           break;
@@ -440,6 +489,164 @@ class MissionMockProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> _decodeAndStoreCameraFrame(
+    CameraFeed feed,
+    Map<String, dynamic> message,
+  ) async {
+    final topic = cameraTopic(feed);
+    try {
+      final frame = await _decodeCameraFrame(feed, topic, message);
+      if (_isDisposed) {
+        frame.dispose();
+        return;
+      }
+      switch (feed) {
+        case CameraFeed.front:
+          frontCameraFrame?.dispose();
+          frontCameraFrame = frame;
+          frontCameraError = null;
+          break;
+        case CameraFeed.rear:
+          rearCameraFrame?.dispose();
+          rearCameraFrame = frame;
+          rearCameraError = null;
+          break;
+      }
+      notifyListeners();
+    } on _CameraDecodeException catch (error) {
+      if (_isDisposed) {
+        return;
+      }
+      switch (feed) {
+        case CameraFeed.front:
+          frontCameraError = error.message;
+          break;
+        case CameraFeed.rear:
+          rearCameraError = error.message;
+          break;
+      }
+      notifyListeners();
+    } catch (_) {
+      if (_isDisposed) {
+        return;
+      }
+      switch (feed) {
+        case CameraFeed.front:
+          frontCameraError = '影像解碼失敗';
+          break;
+        case CameraFeed.rear:
+          rearCameraError = '影像解碼失敗';
+          break;
+      }
+      notifyListeners();
+    }
+  }
+
+  static Future<CameraFrame> _decodeCameraFrame(
+    CameraFeed feed,
+    String topic,
+    Map<String, dynamic> message,
+  ) async {
+    final width = _asInt(message['width']);
+    final height = _asInt(message['height']);
+    final encoding = message['encoding']?.toString().toLowerCase();
+    if (width == null || height == null || width <= 0 || height <= 0) {
+      throw const _CameraDecodeException('影像尺寸無效');
+    }
+    if (encoding == null || encoding.isEmpty) {
+      throw const _CameraDecodeException('影像格式未提供');
+    }
+
+    final bytes = _imageDataBytes(message['data']);
+    final pixelStride = switch (encoding) {
+      'rgb8' || 'bgr8' => 3,
+      'rgba8' || 'bgra8' => 4,
+      'mono8' => 1,
+      _ => throw const _CameraDecodeException('影像格式未支援'),
+    };
+    final step = _asInt(message['step']) ?? width * pixelStride;
+    if (step < width * pixelStride ||
+        bytes.length < step * math.max(height - 1, 0) + width * pixelStride) {
+      throw const _CameraDecodeException('影像資料長度不足');
+    }
+
+    final pixels = Uint8List(width * height * 4);
+    for (var y = 0; y < height; y += 1) {
+      final rowOffset = y * step;
+      for (var x = 0; x < width; x += 1) {
+        final source = rowOffset + x * pixelStride;
+        final target = (y * width + x) * 4;
+        switch (encoding) {
+          case 'rgb8':
+            pixels[target] = bytes[source];
+            pixels[target + 1] = bytes[source + 1];
+            pixels[target + 2] = bytes[source + 2];
+            pixels[target + 3] = 255;
+            break;
+          case 'bgr8':
+            pixels[target] = bytes[source + 2];
+            pixels[target + 1] = bytes[source + 1];
+            pixels[target + 2] = bytes[source];
+            pixels[target + 3] = 255;
+            break;
+          case 'rgba8':
+            pixels[target] = bytes[source];
+            pixels[target + 1] = bytes[source + 1];
+            pixels[target + 2] = bytes[source + 2];
+            pixels[target + 3] = bytes[source + 3];
+            break;
+          case 'bgra8':
+            pixels[target] = bytes[source + 2];
+            pixels[target + 1] = bytes[source + 1];
+            pixels[target + 2] = bytes[source];
+            pixels[target + 3] = bytes[source + 3];
+            break;
+          case 'mono8':
+            final value = bytes[source];
+            pixels[target] = value;
+            pixels[target + 1] = value;
+            pixels[target + 2] = value;
+            pixels[target + 3] = 255;
+            break;
+        }
+      }
+    }
+
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      pixels,
+      width,
+      height,
+      ui.PixelFormat.rgba8888,
+      completer.complete,
+    );
+    final image = await completer.future;
+    return CameraFrame(
+      feed: feed,
+      topic: topic,
+      encoding: encoding,
+      width: width,
+      height: height,
+      image: image,
+      receivedAt: DateTime.now(),
+    );
+  }
+
+  static Uint8List _imageDataBytes(dynamic data) {
+    if (data is String) {
+      return base64Decode(data);
+    }
+    if (data is List) {
+      return Uint8List.fromList(
+        data
+            .map((value) => _asInt(value) ?? 0)
+            .map((value) => value & 0xFF)
+            .toList(),
+      );
+    }
+    throw const _CameraDecodeException('影像資料未提供');
+  }
+
   void _applyZoneSummaries(List<dynamic> summaries) {
     final coverageByZone = <int, bool>{};
     for (final item in summaries.whereType<Map>()) {
@@ -485,6 +692,10 @@ class MissionMockProvider extends ChangeNotifier {
       } else if (pattern == 'zigzag') {
         coveragePattern = CoveragePatternKind.zigzag;
       }
+    }
+    if (_zigzagAngleEditedAt == null ||
+        now.difference(_zigzagAngleEditedAt!) > _editGrace) {
+      zigzagAngleDeg = _asDouble(dto['zigzagAngleDeg']) ?? zigzagAngleDeg;
     }
     liveDataActive = true;
     notifyListeners();
@@ -688,6 +899,21 @@ class MissionMockProvider extends ChangeNotifier {
         _setRosDoubleParam(
           '/boustrophedon_coverage/set_parameters',
           'waypoint_spacing_m',
+          value,
+        ),
+      );
+    }
+    notifyListeners();
+  }
+
+  void setZigzagAngle(double value) {
+    zigzagAngleDeg = value;
+    _zigzagAngleEditedAt = DateTime.now();
+    if (rosConnected) {
+      unawaited(
+        _setRosDoubleParam(
+          '/boustrophedon_coverage/set_parameters',
+          'zigzag_angle_deg',
           value,
         ),
       );
@@ -1027,6 +1253,15 @@ class MissionMockProvider extends ChangeNotifier {
     robotHeadingRad = 0.3;
   }
 
+  void _clearCameraFrames() {
+    frontCameraFrame?.dispose();
+    frontCameraFrame = null;
+    rearCameraFrame?.dispose();
+    rearCameraFrame = null;
+    frontCameraError = null;
+    rearCameraError = null;
+  }
+
   void _addLog(String level, String message, {bool notify = true}) {
     _logs.insert(
       0,
@@ -1071,8 +1306,15 @@ class MissionMockProvider extends ChangeNotifier {
     freeSpaceLayer?.dispose();
     riskMapLayer?.dispose();
     channelMapLayer?.dispose();
+    _clearCameraFrames();
     super.dispose();
   }
+}
+
+class _CameraDecodeException implements Exception {
+  const _CameraDecodeException(this.message);
+
+  final String message;
 }
 
 double? _asDouble(dynamic value) {

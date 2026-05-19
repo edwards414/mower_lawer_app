@@ -11,25 +11,36 @@ class MissionMapCanvas extends StatelessWidget {
     super.key,
     required this.mission,
     required this.bottomInset,
+    this.showScalePill = true,
   });
 
   final MissionMockProvider mission;
   final double bottomInset;
+  final bool showScalePill;
 
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      painter: _MissionMapPainter(mission: mission, bottomInset: bottomInset),
+      painter: _MissionMapPainter(
+        mission: mission,
+        bottomInset: bottomInset,
+        showScalePill: showScalePill,
+      ),
       child: const SizedBox.expand(),
     );
   }
 }
 
 class _MissionMapPainter extends CustomPainter {
-  _MissionMapPainter({required this.mission, required this.bottomInset});
+  _MissionMapPainter({
+    required this.mission,
+    required this.bottomInset,
+    required this.showScalePill,
+  });
 
   final MissionMockProvider mission;
   final double bottomInset;
+  final bool showScalePill;
 
   static const Rect _fallbackWorldBounds = Rect.fromLTWH(0, 12, 104, 128);
 
@@ -38,8 +49,9 @@ class _MissionMapPainter extends CustomPainter {
     final backgroundPaint = Paint()..color = const Color(0xFFECEFF1);
     canvas.drawRect(Offset.zero & size, backgroundPaint);
 
+    final minMapHeight = math.min(260.0, size.height);
     final mapHeight = (size.height - bottomInset + 56)
-        .clamp(260.0, size.height)
+        .clamp(minMapHeight, size.height)
         .toDouble();
     final mapRect = Rect.fromLTWH(0, 0, size.width, mapHeight);
 
@@ -139,7 +151,9 @@ class _MissionMapPainter extends CustomPainter {
         mission.robotHeadingRad,
       );
     }
-    _drawScalePill(canvas, mapRect);
+    if (showScalePill) {
+      _drawScalePill(canvas, mapRect);
+    }
   }
 
   Offset Function(MapPoint point) _projector(Rect mapRect, Rect worldBounds) {
@@ -211,7 +225,10 @@ class _MissionMapPainter extends CustomPainter {
     final dstRect = Rect.fromPoints(topLeft, bottomRight);
     if (dstRect.isEmpty) return;
     final srcRect = ui.Rect.fromLTWH(
-      0, 0, layer.width.toDouble(), layer.height.toDouble(),
+      0,
+      0,
+      layer.width.toDouble(),
+      layer.height.toDouble(),
     );
     canvas.drawImageRect(layer.image, srcRect, dstRect, Paint());
   }

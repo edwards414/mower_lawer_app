@@ -6,9 +6,12 @@ import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
+import '../providers/mower_status_provider.dart';
+import '../providers/weather_provider.dart';
 import '../services/rosbridge_service.dart';
 import '../widgets/add_object_sheet.dart';
 import '../widgets/execution_control_sheet.dart';
+import '../widgets/manual_control_overlay.dart';
 import '../widgets/map_objects_sheet.dart';
 import '../widgets/mission_map_canvas.dart';
 import '../widgets/mission_mode_bar.dart';
@@ -36,6 +39,1004 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
+    return const _MowerDashboardShell();
+  }
+}
+
+void _showAppSheet(BuildContext context, Widget child) {
+  showModalBottomSheet<void>(
+    context: context,
+    useSafeArea: true,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) {
+      return DecoratedBox(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: child,
+      );
+    },
+  );
+}
+
+class _MowerDashboardShell extends StatefulWidget {
+  const _MowerDashboardShell();
+
+  @override
+  State<_MowerDashboardShell> createState() => _MowerDashboardShellState();
+}
+
+class _MowerDashboardShellState extends State<_MowerDashboardShell> {
+  int _selectedIndex = 0;
+  MissionMockProvider? _mission;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _mission = context.read<MissionMockProvider>();
+  }
+
+  @override
+  void dispose() {
+    if (_selectedIndex == 2) {
+      _mission?.stopManualControl();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF6F7F8),
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: [
+          const _DashboardHomePage(),
+          MissionMapScreen(onManual: () => setState(() => _selectedIndex = 2)),
+          _ManualControlTab(
+            onGoHome: () {
+              context.read<MissionMockProvider>().stopManualControl();
+              setState(() => _selectedIndex = 0);
+            },
+          ),
+          const _ScheduleTab(),
+          const _MoreTab(),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        height: 70,
+        selectedIndex: _selectedIndex,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        indicatorColor: const Color(0xFFE3F5EA),
+        onDestinationSelected: (index) {
+          if (_selectedIndex == 2 && index != 2) {
+            context.read<MissionMockProvider>().stopManualControl();
+          }
+          setState(() => _selectedIndex = index);
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            label: '首頁',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.map_outlined),
+            label: '地圖',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.sports_esports_outlined),
+            label: '手動控制',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.calendar_month_outlined),
+            label: '排程',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.more_horiz_outlined),
+            label: '更多',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ManualControlTab extends StatefulWidget {
+  const _ManualControlTab({required this.onGoHome});
+
+  final VoidCallback onGoHome;
+
+  @override
+  State<_ManualControlTab> createState() => _ManualControlTabState();
+}
+
+class _ManualControlTabState extends State<_ManualControlTab> {
+  CameraFeed _cameraFeed = CameraFeed.front;
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<MissionMockProvider>(
+      builder: (context, mission, _) => ManualControlOverlay(
+        mission: mission,
+        cameraFeed: _cameraFeed,
+        onCameraFeedChanged: (feed) => setState(() => _cameraFeed = feed),
+        onExit: widget.onGoHome,
+      ),
+    );
+  }
+}
+
+class _DashboardHomePage extends StatelessWidget {
+  const _DashboardHomePage();
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: const Color(0xFFF6F7F8),
+      child: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
+          physics: const BouncingScrollPhysics(),
+          children: const [
+            _DashboardHeader(),
+            SizedBox(height: 16),
+            _ConnectionCard(),
+            SizedBox(height: 10),
+            _WeatherCard(),
+            SizedBox(height: 10),
+            _BatteryCard(),
+            SizedBox(height: 10),
+            _MissionSummaryCard(),
+            SizedBox(height: 10),
+            _NextScheduleCard(),
+            SizedBox(height: 10),
+            _DockStatusCard(),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DashboardHeader extends StatelessWidget {
+  const _DashboardHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '我的割草機',
+                style: TextStyle(
+                  color: Color(0xFF17211C),
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  Text(
+                    'GM-3000',
+                    style: TextStyle(
+                      color: Color(0xFF50605A),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  SizedBox(width: 4),
+                  Icon(Icons.keyboard_arrow_down, size: 20),
+                ],
+              ),
+            ],
+          ),
+        ),
+        Tooltip(
+          message: '通知',
+          child: IconButton(
+            onPressed: () {},
+            icon: const Icon(Icons.notifications_none_outlined),
+            color: const Color(0xFF17211C),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ConnectionCard extends StatelessWidget {
+  const _ConnectionCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final mission = context.watch<MissionMockProvider>();
+    final mowerStatus = context.watch<MowerStatusProvider>().status;
+    final online = mission.rosConnected || mission.mockDataEnabled;
+    final statusLabel = online ? '在線上' : '等待連線';
+    final detail = mission.rosConnected
+        ? 'ROS 即時資料 · 最後更新：剛剛'
+        : mission.mockDataEnabled
+        ? 'Mock fallback · 最後更新：剛剛'
+        : mowerStatus == null
+        ? '狀態讀取中'
+        : '等待 ROS 真實資料';
+
+    return _DashboardCard(
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 96,
+            height: 62,
+            child: CustomPaint(painter: _MowerMiniPainter()),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      statusLabel,
+                      style: TextStyle(
+                        color: online
+                            ? const Color(0xFF168848)
+                            : const Color(0xFF607D8B),
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    _StatusDot(active: online),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  detail,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF8A9691),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WeatherCard extends StatelessWidget {
+  const _WeatherCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final weather = context.watch<WeatherProvider>();
+    final snapshot = weather.snapshot;
+    final loadingWithoutData = weather.isLoading && snapshot == null;
+    final unavailable = weather.errorMessage == '天氣暫不可用' && snapshot == null;
+
+    return _DashboardCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _IconBubble(
+                icon: snapshot == null
+                    ? Icons.cloud_queue_outlined
+                    : _weatherIcon(snapshot.weatherCode),
+                color: const Color(0xFF1E88A8),
+                background: const Color(0xFFE6F5F8),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '天氣概況',
+                      style: TextStyle(
+                        color: Color(0xFF50605A),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      loadingWithoutData
+                          ? '天氣載入中'
+                          : unavailable
+                          ? '天氣暫不可用'
+                          : snapshot?.conditionLabel ?? '天氣暫不可用',
+                      style: const TextStyle(
+                        color: Color(0xFF17211C),
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (weather.isLoading)
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2.4),
+                )
+              else
+                Text(
+                  snapshot == null
+                      ? '--°'
+                      : '${snapshot.temperatureC.round()}°',
+                  style: const TextStyle(
+                    color: Color(0xFF17211C),
+                    fontSize: 34,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _WeatherMetric(
+                  label: '體感',
+                  value: snapshot == null
+                      ? '--'
+                      : '${snapshot.apparentTemperatureC.round()}°C',
+                ),
+              ),
+              Expanded(
+                child: _WeatherMetric(
+                  label: '濕度',
+                  value: snapshot == null
+                      ? '--'
+                      : '${snapshot.relativeHumidity}%',
+                ),
+              ),
+              Expanded(
+                child: _WeatherMetric(
+                  label: '風速',
+                  value: snapshot == null
+                      ? '--'
+                      : '${snapshot.windSpeedKmh.toStringAsFixed(1)} km/h',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            snapshot == null
+                ? weather.errorMessage ?? 'Open-Meteo · 讀取目前作業位置'
+                : 'Open-Meteo · ${_formatUpdateTime(snapshot.fetchedAt)} 更新',
+            style: const TextStyle(
+              color: Color(0xFF8A9691),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static IconData _weatherIcon(int code) {
+    return switch (code) {
+      0 || 1 => Icons.wb_sunny_outlined,
+      2 || 3 => Icons.cloud_outlined,
+      45 || 48 => Icons.foggy,
+      51 || 53 || 55 || 56 || 57 => Icons.grain_outlined,
+      61 || 63 || 65 || 66 || 67 || 80 || 81 || 82 => Icons.water_drop_outlined,
+      71 || 73 || 75 || 77 || 85 || 86 => Icons.ac_unit,
+      95 || 96 || 99 => Icons.thunderstorm_outlined,
+      _ => Icons.cloud_queue_outlined,
+    };
+  }
+}
+
+class _WeatherMetric extends StatelessWidget {
+  const _WeatherMetric({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF8A9691),
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Color(0xFF17211C),
+            fontSize: 13,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BatteryCard extends StatelessWidget {
+  const _BatteryCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final mowerStatus = context.watch<MowerStatusProvider>().status;
+    final battery = mowerStatus?.batteryPercent ?? 85;
+
+    return _DashboardCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '電量',
+            style: TextStyle(
+              color: Color(0xFF50605A),
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              SizedBox(
+                width: 90,
+                child: Text(
+                  '${battery.round()}%',
+                  style: const TextStyle(
+                    color: Color(0xFF17211C),
+                    fontSize: 34,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: (battery / 100).clamp(0.0, 1.0),
+                        minHeight: 10,
+                        backgroundColor: const Color(0xFFE6ECE9),
+                        color: const Color(0xFF168848),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '預估剩餘 2 小時 15 分鐘',
+                      style: TextStyle(
+                        color: Color(0xFF8A9691),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MissionSummaryCard extends StatelessWidget {
+  const _MissionSummaryCard();
+
+  static const double _totalAreaM2 = 1200;
+
+  @override
+  Widget build(BuildContext context) {
+    final mission = context.watch<MissionMockProvider>();
+    final zone = _selectedZone(mission);
+    final progress = mission.coverageProgress.clamp(0.0, 1.0).toDouble();
+    final completed = (_totalAreaM2 * progress).round();
+    final remaining = (_totalAreaM2 - completed).round();
+    final executing = mission.navStatus == NavMockStatus.executing;
+
+    return _DashboardCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '目前任務',
+            style: TextStyle(
+              color: Color(0xFF50605A),
+              fontSize: 15,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              _IconBubble(
+                icon: Icons.yard_outlined,
+                color: const Color(0xFF168848),
+                background: const Color(0xFFE4F6EC),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      zone?.name ?? '尚未選擇區域',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF17211C),
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      executing ? '自動割草中' : mission.navStatusLabel(),
+                      style: TextStyle(
+                        color: executing
+                            ? const Color(0xFF168848)
+                            : const Color(0xFF607D8B),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                width: 72,
+                height: 72,
+                child: CustomPaint(
+                  painter: _ProgressRingPainter(progress: progress),
+                  child: Center(
+                    child: Text(
+                      '${(progress * 100).round()}%',
+                      style: const TextStyle(
+                        color: Color(0xFF17211C),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _MissionMetric(
+                label: '總草坪面積',
+                value: '${_totalAreaM2.round()} m²',
+              ),
+              const _VerticalDivider(),
+              _MissionMetric(label: '已完成', value: '$completed m²'),
+              const _VerticalDivider(),
+              _MissionMetric(label: '剩餘', value: '$remaining m²'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  MissionZone? _selectedZone(MissionMockProvider mission) {
+    for (final zone in mission.zones) {
+      if (zone.id == mission.selectedZoneId) {
+        return zone;
+      }
+    }
+    return null;
+  }
+}
+
+class _MissionMetric extends StatelessWidget {
+  const _MissionMetric({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF8A9691),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: const TextStyle(
+                color: Color(0xFF17211C),
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NextScheduleCard extends StatelessWidget {
+  const _NextScheduleCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _InfoDashboardRow(
+      icon: Icons.calendar_month_outlined,
+      title: '下次排程',
+      value: '後院區域',
+      trailing: '明天 08:00',
+    );
+  }
+}
+
+class _DockStatusCard extends StatelessWidget {
+  const _DockStatusCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _InfoDashboardRow(
+      icon: Icons.ev_station_outlined,
+      title: '充電座狀態',
+      value: '已就緒',
+      trailing: '›',
+    );
+  }
+}
+
+class _InfoDashboardRow extends StatelessWidget {
+  const _InfoDashboardRow({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.trailing,
+  });
+
+  final IconData icon;
+  final String title;
+  final String value;
+  final String trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    return _DashboardCard(
+      child: Row(
+        children: [
+          _IconBubble(
+            icon: icon,
+            color: const Color(0xFF263238),
+            background: const Color(0xFFEFF3F1),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Color(0xFF50605A),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: Color(0xFF168848),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            trailing,
+            style: const TextStyle(
+              color: Color(0xFF607D8B),
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DashboardCard extends StatelessWidget {
+  const _DashboardCard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x12000000),
+            blurRadius: 18,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: child,
+      ),
+    );
+  }
+}
+
+class _IconBubble extends StatelessWidget {
+  const _IconBubble({
+    required this.icon,
+    required this.color,
+    required this.background,
+  });
+
+  final IconData icon;
+  final Color color;
+  final Color background;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(color: background, shape: BoxShape.circle),
+      child: SizedBox(
+        width: 42,
+        height: 42,
+        child: Icon(icon, color: color, size: 23),
+      ),
+    );
+  }
+}
+
+class _StatusDot extends StatelessWidget {
+  const _StatusDot({required this.active});
+
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: active ? const Color(0xFF168848) : const Color(0xFFB0BEC5),
+        shape: BoxShape.circle,
+      ),
+      child: const SizedBox(width: 11, height: 11),
+    );
+  }
+}
+
+class _VerticalDivider extends StatelessWidget {
+  const _VerticalDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 42,
+      margin: const EdgeInsets.symmetric(horizontal: 10),
+      color: const Color(0xFFE6ECE9),
+    );
+  }
+}
+
+class _ScheduleTab extends StatelessWidget {
+  const _ScheduleTab();
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: const Color(0xFFF6F7F8),
+      child: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
+          physics: const BouncingScrollPhysics(),
+          children: const [
+            Text(
+              '排程',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
+            ),
+            SizedBox(height: 16),
+            _InfoDashboardRow(
+              icon: Icons.calendar_month_outlined,
+              title: '下一個任務',
+              value: '後院區域',
+              trailing: '明天 08:00',
+            ),
+            SizedBox(height: 10),
+            _InfoDashboardRow(
+              icon: Icons.repeat_outlined,
+              title: '重複週期',
+              value: '每週一、三、五',
+              trailing: '08:00',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MoreTab extends StatelessWidget {
+  const _MoreTab();
+
+  @override
+  Widget build(BuildContext context) {
+    final mission = context.watch<MissionMockProvider>();
+
+    return ColoredBox(
+      color: const Color(0xFFF6F7F8),
+      child: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
+          physics: const BouncingScrollPhysics(),
+          children: [
+            const Text(
+              '更多',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 16),
+            _DashboardCard(
+              child: Column(
+                children: [
+                  _MoreActionRow(
+                    icon: Icons.settings_outlined,
+                    title: '機器人設定',
+                    detail: mission.robotIp,
+                    onTap: () =>
+                        _showAppSheet(context, const _SettingsQuickSheet()),
+                  ),
+                  const Divider(height: 24),
+                  _MoreActionRow(
+                    icon: Icons.layers_outlined,
+                    title: '地圖圖層',
+                    detail: '工作區、禁入區、通道',
+                    onTap: () =>
+                        _showAppSheet(context, const _LayerToggleSheet()),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            _DashboardCard(
+              child: Column(
+                children: [
+                  _InfoRow(
+                    icon: mission.rosConnected
+                        ? Icons.radio_button_checked
+                        : Icons.portable_wifi_off_outlined,
+                    title: '資料來源',
+                    detail: mission.rosConnected
+                        ? 'ROS 即時資料'
+                        : mission.mockDataEnabled
+                        ? 'Mock fallback'
+                        : '等待 ROS 真實資料',
+                  ),
+                  const _InfoRow(
+                    icon: Icons.health_and_safety_outlined,
+                    title: '安全狀態',
+                    detail: 'Clear',
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MoreActionRow extends StatelessWidget {
+  const _MoreActionRow({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            Icon(icon, color: const Color(0xFF167A4A)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  Text(
+                    detail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF78909C),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Color(0xFF78909C)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class MissionMapScreen extends StatelessWidget {
+  const MissionMapScreen({super.key, required this.onManual});
+
+  final VoidCallback onManual;
+
+  @override
+  Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
     final media = MediaQuery.of(context);
     final size = media.size;
@@ -64,8 +1065,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onLayers: () => _showAppSheet(context, const _LayerToggleSheet()),
               onSettings: () =>
                   _showAppSheet(context, const _SettingsQuickSheet()),
-              onManual: () =>
-                  _showAppSheet(context, const _ManualControlSheet()),
+              onManual: onManual,
             ),
           ),
           Positioned(
@@ -79,23 +1079,128 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
 
-  void _showAppSheet(BuildContext context, Widget child) {
-    showModalBottomSheet<void>(
-      context: context,
-      useSafeArea: true,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return DecoratedBox(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-          ),
-          child: child,
-        );
-      },
+String _formatUpdateTime(DateTime value) {
+  final diff = DateTime.now().difference(value);
+  if (diff.inMinutes < 1) {
+    return '剛剛';
+  }
+  if (diff.inHours < 1) {
+    return '${diff.inMinutes} 分鐘前';
+  }
+  if (diff.inHours < 24) {
+    return '${diff.inHours} 小時前';
+  }
+  final hour = value.hour.toString().padLeft(2, '0');
+  final minute = value.minute.toString().padLeft(2, '0');
+  return '$hour:$minute';
+}
+
+class _MowerMiniPainter extends CustomPainter {
+  const _MowerMiniPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final shadowPaint = Paint()..color = const Color(0x26000000);
+    final bodyPaint = Paint()..color = const Color(0xFFE7ECE8);
+    final trimPaint = Paint()..color = const Color(0xFF223029);
+    final greenPaint = Paint()..color = const Color(0xFF168848);
+    final orangePaint = Paint()..color = const Color(0xFFE26F22);
+
+    canvas.drawOval(
+      Rect.fromLTWH(size.width * 0.1, size.height * 0.68, size.width * 0.76, 9),
+      shadowPaint,
     );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          size.width * 0.12,
+          size.height * 0.28,
+          size.width * 0.68,
+          size.height * 0.34,
+        ),
+        const Radius.circular(16),
+      ),
+      bodyPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          size.width * 0.28,
+          size.height * 0.2,
+          size.width * 0.34,
+          size.height * 0.26,
+        ),
+        const Radius.circular(10),
+      ),
+      Paint()..color = const Color(0xFFB8C8C2),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(size.width * 0.2, size.height * 0.55, 24, 13),
+        const Radius.circular(8),
+      ),
+      trimPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(size.width * 0.58, size.height * 0.52, 26, 15),
+        const Radius.circular(8),
+      ),
+      trimPaint,
+    );
+    canvas.drawCircle(
+      Offset(size.width * 0.73, size.height * 0.6),
+      7,
+      greenPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(size.width * 0.39, size.height * 0.16, 17, 7),
+        const Radius.circular(4),
+      ),
+      orangePaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _MowerMiniPainter oldDelegate) => false;
+}
+
+class _ProgressRingPainter extends CustomPainter {
+  const _ProgressRingPainter({required this.progress});
+
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = math.min(size.width, size.height) / 2 - 5;
+    final backgroundPaint = Paint()
+      ..color = const Color(0xFFE6ECE9)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 7
+      ..strokeCap = StrokeCap.round;
+    final progressPaint = Paint()
+      ..color = const Color(0xFF168848)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 7
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawCircle(center, radius, backgroundPaint);
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -math.pi / 2,
+      math.pi * 2 * progress,
+      false,
+      progressPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ProgressRingPainter oldDelegate) {
+    return progress != oldDelegate.progress;
   }
 }
 
@@ -478,229 +1583,6 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
     }
     messenger.showSnackBar(const SnackBar(content: Text('機器人 IP 已更新')));
     navigator.pop();
-  }
-}
-
-class _ManualControlSheet extends StatefulWidget {
-  const _ManualControlSheet();
-
-  @override
-  State<_ManualControlSheet> createState() => _ManualControlSheetState();
-}
-
-class _ManualControlSheetState extends State<_ManualControlSheet> {
-  static const _publishInterval = Duration(milliseconds: 100);
-  static const _linearSpeed = 0.22;
-  static const _angularSpeed = 0.75;
-
-  Timer? _repeatTimer;
-  MissionMockProvider? _mission;
-  String _activeCommand = '停止';
-  bool _driving = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _mission ??= context.read<MissionMockProvider>();
-  }
-
-  @override
-  void dispose() {
-    _repeatTimer?.cancel();
-    if (_driving) {
-      _mission?.stopManualControl();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final mission = context.watch<MissionMockProvider>();
-    final canDrive = mission.rosConnected;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const _SheetHandle(),
-            const SizedBox(height: 18),
-            const Text(
-              '手動控制',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 12),
-            _InfoRow(
-              icon: canDrive
-                  ? Icons.radio_button_checked
-                  : Icons.portable_wifi_off_outlined,
-              title: canDrive ? 'rosbridge 已連線' : 'rosbridge 未連線',
-              detail: canDrive
-                  ? '輸出 ${MissionMockProvider.manualVelocityTopic} / TwistStamped'
-                  : '請先到設定確認機器人 IP 與 9090 連線',
-            ),
-            _InfoRow(
-              icon: Icons.speed_outlined,
-              title: '目前命令',
-              detail: _activeCommand,
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _ManualDriveButton(
-                  icon: Icons.keyboard_arrow_up,
-                  label: '前進',
-                  enabled: canDrive,
-                  onPressStart: () => _startVelocity(
-                    label: '前進',
-                    linearX: _linearSpeed,
-                    angularZ: 0,
-                  ),
-                  onPressEnd: _stopVelocity,
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _ManualDriveButton(
-                  icon: Icons.keyboard_arrow_left,
-                  label: '左轉',
-                  enabled: canDrive,
-                  onPressStart: () => _startVelocity(
-                    label: '左轉',
-                    linearX: 0,
-                    angularZ: _angularSpeed,
-                  ),
-                  onPressEnd: _stopVelocity,
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: _manualStop,
-                  icon: const Icon(Icons.stop_circle_outlined),
-                  label: const Text('停止'),
-                ),
-                _ManualDriveButton(
-                  icon: Icons.keyboard_arrow_right,
-                  label: '右轉',
-                  enabled: canDrive,
-                  onPressStart: () => _startVelocity(
-                    label: '右轉',
-                    linearX: 0,
-                    angularZ: -_angularSpeed,
-                  ),
-                  onPressEnd: _stopVelocity,
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _ManualDriveButton(
-                  icon: Icons.keyboard_arrow_down,
-                  label: '後退',
-                  enabled: canDrive,
-                  onPressStart: () => _startVelocity(
-                    label: '後退',
-                    linearX: -_linearSpeed,
-                    angularZ: 0,
-                  ),
-                  onPressEnd: _stopVelocity,
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _startVelocity({
-    required String label,
-    required double linearX,
-    required double angularZ,
-  }) {
-    _repeatTimer?.cancel();
-    _driving = true;
-    setState(() => _activeCommand = label);
-    _publishVelocity(linearX: linearX, angularZ: angularZ);
-    _repeatTimer = Timer.periodic(
-      _publishInterval,
-      (_) => _publishVelocity(linearX: linearX, angularZ: angularZ),
-    );
-  }
-
-  void _publishVelocity({required double linearX, required double angularZ}) {
-    _mission?.publishManualVelocity(linearX: linearX, angularZ: angularZ);
-  }
-
-  void _manualStop() {
-    _repeatTimer?.cancel();
-    _repeatTimer = null;
-    _driving = false;
-    _mission?.stopManualControl();
-    setState(() => _activeCommand = '停止');
-  }
-
-  void _stopVelocity() {
-    if (!_driving) {
-      return;
-    }
-    _manualStop();
-  }
-}
-
-class _ManualDriveButton extends StatelessWidget {
-  const _ManualDriveButton({
-    required this.icon,
-    required this.label,
-    required this.enabled,
-    required this.onPressStart,
-    required this.onPressEnd,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool enabled;
-  final VoidCallback onPressStart;
-  final VoidCallback onPressEnd;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = enabled ? const Color(0xFF167A4A) : const Color(0xFFB0BEC5);
-    return Tooltip(
-      message: label,
-      child: GestureDetector(
-        onTapDown: enabled ? (_) => onPressStart() : null,
-        onTapUp: enabled ? (_) => onPressEnd() : null,
-        onTapCancel: enabled ? onPressEnd : null,
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 120),
-          opacity: enabled ? 1 : 0.48,
-          child: Column(
-            children: [
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: color.withValues(alpha: 0.4)),
-                ),
-                child: SizedBox(
-                  width: 74,
-                  height: 74,
-                  child: Icon(icon, size: 42, color: color),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
 
