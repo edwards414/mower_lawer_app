@@ -1,4 +1,4 @@
-import 'dart:ui';
+import 'dart:ui' as ui;
 
 enum MissionMode { objects, record, plan, run, logs }
 
@@ -16,8 +16,8 @@ class MapPoint {
 
   static MapPoint lerp(MapPoint a, MapPoint b, double t) {
     return MapPoint(
-      lerpDouble(a.x, b.x, t) ?? a.x,
-      lerpDouble(a.y, b.y, t) ?? a.y,
+      ui.lerpDouble(a.x, b.x, t) ?? a.x,
+      ui.lerpDouble(a.y, b.y, t) ?? a.y,
     );
   }
 }
@@ -65,6 +65,26 @@ class MissionLogEntry {
   final String time;
   final String level;
   final String message;
+}
+
+class MapGridLayer {
+  MapGridLayer({
+    required this.resolution,
+    required this.width,
+    required this.height,
+    required this.originX,
+    required this.originY,
+    required this.image,
+  });
+
+  final double resolution;
+  final int width;
+  final int height;
+  final double originX;
+  final double originY;
+  final ui.Image image;
+
+  void dispose() => image.dispose();
 }
 
 class MissionLayerVisibility {

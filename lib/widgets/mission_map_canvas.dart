@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -44,6 +45,16 @@ class _MissionMapPainter extends CustomPainter {
 
     _drawGrid(canvas, mapRect);
     final project = _projector(mapRect, _worldBounds());
+
+    if (mission.freeSpaceLayer != null) {
+      _drawGridLayer(canvas, mission.freeSpaceLayer!, project);
+    }
+    if (mission.channelMapLayer != null) {
+      _drawGridLayer(canvas, mission.channelMapLayer!, project);
+    }
+    if (mission.riskMapLayer != null) {
+      _drawGridLayer(canvas, mission.riskMapLayer!, project);
+    }
 
     if (mission.layers.zones) {
       for (final zone in mission.zones) {
@@ -184,6 +195,25 @@ class _MissionMapPainter extends CustomPainter {
       maxX + padding,
       maxY + padding,
     );
+  }
+
+  void _drawGridLayer(
+    Canvas canvas,
+    MapGridLayer layer,
+    Offset Function(MapPoint) project,
+  ) {
+    final worldW = layer.width * layer.resolution;
+    final worldH = layer.height * layer.resolution;
+    final topLeft = project(MapPoint(layer.originX, layer.originY));
+    final bottomRight = project(
+      MapPoint(layer.originX + worldW, layer.originY + worldH),
+    );
+    final dstRect = Rect.fromPoints(topLeft, bottomRight);
+    if (dstRect.isEmpty) return;
+    final srcRect = ui.Rect.fromLTWH(
+      0, 0, layer.width.toDouble(), layer.height.toDouble(),
+    );
+    canvas.drawImageRect(layer.image, srcRect, dstRect, Paint());
   }
 
   void _drawGrid(Canvas canvas, Rect rect) {

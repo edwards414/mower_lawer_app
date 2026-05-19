@@ -44,6 +44,7 @@ class RosbridgeService {
 
   String _url;
   final Map<String, _RosbridgeSubscription> _subscriptions = {};
+  final Map<String, String> _advertisements = {};
   final Map<String, Completer<RosbridgeServiceResponse>> _pendingCalls = {};
   final StreamController<RosbridgeTopicMessage> _messages =
       StreamController<RosbridgeTopicMessage>.broadcast();
@@ -65,6 +66,7 @@ class RosbridgeService {
 
   Stream<RosbridgeTopicMessage> get messages => _messages.stream;
   Stream<RosbridgeConnectionState> get states => _states.stream;
+  bool get connected => _connected;
 
   static String? validateRobotIp(String value) {
     final ip = value.trim();
@@ -140,6 +142,13 @@ class RosbridgeService {
             for (final subscription in _subscriptions.values) {
               _send(subscription.toMessage());
             }
+            for (final entry in _advertisements.entries) {
+              _send({
+                'op': 'advertise',
+                'topic': entry.key,
+                'type': entry.value,
+              });
+            }
           })
           .catchError((_) {
             if (_channel == channel) {
@@ -157,11 +166,17 @@ class RosbridgeService {
     connect();
   }
 
-  void subscribe(String topic, {String? type, int throttleRateMs = 0}) {
+  void subscribe(
+    String topic, {
+    String? type,
+    int throttleRateMs = 0,
+    Map<String, dynamic>? qos,
+  }) {
     _subscriptions[topic] = _RosbridgeSubscription(
       topic: topic,
       type: type,
       throttleRateMs: throttleRateMs,
+      qos: qos,
     );
     if (_connected) {
       _send(_subscriptions[topic]!.toMessage());
@@ -193,6 +208,26 @@ class RosbridgeService {
         );
       },
     );
+  }
+
+  bool publish(
+    String topic, {
+    required Map<String, dynamic> message,
+    String? type,
+  }) {
+    connect();
+    if (type != null) {
+      final currentType = _advertisements[topic];
+      _advertisements[topic] = type;
+      if (_connected && currentType != type) {
+        _send({'op': 'advertise', 'topic': topic, 'type': type});
+      }
+    }
+    if (!_connected) {
+      return false;
+    }
+    _send({'op': 'publish', 'topic': topic, 'msg': message});
+    return true;
   }
 
   void _handleSocketData(dynamic raw) {
@@ -306,16 +341,19 @@ class _RosbridgeSubscription {
     required this.topic,
     required this.type,
     required this.throttleRateMs,
+    this.qos,
   });
 
   final String topic;
   final String? type;
   final int throttleRateMs;
+  final Map<String, dynamic>? qos;
 
   Map<String, dynamic> toMessage() => {
     'op': 'subscribe',
     'topic': topic,
     if (type != null) 'type': type,
     if (throttleRateMs > 0) 'throttle_rate': throttleRateMs,
+    if (qos != null) 'qos': qos,
   };
 }

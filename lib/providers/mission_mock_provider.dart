@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,6 +11,8 @@ import '../services/rosbridge_service.dart';
 
 class MissionMockProvider extends ChangeNotifier {
   static const _mockDataPreferenceKey = 'mock_data_enabled';
+  static const manualVelocityTopic = '/joy_cmd';
+  static const _manualVelocityType = 'geometry_msgs/msg/TwistStamped';
 
   MissionMockProvider({RosbridgeService? rosbridge})
     : _rosbridge = rosbridge ?? RosbridgeService(),
@@ -29,6 +32,7 @@ class MissionMockProvider extends ChangeNotifier {
   DateTime? _recordingStartedAt;
   bool _hasLiveRobotPose = false;
   bool _hasLoggedRosFailure = false;
+  bool _hasLoggedManualDisconnected = false;
 
   MissionMode selectedMode = MissionMode.objects;
   RecordObjectType? recordingType;
@@ -49,8 +53,20 @@ class MissionMockProvider extends ChangeNotifier {
   bool channelMapReady = true;
   bool coverageReady = true;
   bool rosConnected = false;
+
+  MapGridLayer? freeSpaceLayer;
+  MapGridLayer? riskMapLayer;
+  MapGridLayer? channelMapLayer;
+
+  bool _isDisposed = false;
+
+  DateTime? _stripWidthEditedAt;
+  DateTime? _waypointSpacingEditedAt;
+  DateTime? _coveragePatternEditedAt;
+  static const _editGrace = Duration(seconds: 2);
   bool liveDataActive = false;
   bool mockDataEnabled = true;
+  bool manualControlActive = false;
 
   List<MissionZone> zones = List<MissionZone>.of(_demoZones);
   List<MissionZone> riskZones = List<MissionZone>.of(_demoRiskZones);
@@ -91,25 +107,43 @@ class MissionMockProvider extends ChangeNotifier {
   Future<void> _connectRosbridge() async {
     await _rosbridge.loadSavedRobotIp();
     await _loadMockDataPreference();
-    const stringTopics = [
+    const markerTopics = [
       '/adapter/marker_layers/zones',
       '/adapter/marker_layers/risk_zones',
       '/adapter/marker_layers/channels',
       '/adapter/marker_layers/coverage_path',
       '/adapter/marker_layers/invalid_segments',
       '/adapter/marker_layers/connectors',
+      '/adapter/coverage_settings',
+      '/adapter/zone_summaries',
+    ];
+    const mapTopics = [
       '/adapter/map_layers/map_grid',
       '/adapter/map_layers/free_space_inflated',
       '/adapter/map_layers/risk_map_inflated',
       '/adapter/map_layers/chennal_map_inflated',
-      '/adapter/coverage_settings',
-      '/adapter/zone_summaries',
     ];
 
-    for (final topic in stringTopics) {
-      _rosbridge.subscribe(topic, throttleRateMs: 100);
+    for (final topic in markerTopics) {
+      _rosbridge.subscribe(
+        topic,
+        type: 'std_msgs/msg/String',
+        throttleRateMs: 100,
+      );
     }
-    _rosbridge.subscribe('/adapter/robot_pose', throttleRateMs: 100);
+    for (final topic in mapTopics) {
+      _rosbridge.subscribe(
+        topic,
+        type: 'std_msgs/msg/String',
+        throttleRateMs: 100,
+        qos: const {'durability': 'transient_local', 'reliability': 'reliable'},
+      );
+    }
+    _rosbridge.subscribe(
+      '/adapter/robot_pose',
+      type: 'geometry_msgs/msg/PoseStamped',
+      throttleRateMs: 100,
+    );
 
     _rosMessages = _rosbridge.messages.listen(_handleRosMessage);
     _rosStates = _rosbridge.states.listen(_handleRosState);
@@ -181,8 +215,10 @@ class MissionMockProvider extends ChangeNotifier {
     rosConnected = connected;
     if (connected) {
       _hasLoggedRosFailure = false;
+      _hasLoggedManualDisconnected = false;
       _addLog('SUCCESS', 'rosbridge 已連線');
     } else {
+      manualControlActive = false;
       _addLog('WARN', 'rosbridge 連線中斷，保留最後資料');
     }
     notifyListeners();
@@ -213,7 +249,7 @@ class MissionMockProvider extends ChangeNotifier {
             if (dto.containsKey('markers')) {
               _applyMarkerLayer(name, dto);
             } else if (dto['type'] == 'occupancy_grid') {
-              _applyMapLayer(name);
+              _applyMapLayer(name, dto);
             }
           }
       }
@@ -272,20 +308,136 @@ class MissionMockProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _applyMapLayer(String? name) {
+  void _applyMapLayer(String? name, Map<String, dynamic> dto) {
+    liveDataActive = true;
+    notifyListeners();
+    unawaited(_decodeAndStoreMapLayer(name, dto));
+  }
+
+  Future<void> _decodeAndStoreMapLayer(
+    String? name,
+    Map<String, dynamic> dto,
+  ) async {
+    final layer = await _decodeMapLayer(name, dto);
+    if (_isDisposed) {
+      layer?.dispose();
+      return;
+    }
+    if (layer == null) return;
     switch (name) {
       case 'free_space_inflated':
+        freeSpaceLayer?.dispose();
+        freeSpaceLayer = layer;
         freeSpaceReady = true;
         break;
       case 'risk_map_inflated':
+        riskMapLayer?.dispose();
+        riskMapLayer = layer;
         riskMapReady = true;
         break;
       case 'chennal_map_inflated':
+        channelMapLayer?.dispose();
+        channelMapLayer = layer;
         channelMapReady = true;
         break;
     }
     liveDataActive = true;
     notifyListeners();
+  }
+
+  static Future<MapGridLayer?> _decodeMapLayer(
+    String? name,
+    Map<String, dynamic> dto,
+  ) async {
+    try {
+      final encoded = dto['data'] as String?;
+      final width = dto['width'] as int?;
+      final height = dto['height'] as int?;
+      final resolution = (dto['resolution'] as num?)?.toDouble();
+      final originMap = dto['origin'] as Map?;
+      if (encoded == null ||
+          width == null ||
+          height == null ||
+          resolution == null ||
+          originMap == null) {
+        return null;
+      }
+      final originX = (originMap['x'] as num?)?.toDouble() ?? 0.0;
+      final originY = (originMap['y'] as num?)?.toDouble() ?? 0.0;
+      final bytes = base64Decode(encoded);
+
+      // Pre-compute RGBA for free (v=0) and occupied (v=100) cells per layer.
+      // v=255 (unknown, was int8 -1) stays transparent.
+      int fR = 0, fG = 0, fB = 0, fA = 0;
+      int oR = 0, oG = 0, oB = 0, oA = 0;
+      switch (name) {
+        case 'free_space_inflated':
+          fR = 46;
+          fG = 190;
+          fB = 90;
+          fA = 22; // subtle green = navigable
+          oR = 60;
+          oG = 60;
+          oB = 60;
+          oA = 90; // gray = inflated boundary
+          break;
+        case 'risk_map_inflated':
+          // free cells are safe → transparent
+          oR = 220;
+          oG = 48;
+          oB = 48;
+          oA = 120; // red = risk zone
+          break;
+        case 'chennal_map_inflated':
+          fR = 30;
+          fG = 155;
+          fB = 195;
+          fA = 50; // cyan = channel
+          // occupied cells = outside channel → transparent
+          break;
+      }
+
+      final pixels = Uint8List(width * height * 4);
+      final total = bytes.length < width * height
+          ? bytes.length
+          : width * height;
+      for (var i = 0; i < total; i++) {
+        final v = bytes[i];
+        final idx = i * 4;
+        if (v == 0) {
+          pixels[idx] = fR;
+          pixels[idx + 1] = fG;
+          pixels[idx + 2] = fB;
+          pixels[idx + 3] = fA;
+        } else if (v == 100) {
+          pixels[idx] = oR;
+          pixels[idx + 1] = oG;
+          pixels[idx + 2] = oB;
+          pixels[idx + 3] = oA;
+        }
+        // v == 255 (unknown) → stays 0 (transparent)
+      }
+
+      final completer = Completer<ui.Image>();
+      ui.decodeImageFromPixels(
+        pixels,
+        width,
+        height,
+        ui.PixelFormat.rgba8888,
+        completer.complete,
+      );
+      final image = await completer.future;
+      return MapGridLayer(
+        resolution: resolution,
+        width: width,
+        height: height,
+        originX: originX,
+        originY: originY,
+        image: image,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   void _applyZoneSummaries(List<dynamic> summaries) {
@@ -316,13 +468,23 @@ class MissionMockProvider extends ChangeNotifier {
   }
 
   void _applyCoverageSettings(Map<String, dynamic> dto) {
-    stripWidthM = _asDouble(dto['stripWidthM']) ?? stripWidthM;
-    waypointSpacingM = _asDouble(dto['waypointSpacingM']) ?? waypointSpacingM;
-    final pattern = dto['coveragePattern']?.toString();
-    if (pattern == 'spiral') {
-      coveragePattern = CoveragePatternKind.spiral;
-    } else if (pattern == 'zigzag') {
-      coveragePattern = CoveragePatternKind.zigzag;
+    final now = DateTime.now();
+    if (_stripWidthEditedAt == null ||
+        now.difference(_stripWidthEditedAt!) > _editGrace) {
+      stripWidthM = _asDouble(dto['stripWidthM']) ?? stripWidthM;
+    }
+    if (_waypointSpacingEditedAt == null ||
+        now.difference(_waypointSpacingEditedAt!) > _editGrace) {
+      waypointSpacingM = _asDouble(dto['waypointSpacingM']) ?? waypointSpacingM;
+    }
+    if (_coveragePatternEditedAt == null ||
+        now.difference(_coveragePatternEditedAt!) > _editGrace) {
+      final pattern = dto['coveragePattern']?.toString();
+      if (pattern == 'spiral') {
+        coveragePattern = CoveragePatternKind.spiral;
+      } else if (pattern == 'zigzag') {
+        coveragePattern = CoveragePatternKind.zigzag;
+      }
     }
     liveDataActive = true;
     notifyListeners();
@@ -489,17 +651,71 @@ class MissionMockProvider extends ChangeNotifier {
 
   void setCoveragePattern(CoveragePatternKind pattern) {
     coveragePattern = pattern;
+    _coveragePatternEditedAt = DateTime.now();
     _addLog('INFO', 'Coverage pattern set to ${pattern.name}');
+    if (rosConnected) {
+      unawaited(
+        _setRosDoubleParam(
+          '/boustrophedon_coverage/set_parameters',
+          'coverage_pattern',
+          pattern.name,
+          type: 4,
+        ),
+      );
+    }
   }
 
   void setStripWidth(double value) {
     stripWidthM = value;
+    _stripWidthEditedAt = DateTime.now();
+    if (rosConnected) {
+      unawaited(
+        _setRosDoubleParam(
+          '/boustrophedon_coverage/set_parameters',
+          'strip_width_m',
+          value,
+        ),
+      );
+    }
     notifyListeners();
   }
 
   void setWaypointSpacing(double value) {
     waypointSpacingM = value;
+    _waypointSpacingEditedAt = DateTime.now();
+    if (rosConnected) {
+      unawaited(
+        _setRosDoubleParam(
+          '/boustrophedon_coverage/set_parameters',
+          'waypoint_spacing_m',
+          value,
+        ),
+      );
+    }
     notifyListeners();
+  }
+
+  Future<void> _setRosDoubleParam(
+    String service,
+    String name,
+    dynamic value, {
+    int type = 3,
+  }) async {
+    await _rosbridge.callService(
+      service,
+      args: {
+        'parameters': [
+          {
+            'name': name,
+            'value': {
+              'type': type,
+              if (type == 3) 'double_value': value,
+              if (type == 4) 'string_value': value,
+            },
+          },
+        ],
+      },
+    );
   }
 
   void runPlanningStep(String step) {
@@ -528,23 +744,9 @@ class MissionMockProvider extends ChangeNotifier {
     _addLog('INFO', '呼叫 $service');
     final response = await _rosbridge.callService(service);
     if (response.success) {
-      switch (step) {
-        case 'free_space':
-          freeSpaceReady = true;
-          break;
-        case 'risk_map':
-          riskMapReady = true;
-          break;
-        case 'channel_map':
-          channelMapReady = true;
-          break;
-        case 'coverage':
-          coverageReady = true;
-          break;
-      }
       _addLog(
         'SUCCESS',
-        response.message.isEmpty ? '$service 完成' : response.message,
+        response.message.isEmpty ? '$service 已送出，等待地圖資料...' : response.message,
       );
     } else {
       _addLog(
@@ -650,6 +852,76 @@ class MissionMockProvider extends ChangeNotifier {
     _addLog('INFO', message);
   }
 
+  bool publishManualVelocity({
+    required double linearX,
+    required double angularZ,
+  }) {
+    final moving = linearX.abs() > 0.001 || angularZ.abs() > 0.001;
+    final sent = _rosbridge.publish(
+      manualVelocityTopic,
+      type: _manualVelocityType,
+      message: _twistStampedMessage(linearX: linearX, angularZ: angularZ),
+    );
+
+    if (!sent) {
+      if (moving && !_hasLoggedManualDisconnected) {
+        _hasLoggedManualDisconnected = true;
+        _addLog('WARN', '手動控制需要 rosbridge 連線');
+      }
+      return false;
+    }
+
+    _hasLoggedManualDisconnected = false;
+    if (manualControlActive != moving) {
+      manualControlActive = moving;
+      if (moving) {
+        _addLog('INFO', '手動控制輸出 $manualVelocityTopic', notify: false);
+      }
+      notifyListeners();
+    }
+    return true;
+  }
+
+  void stopManualControl() {
+    final wasActive = manualControlActive;
+    final sent = _rosbridge.publish(
+      manualVelocityTopic,
+      type: _manualVelocityType,
+      message: _twistStampedMessage(linearX: 0, angularZ: 0),
+    );
+    manualControlActive = false;
+    if (wasActive) {
+      _addLog(
+        sent ? 'INFO' : 'WARN',
+        sent ? '手動控制已停止' : '手動控制停止命令未送出，rosbridge 未連線',
+        notify: false,
+      );
+      notifyListeners();
+    }
+  }
+
+  Map<String, dynamic> _twistStampedMessage({
+    required double linearX,
+    required double angularZ,
+  }) {
+    final micros = DateTime.now().toUtc().microsecondsSinceEpoch;
+    return {
+      'header': {
+        'stamp': {
+          'sec': micros ~/ Duration.microsecondsPerSecond,
+          'nanosec':
+              (micros % Duration.microsecondsPerSecond) *
+              Duration.microsecondsPerMillisecond,
+        },
+        'frame_id': 'base_link',
+      },
+      'twist': {
+        'linear': {'x': linearX, 'y': 0.0, 'z': 0.0},
+        'angular': {'x': 0.0, 'y': 0.0, 'z': angularZ},
+      },
+    };
+  }
+
   String navStatusLabel() {
     switch (navStatus) {
       case NavMockStatus.idle:
@@ -719,6 +991,12 @@ class MissionMockProvider extends ChangeNotifier {
     channels = const <ChannelPath>[];
     coverageRows = const <List<MapPoint>>[];
     invalidSegments = const <InvalidSegment>[];
+    freeSpaceLayer?.dispose();
+    freeSpaceLayer = null;
+    riskMapLayer?.dispose();
+    riskMapLayer = null;
+    channelMapLayer?.dispose();
+    channelMapLayer = null;
     freeSpaceReady = false;
     riskMapReady = false;
     channelMapReady = false;
@@ -783,12 +1061,16 @@ class MissionMockProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _isDisposed = true;
     _timer?.cancel();
     _rosMessages?.cancel();
     _rosStates?.cancel();
     if (_ownsRosbridge) {
       _rosbridge.dispose();
     }
+    freeSpaceLayer?.dispose();
+    riskMapLayer?.dispose();
+    channelMapLayer?.dispose();
     super.dispose();
   }
 }

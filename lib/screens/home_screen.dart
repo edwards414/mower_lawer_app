@@ -481,12 +481,42 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
   }
 }
 
-class _ManualControlSheet extends StatelessWidget {
+class _ManualControlSheet extends StatefulWidget {
   const _ManualControlSheet();
 
   @override
+  State<_ManualControlSheet> createState() => _ManualControlSheetState();
+}
+
+class _ManualControlSheetState extends State<_ManualControlSheet> {
+  static const _publishInterval = Duration(milliseconds: 100);
+  static const _linearSpeed = 0.22;
+  static const _angularSpeed = 0.75;
+
+  Timer? _repeatTimer;
+  MissionMockProvider? _mission;
+  String _activeCommand = '停止';
+  bool _driving = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _mission ??= context.read<MissionMockProvider>();
+  }
+
+  @override
+  void dispose() {
+    _repeatTimer?.cancel();
+    if (_driving) {
+      _mission?.stopManualControl();
+    }
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final mission = context.read<MissionMockProvider>();
+    final mission = context.watch<MissionMockProvider>();
+    final canDrive = mission.rosConnected;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
@@ -500,71 +530,176 @@ class _ManualControlSheet extends StatelessWidget {
               '手動控制',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
             ),
-            const SizedBox(height: 8),
-            const Text(
-              'Mock only，不會發布速度或刀盤命令。',
-              style: TextStyle(
-                color: Color(0xFF78909C),
-                fontWeight: FontWeight.w700,
-              ),
+            const SizedBox(height: 12),
+            _InfoRow(
+              icon: canDrive
+                  ? Icons.radio_button_checked
+                  : Icons.portable_wifi_off_outlined,
+              title: canDrive ? 'rosbridge 已連線' : 'rosbridge 未連線',
+              detail: canDrive
+                  ? '輸出 ${MissionMockProvider.manualVelocityTopic} / TwistStamped'
+                  : '請先到設定確認機器人 IP 與 9090 連線',
             ),
-            const SizedBox(height: 16),
+            _InfoRow(
+              icon: Icons.speed_outlined,
+              title: '目前命令',
+              detail: _activeCommand,
+            ),
+            const SizedBox(height: 8),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: const [
-                _JoystickPreview(label: 'Move'),
-                _JoystickPreview(label: 'Turn'),
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _ManualDriveButton(
+                  icon: Icons.keyboard_arrow_up,
+                  label: '前進',
+                  enabled: canDrive,
+                  onPressStart: () => _startVelocity(
+                    label: '前進',
+                    linearX: _linearSpeed,
+                    angularZ: 0,
+                  ),
+                  onPressEnd: _stopVelocity,
+                ),
               ],
             ),
-            const SizedBox(height: 18),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  mission.addMockAction('手動控制 mock opened');
-                  Navigator.of(context).pop();
-                },
-                icon: const Icon(Icons.lock_outline),
-                label: const Text('保持安全鎖定'),
-              ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _ManualDriveButton(
+                  icon: Icons.keyboard_arrow_left,
+                  label: '左轉',
+                  enabled: canDrive,
+                  onPressStart: () => _startVelocity(
+                    label: '左轉',
+                    linearX: 0,
+                    angularZ: _angularSpeed,
+                  ),
+                  onPressEnd: _stopVelocity,
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: _manualStop,
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: const Text('停止'),
+                ),
+                _ManualDriveButton(
+                  icon: Icons.keyboard_arrow_right,
+                  label: '右轉',
+                  enabled: canDrive,
+                  onPressStart: () => _startVelocity(
+                    label: '右轉',
+                    linearX: 0,
+                    angularZ: -_angularSpeed,
+                  ),
+                  onPressEnd: _stopVelocity,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _ManualDriveButton(
+                  icon: Icons.keyboard_arrow_down,
+                  label: '後退',
+                  enabled: canDrive,
+                  onPressStart: () => _startVelocity(
+                    label: '後退',
+                    linearX: -_linearSpeed,
+                    angularZ: 0,
+                  ),
+                  onPressEnd: _stopVelocity,
+                ),
+              ],
             ),
           ],
         ),
       ),
     );
   }
+
+  void _startVelocity({
+    required String label,
+    required double linearX,
+    required double angularZ,
+  }) {
+    _repeatTimer?.cancel();
+    _driving = true;
+    setState(() => _activeCommand = label);
+    _publishVelocity(linearX: linearX, angularZ: angularZ);
+    _repeatTimer = Timer.periodic(
+      _publishInterval,
+      (_) => _publishVelocity(linearX: linearX, angularZ: angularZ),
+    );
+  }
+
+  void _publishVelocity({required double linearX, required double angularZ}) {
+    _mission?.publishManualVelocity(linearX: linearX, angularZ: angularZ);
+  }
+
+  void _manualStop() {
+    _repeatTimer?.cancel();
+    _repeatTimer = null;
+    _driving = false;
+    _mission?.stopManualControl();
+    setState(() => _activeCommand = '停止');
+  }
+
+  void _stopVelocity() {
+    if (!_driving) {
+      return;
+    }
+    _manualStop();
+  }
 }
 
-class _JoystickPreview extends StatelessWidget {
-  const _JoystickPreview({required this.label});
+class _ManualDriveButton extends StatelessWidget {
+  const _ManualDriveButton({
+    required this.icon,
+    required this.label,
+    required this.enabled,
+    required this.onPressStart,
+    required this.onPressEnd,
+  });
 
+  final IconData icon;
   final String label;
+  final bool enabled;
+  final VoidCallback onPressStart;
+  final VoidCallback onPressEnd;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          width: 104,
-          height: 104,
-          decoration: const BoxDecoration(
-            color: Color(0xFFE5FAF1),
-            shape: BoxShape.circle,
-          ),
-          child: Center(
-            child: Container(
-              width: 42,
-              height: 42,
-              decoration: const BoxDecoration(
-                color: Color(0xFF55D69B),
-                shape: BoxShape.circle,
+    final color = enabled ? const Color(0xFF167A4A) : const Color(0xFFB0BEC5);
+    return Tooltip(
+      message: label,
+      child: GestureDetector(
+        onTapDown: enabled ? (_) => onPressStart() : null,
+        onTapUp: enabled ? (_) => onPressEnd() : null,
+        onTapCancel: enabled ? onPressEnd : null,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 120),
+          opacity: enabled ? 1 : 0.48,
+          child: Column(
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: color.withValues(alpha: 0.4)),
+                ),
+                child: SizedBox(
+                  width: 74,
+                  height: 74,
+                  child: Icon(icon, size: 42, color: color),
+                ),
               ),
-            ),
+              const SizedBox(height: 6),
+              Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+            ],
           ),
         ),
-        const SizedBox(height: 8),
-        Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
-      ],
+      ),
     );
   }
 }
