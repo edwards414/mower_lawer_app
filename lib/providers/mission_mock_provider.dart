@@ -47,8 +47,6 @@ class MissionMockProvider extends ChangeNotifier {
   double robotHeadingRad = 0.3;
   double coverageProgress = 0.42;
   double stripWidthM = 0.8;
-  double waypointSpacingM = 0.2;
-  double zigzagAngleDeg = 0.0;
   int selectedZoneId = 1;
   int currentSegment = 3;
   int recordPointCount = 0;
@@ -69,9 +67,7 @@ class MissionMockProvider extends ChangeNotifier {
   bool _isDisposed = false;
 
   DateTime? _stripWidthEditedAt;
-  DateTime? _waypointSpacingEditedAt;
   DateTime? _coveragePatternEditedAt;
-  DateTime? _zigzagAngleEditedAt;
   static const _editGrace = Duration(seconds: 2);
   bool liveDataActive = false;
   bool mockDataEnabled = true;
@@ -680,10 +676,6 @@ class MissionMockProvider extends ChangeNotifier {
         now.difference(_stripWidthEditedAt!) > _editGrace) {
       stripWidthM = _asDouble(dto['stripWidthM']) ?? stripWidthM;
     }
-    if (_waypointSpacingEditedAt == null ||
-        now.difference(_waypointSpacingEditedAt!) > _editGrace) {
-      waypointSpacingM = _asDouble(dto['waypointSpacingM']) ?? waypointSpacingM;
-    }
     if (_coveragePatternEditedAt == null ||
         now.difference(_coveragePatternEditedAt!) > _editGrace) {
       final pattern = dto['coveragePattern']?.toString();
@@ -692,10 +684,6 @@ class MissionMockProvider extends ChangeNotifier {
       } else if (pattern == 'zigzag') {
         coveragePattern = CoveragePatternKind.zigzag;
       }
-    }
-    if (_zigzagAngleEditedAt == null ||
-        now.difference(_zigzagAngleEditedAt!) > _editGrace) {
-      zigzagAngleDeg = _asDouble(dto['zigzagAngleDeg']) ?? zigzagAngleDeg;
     }
     liveDataActive = true;
     notifyListeners();
@@ -891,35 +879,6 @@ class MissionMockProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setWaypointSpacing(double value) {
-    waypointSpacingM = value;
-    _waypointSpacingEditedAt = DateTime.now();
-    if (rosConnected) {
-      unawaited(
-        _setRosDoubleParam(
-          '/boustrophedon_coverage/set_parameters',
-          'waypoint_spacing_m',
-          value,
-        ),
-      );
-    }
-    notifyListeners();
-  }
-
-  void setZigzagAngle(double value) {
-    zigzagAngleDeg = value;
-    _zigzagAngleEditedAt = DateTime.now();
-    if (rosConnected) {
-      unawaited(
-        _setRosDoubleParam(
-          '/boustrophedon_coverage/set_parameters',
-          'zigzag_angle_deg',
-          value,
-        ),
-      );
-    }
-    notifyListeners();
-  }
 
   Future<void> _setRosDoubleParam(
     String service,

@@ -78,25 +78,6 @@ class PlanningControlSheet extends StatelessWidget {
           unit: 'm',
           onChanged: mission.setStripWidth,
         ),
-        _ParameterSlider(
-          label: 'Waypoint Spacing',
-          value: mission.waypointSpacingM,
-          min: 0.1,
-          max: 0.8,
-          unit: 'm',
-          onChanged: mission.setWaypointSpacing,
-        ),
-        if (mission.coveragePattern == CoveragePatternKind.zigzag)
-          _ParameterSlider(
-            label: 'Zigzag Angle',
-            value: mission.zigzagAngleDeg,
-            min: 0.0,
-            max: 180.0,
-            divisions: 36,
-            unit: '°',
-            fractionDigits: 0,
-            onChanged: mission.setZigzagAngle,
-          ),
         const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,
@@ -172,8 +153,6 @@ class _ParameterSlider extends StatelessWidget {
     required this.max,
     required this.unit,
     required this.onChanged,
-    this.divisions = 13,
-    this.fractionDigits = 2,
   });
 
   final String label;
@@ -182,8 +161,8 @@ class _ParameterSlider extends StatelessWidget {
   final double max;
   final String unit;
   final ValueChanged<double> onChanged;
-  final int divisions;
-  final int fractionDigits;
+  static const int divisions = 13;
+  static const int fractionDigits = 2;
 
   @override
   Widget build(BuildContext context) {
