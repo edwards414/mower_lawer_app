@@ -183,6 +183,13 @@ class RosbridgeService {
     }
   }
 
+  void unsubscribe(String topic) {
+    _subscriptions.remove(topic);
+    if (_connected) {
+      _send({'op': 'unsubscribe', 'topic': topic});
+    }
+  }
+
   Future<RosbridgeServiceResponse> callService(
     String service, {
     Map<String, dynamic> args = const {},

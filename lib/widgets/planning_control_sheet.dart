@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
+import 'image_mission_sheet.dart';
 
 class PlanningControlSheet extends StatelessWidget {
   const PlanningControlSheet({super.key});
@@ -77,6 +78,24 @@ class PlanningControlSheet extends StatelessWidget {
           max: 1.6,
           unit: 'm',
           onChanged: mission.setStripWidth,
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => showModalBottomSheet<void>(
+              context: context,
+              useSafeArea: true,
+              isScrollControlled: true,
+              backgroundColor: Colors.white,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+              ),
+              builder: (_) => const ImageMissionSheet(),
+            ),
+            icon: const Icon(Icons.image_outlined),
+            label: const Text('圖片任務'),
+          ),
         ),
         const SizedBox(height: 8),
         SizedBox(

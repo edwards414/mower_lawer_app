@@ -9,6 +9,7 @@ import '../providers/mission_mock_provider.dart';
 import '../providers/mower_status_provider.dart';
 import '../providers/weather_provider.dart';
 import '../services/rosbridge_service.dart';
+import '../providers/robot_fleet_provider.dart';
 import '../widgets/add_object_sheet.dart';
 import '../widgets/execution_control_sheet.dart';
 import '../widgets/manual_control_overlay.dart';
@@ -18,6 +19,7 @@ import '../widgets/mission_mode_bar.dart';
 import '../widgets/operation_log_sheet.dart';
 import '../widgets/planning_control_sheet.dart';
 import '../widgets/record_control_sheet.dart';
+import '../widgets/robot_info_popup.dart';
 import '../widgets/top_status_pill.dart';
 import 'self_check_screen.dart';
 
@@ -296,6 +298,8 @@ class _ConnectionCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 7),
                     _StatusDot(active: online),
+                    const Spacer(),
+                    _RobotOnlineChip(online: mission.robotOnline),
                   ],
                 ),
                 const SizedBox(height: 6),
@@ -857,6 +861,45 @@ class _StatusDot extends StatelessWidget {
   }
 }
 
+/// Robot liveness chip driven by the `/robot/online` heartbeat (distinct from
+/// the app<->rosbridge link). Green = robot alive, grey = offline/unknown.
+class _RobotOnlineChip extends StatelessWidget {
+  const _RobotOnlineChip({required this.online});
+
+  final bool online;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = online ? const Color(0xFF167A4A) : const Color(0xFF90A4AE);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: online ? const Color(0xFFE4F6EC) : const Color(0xFFF0F2F3),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            online ? Icons.smart_toy : Icons.smart_toy_outlined,
+            size: 14,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            online ? '機器人在線' : '機器人離線',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _VerticalDivider extends StatelessWidget {
   const _VerticalDivider();
 
@@ -1030,14 +1073,61 @@ class _MoreActionRow extends StatelessWidget {
   }
 }
 
-class MissionMapScreen extends StatelessWidget {
+class MissionMapScreen extends StatefulWidget {
   const MissionMapScreen({super.key, required this.onManual});
 
   final VoidCallback onManual;
 
   @override
+  State<MissionMapScreen> createState() => _MissionMapScreenState();
+}
+
+class _MissionMapScreenState extends State<MissionMapScreen> {
+  final _canvasKey = GlobalKey<MissionMapCanvasState>();
+  Offset? _popupOffset;
+  bool _panelCollapsed = false;
+
+  void _onLongPress(LongPressStartDetails details) {
+    final positions =
+        _canvasKey.currentState?.robotScreenPositions ?? {};
+    const threshold = 44.0;
+    int? nearest;
+    double nearestDist = double.infinity;
+    for (final entry in positions.entries) {
+      final dist = (details.localPosition - entry.value).distance;
+      if (dist < threshold && dist < nearestDist) {
+        nearestDist = dist;
+        nearest = entry.key;
+      }
+    }
+    if (nearest != null) {
+      context.read<RobotFleetProvider>().selectRobot(nearest);
+      setState(() => _popupOffset = positions[nearest]);
+    }
+  }
+
+  void _dismissPopup() {
+    context.read<RobotFleetProvider>().selectRobot(null);
+    setState(() => _popupOffset = null);
+  }
+
+  Offset _clampedPopupOrigin(Offset robotPos, Size screenSize) {
+    const popupW = 220.0;
+    const popupH = 148.0;
+    final left = (robotPos.dx - popupW / 2).clamp(8.0, screenSize.width - popupW - 8);
+    final double top;
+    if (robotPos.dy > screenSize.height * 0.55) {
+      top = (robotPos.dy - popupH - 32).clamp(8.0, screenSize.height - popupH - 8);
+    } else {
+      top = (robotPos.dy + 32).clamp(8.0, screenSize.height - popupH - 8);
+    }
+    return Offset(left, top);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
+    final fleet = context.watch<RobotFleetProvider>();
     final media = MediaQuery.of(context);
     final size = media.size;
     final isLandscape = size.width > size.height;
@@ -1045,37 +1135,76 @@ class MissionMapScreen extends StatelessWidget {
         ? math.min(size.height * 0.5, 220.0)
         : math.min(size.height * 0.43, 370.0);
 
+    final collapsedH = 48.0 + media.padding.bottom;
+    final effectivePanelH = _panelCollapsed ? collapsedH : panelHeight;
+
+    final selectedRobot = fleet.selectedRobot;
+    final popupOrigin = (_popupOffset != null && selectedRobot != null)
+        ? _clampedPopupOrigin(_popupOffset!, size)
+        : null;
+
     return Scaffold(
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: MissionMapCanvas(mission: mission, bottomInset: panelHeight),
-          ),
-          Positioned(
-            top: media.padding.top + 10,
-            left: 12,
-            right: 76,
-            child: const TopStatusPill(),
-          ),
-          Positioned(
-            top: media.padding.top + 78,
-            right: 12,
-            child: _MapActionRail(
-              onAdd: () => _showAppSheet(context, const AddObjectSheet()),
-              onLayers: () => _showAppSheet(context, const _LayerToggleSheet()),
-              onSettings: () =>
-                  _showAppSheet(context, const _SettingsQuickSheet()),
-              onManual: onManual,
+      body: GestureDetector(
+        onLongPressStart: _onLongPress,
+        onTap: () {
+          if (fleet.selectedRobotId != null) _dismissPopup();
+        },
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: MissionMapCanvas(
+                key: _canvasKey,
+                mission: mission,
+                robots: fleet.robots,
+                selectedRobotId: fleet.selectedRobotId,
+                bottomInset: effectivePanelH,
+              ),
             ),
-          ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: panelHeight,
-            child: const _MissionBottomPanel(),
-          ),
-        ],
+            Positioned(
+              top: media.padding.top + 10,
+              left: 12,
+              right: 76,
+              child: const TopStatusPill(),
+            ),
+            Positioned(
+              top: media.padding.top + 78,
+              right: 12,
+              child: _MapActionRail(
+                onAdd: () => _showAppSheet(context, const AddObjectSheet()),
+                onLayers: () =>
+                    _showAppSheet(context, const _LayerToggleSheet()),
+                onSettings: () =>
+                    _showAppSheet(context, const _SettingsQuickSheet()),
+                onManual: widget.onManual,
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+                height: effectivePanelH,
+                child: _MissionBottomPanel(
+                  isCollapsed: _panelCollapsed,
+                  onToggle: () =>
+                      setState(() => _panelCollapsed = !_panelCollapsed),
+                ),
+              ),
+            ),
+            if (popupOrigin != null && selectedRobot != null)
+              Positioned(
+                left: popupOrigin.dx,
+                top: popupOrigin.dy,
+                width: 220,
+                child: RobotInfoPopup(
+                  robot: selectedRobot,
+                  onClose: _dismissPopup,
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1288,7 +1417,13 @@ class _RoundIconButton extends StatelessWidget {
 }
 
 class _MissionBottomPanel extends StatelessWidget {
-  const _MissionBottomPanel();
+  const _MissionBottomPanel({
+    required this.isCollapsed,
+    required this.onToggle,
+  });
+
+  final bool isCollapsed;
+  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
@@ -1309,32 +1444,58 @@ class _MissionBottomPanel extends StatelessWidget {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 44,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD0D7DA),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 8),
-              const MissionModeBar(),
-              const SizedBox(height: 10),
-              Expanded(
-                child: SingleChildScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 180),
-                    child: _ModePanel(
-                      key: ValueKey(mission.selectedMode),
-                      mode: mission.selectedMode,
-                    ),
+              // Tappable handle row
+              GestureDetector(
+                onTap: onToggle,
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFD0D7DA),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      AnimatedRotation(
+                        turns: isCollapsed ? 0.5 : 0,
+                        duration: const Duration(milliseconds: 280),
+                        curve: Curves.easeInOut,
+                        child: const Icon(
+                          Icons.keyboard_arrow_down,
+                          size: 18,
+                          color: Color(0xFFB0BEC5),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
+              if (!isCollapsed) ...[
+                const MissionModeBar(),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      child: _ModePanel(
+                        key: ValueKey(mission.selectedMode),
+                        mode: mission.selectedMode,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

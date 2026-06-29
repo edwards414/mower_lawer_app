@@ -6,7 +6,9 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/image_mission_draft.dart';
 import '../models/mission_mock.dart';
+import '../services/image_mission_processor.dart';
 import '../services/rosbridge_service.dart';
 
 class MissionMockProvider extends ChangeNotifier {
@@ -56,6 +58,16 @@ class MissionMockProvider extends ChangeNotifier {
   bool coverageReady = true;
   bool rosConnected = false;
 
+  /// Whether the robot itself is alive (LWT-style), from the `/robot/online`
+  /// heartbeat. Distinct from [rosConnected] (app<->rosbridge link): the robot
+  /// can be offline while rosbridge is still up.
+  bool robotOnline = false;
+  DateTime? _lastHeartbeatAt;
+  bool _lastHeartbeatData = false;
+  static const Duration _heartbeatTimeout = Duration(seconds: 3);
+
+  ImageMissionDraft? imageMissionDraft;
+
   MapGridLayer? freeSpaceLayer;
   MapGridLayer? riskMapLayer;
   MapGridLayer? channelMapLayer;
@@ -87,6 +99,10 @@ class MissionMockProvider extends ChangeNotifier {
   String get rosbridgeUrl => _rosbridge.url;
   String get robotIp => _rosbridge.robotIp;
   bool get shouldShowRobot => mockDataEnabled || _hasLiveRobotPose;
+
+  /// Whether a real `/adapter/robot_pose` has been received (the default robot
+  /// has a live pose). Consumed by [RobotFleetProvider.syncFromMission].
+  bool get hasLiveRobotPose => _hasLiveRobotPose;
 
   CameraFrame? cameraFrame(CameraFeed feed) {
     return switch (feed) {
@@ -169,6 +185,12 @@ class MissionMockProvider extends ChangeNotifier {
       '/adapter/robot_pose',
       type: 'geometry_msgs/msg/PoseStamped',
       throttleRateMs: 100,
+    );
+    _rosbridge.subscribe(
+      '/robot/online',
+      type: 'std_msgs/msg/Bool',
+      throttleRateMs: 200,
+      qos: const {'durability': 'transient_local', 'reliability': 'reliable'},
     );
     _rosbridge.subscribe(
       frontCameraTopic,
@@ -258,7 +280,25 @@ class MissionMockProvider extends ChangeNotifier {
       manualControlActive = false;
       _addLog('WARN', 'rosbridge 連線中斷，保留最後資料');
     }
+    _updateRobotOnline();
     notifyListeners();
+  }
+
+  /// Recompute [robotOnline] from the last `/robot/online` heartbeat. Online
+  /// only when the app is linked to rosbridge AND a `true` heartbeat arrived
+  /// within [_heartbeatTimeout] (so a stopped/dead robot — whose heartbeat
+  /// either flips false or stops entirely — is detected). Called on each
+  /// heartbeat, on connection changes, and every tick (for the timeout).
+  void _updateRobotOnline() {
+    final last = _lastHeartbeatAt;
+    final fresh =
+        last != null && DateTime.now().difference(last) <= _heartbeatTimeout;
+    final next = rosConnected && fresh && _lastHeartbeatData;
+    if (next != robotOnline) {
+      robotOnline = next;
+      _addLog(next ? 'SUCCESS' : 'WARN', next ? '機器人上線' : '機器人離線');
+      notifyListeners();
+    }
   }
 
   void _handleRosMessage(RosbridgeTopicMessage event) {
@@ -274,6 +314,11 @@ class MissionMockProvider extends ChangeNotifier {
           break;
         case '/adapter/robot_pose':
           _applyRobotPose(event.message);
+          break;
+        case '/robot/online':
+          _lastHeartbeatAt = DateTime.now();
+          _lastHeartbeatData = event.message['data'] == true;
+          _updateRobotOnline();
           break;
         case '/adapter/coverage_settings':
           final dto = _decodeStringMessage(event.message);
@@ -879,6 +924,315 @@ class MissionMockProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setImageMissionDraft(ImageMissionDraft draft) {
+    imageMissionDraft = draft;
+    selectedMode = MissionMode.plan;
+    _addLog('INFO', '圖片任務已載入：${draft.sourceName}');
+    notifyListeners();
+  }
+
+  void clearImageMissionDraft() {
+    imageMissionDraft = null;
+    _addLog('WARN', '圖片任務草稿已清除');
+    notifyListeners();
+  }
+
+  void updateImageMissionThreshold(int threshold) {
+    final draft = imageMissionDraft;
+    if (draft == null) {
+      return;
+    }
+    imageMissionDraft = draft.copyWith(
+      threshold: threshold,
+      freeMask: ImageMissionProcessor.thresholdMask(draft.grayscale, threshold),
+      submitted: false,
+      clearSubmitMessage: true,
+      clearSubmittedArea: true,
+    );
+    notifyListeners();
+  }
+
+  void updateImageMissionResolution(double resolutionM) {
+    final draft = imageMissionDraft;
+    if (draft == null) {
+      return;
+    }
+    imageMissionDraft = draft.copyWith(
+      resolutionM: resolutionM.clamp(0.005, 0.5).toDouble(),
+      submitted: false,
+      clearSubmitMessage: true,
+      clearSubmittedArea: true,
+    );
+    notifyListeners();
+  }
+
+  void updateImageMissionStartPose(ImageMissionStartPose startPose) {
+    final draft = imageMissionDraft;
+    if (draft == null) {
+      return;
+    }
+    imageMissionDraft = draft.copyWith(
+      startPose: startPose,
+      submitted: false,
+      clearSubmitMessage: true,
+      clearSubmittedArea: true,
+    );
+    notifyListeners();
+  }
+
+  /// Default the alignment placement (and a sensible start pixel) when the
+  /// align step opens. Re-entry keeps any existing placement/start.
+  void initImageMissionPlacement() {
+    final draft = imageMissionDraft;
+    if (draft == null) {
+      return;
+    }
+
+    // Default start pixel = centroid of free cells, else image centre.
+    var startPoint = draft.startPose?.point;
+    if (startPoint == null) {
+      var sumX = 0.0;
+      var sumY = 0.0;
+      var count = 0;
+      for (var row = 0; row < draft.height; row += 1) {
+        final base = row * draft.width;
+        for (var col = 0; col < draft.width; col += 1) {
+          if (draft.freeMask[base + col] == 255) {
+            sumX += col;
+            sumY += row;
+            count += 1;
+          }
+        }
+      }
+      startPoint = count > 0
+          ? MapPoint(sumX / count, sumY / count)
+          : MapPoint(draft.width / 2, draft.height / 2);
+    }
+
+    // Default anchor = centre of the collected freespace, else robot position.
+    MapPoint anchor;
+    final fs = freeSpaceLayer;
+    if (fs != null) {
+      anchor = MapPoint(
+        fs.originX + fs.width * fs.resolution / 2,
+        fs.originY + fs.height * fs.resolution / 2,
+      );
+    } else {
+      anchor = robotPosition;
+    }
+
+    imageMissionDraft = draft.copyWith(
+      startPose:
+          draft.startPose ??
+          ImageMissionStartPose(point: startPoint, headingRad: 0.0),
+      placement: draft.placement ?? ImageMissionPlacement(mapAnchor: anchor),
+      submitted: false,
+      clearSubmitMessage: true,
+      clearSubmittedArea: true,
+    );
+    notifyListeners();
+  }
+
+  /// Clear the alignment + start pixel and recompute defaults.
+  void resetImageMissionPlacement() {
+    final draft = imageMissionDraft;
+    if (draft == null) {
+      return;
+    }
+    imageMissionDraft = draft.copyWith(
+      clearPlacement: true,
+      clearStartPose: true,
+    );
+    initImageMissionPlacement();
+  }
+
+  /// Live update of the drag/rotate/scale alignment (no path computed here).
+  void updateImageMissionPlacement(ImageMissionPlacement placement) {
+    final draft = imageMissionDraft;
+    if (draft == null) {
+      return;
+    }
+    imageMissionDraft = draft.copyWith(
+      placement: placement,
+      submitted: false,
+      clearSubmitMessage: true,
+      clearSubmittedArea: true,
+    );
+    notifyListeners();
+  }
+
+  /// Set the start pixel by tapping on the map. [worldAnchor] is the tapped
+  /// world point and becomes the new anchor so the overlay does not move.
+  void setImageMissionStartFromMap(MapPoint pixel, MapPoint worldAnchor) {
+    final draft = imageMissionDraft;
+    final placement = draft?.placement;
+    if (draft == null || placement == null) {
+      return;
+    }
+    imageMissionDraft = draft.copyWith(
+      startPose: ImageMissionStartPose(
+        point: pixel,
+        headingRad: draft.startPose?.headingRad ?? 0.0,
+      ),
+      placement: placement.copyWith(mapAnchor: worldAnchor),
+      submitted: false,
+      clearSubmitMessage: true,
+      clearSubmittedArea: true,
+    );
+    notifyListeners();
+  }
+
+  void updateImageMissionRiskMask(Uint8List riskMask) {
+    final draft = imageMissionDraft;
+    if (draft == null) {
+      return;
+    }
+    imageMissionDraft = draft.copyWith(
+      riskMask: riskMask,
+      submitted: false,
+      clearSubmitMessage: true,
+      clearSubmittedArea: true,
+    );
+    notifyListeners();
+  }
+
+  void clearImageMissionRiskMask() {
+    final draft = imageMissionDraft;
+    if (draft == null) {
+      return;
+    }
+    imageMissionDraft = draft.copyWith(
+      clearRiskMask: true,
+      submitted: false,
+      clearSubmitMessage: true,
+      clearSubmittedArea: true,
+    );
+    notifyListeners();
+  }
+
+  Future<bool> submitImageMissionDraft() async {
+    final draft = imageMissionDraft;
+    if (draft == null || !draft.canSubmit) {
+      _addLog('WARN', '圖片任務尚未完成縮放比例與起點設定');
+      return false;
+    }
+
+    imageMissionDraft = draft.copyWith(submitting: true);
+    notifyListeners();
+
+    if (!rosConnected) {
+      if (!mockDataEnabled) {
+        imageMissionDraft = draft.copyWith(
+          submitting: false,
+          submitted: false,
+          submitMessage: '請先連上 rosbridge',
+        );
+        _addLog('WARN', '圖片任務需要 rosbridge 連線');
+        notifyListeners();
+        return false;
+      }
+      imageMissionDraft = draft.copyWith(
+        submitting: false,
+        submitted: true,
+        submitMessage: 'Mock 圖片任務已建立',
+        submittedAreaM2: draft.areaM2,
+      );
+      coverageReady = true;
+      coverageProgress = 0.0;
+      selectedZoneId = draft.zoneId;
+      _addLog(
+        'SUCCESS',
+        'Mock 圖片任務已建立，面積 ${draft.areaM2.toStringAsFixed(1)} m²',
+      );
+      notifyListeners();
+      return true;
+    }
+
+    // Map the on-canvas alignment (anchor + rotation θ + scale s) onto the
+    // existing /import_image_mask geometry. Scale folds into resolution_m,
+    // translation into robot_pose_map.position, rotation into robot yaw
+    // (image_heading stays at φ_img so theta = robot_yaw − image_heading = θ).
+    final placement = draft.placement!;
+    final resolutionM = draft.resolutionM * placement.mapScale;
+    final startLocal = ImageMissionProcessor.imagePointToLocalMeters(
+      draft.startPose!.point,
+      imageHeight: draft.height,
+      resolutionM: resolutionM,
+    );
+    final imageHeadingRad = draft.startPose!.headingRad;
+    final now = DateTime.now();
+    final response = await _rosbridge.callService(
+      '/import_image_mask',
+      args: {
+        'zone_id': draft.zoneId,
+        'robot_pose_header': {
+          'stamp': {
+            'sec': now.millisecondsSinceEpoch ~/ 1000,
+            'nanosec': (now.millisecondsSinceEpoch % 1000) * 1000000,
+          },
+          'frame_id': 'map',
+        },
+        'robot_pose_map': {
+          'position': {
+            'x': placement.mapAnchor.x,
+            'y': placement.mapAnchor.y,
+            'z': 0.0,
+          },
+          'orientation': _yawToQuaternion(
+            imageHeadingRad + placement.mapRotationRad,
+          ),
+        },
+        'width': draft.width,
+        'height': draft.height,
+        'resolution_m': resolutionM,
+        'start_x_m': startLocal.x,
+        'start_y_m': startLocal.y,
+        'image_heading_rad': imageHeadingRad,
+        'mask_encoding': 'base64_u8_row_major',
+        'free_mask_data': ImageMissionProcessor.encodeMaskBase64(
+          draft.freeMask,
+        ),
+        'risk_mask_data': draft.riskMask == null
+            ? ''
+            : ImageMissionProcessor.encodeMaskBase64(draft.riskMask!),
+      },
+    );
+
+    final success = response.success;
+    final area =
+        (response.values['area_m2'] as num?)?.toDouble() ?? draft.areaM2;
+    imageMissionDraft = draft.copyWith(
+      submitting: false,
+      submitted: success,
+      submitMessage: response.message.isEmpty
+          ? success
+                ? '圖片任務已送出'
+                : '圖片任務送出失敗'
+          : response.message,
+      submittedAreaM2: success ? area : null,
+      clearSubmittedArea: !success,
+    );
+    if (success) {
+      selectedZoneId =
+          (response.values['zone_id'] as num?)?.toInt() ?? draft.zoneId;
+      freeSpaceReady = true;
+      riskMapReady = true;
+      _addLog('SUCCESS', '圖片任務已匯入，準備生成 Coverage Path');
+      unawaited(_runRosPlanningStep('coverage'));
+    } else {
+      _addLog(
+        'ERROR',
+        response.message.isEmpty ? '圖片任務匯入失敗' : response.message,
+      );
+    }
+    notifyListeners();
+    return success;
+  }
+
+  Map<String, double> _yawToQuaternion(double yaw) {
+    final half = yaw / 2.0;
+    return {'x': 0.0, 'y': 0.0, 'z': math.sin(half), 'w': math.cos(half)};
+  }
 
   Future<void> _setRosDoubleParam(
     String service,
@@ -1122,6 +1476,7 @@ class MissionMockProvider extends ChangeNotifier {
 
   void _tick() {
     _tickCount += 1;
+    _updateRobotOnline();
     if (mockDataEnabled && !_hasLiveRobotPose) {
       _advanceRobot();
     }

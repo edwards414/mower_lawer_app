@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import 'providers/mission_mock_provider.dart';
 import 'providers/mower_status_provider.dart';
+import 'providers/robot_fleet_provider.dart';
 import 'providers/weather_provider.dart';
 import 'screens/home_screen.dart';
 import 'services/rosbridge_service.dart';
@@ -42,6 +43,11 @@ class MowerApp extends StatelessWidget {
         ),
         ChangeNotifierProvider<MowerStatusProvider>(
           create: (ctx) => MowerStatusProvider(ctx.read<RosService>()),
+        ),
+        ChangeNotifierProxyProvider<MissionMockProvider, RobotFleetProvider>(
+          create: (ctx) =>
+              RobotFleetProvider(rosbridge: ctx.read<RosbridgeService>()),
+          update: (_, mission, fleet) => fleet!..syncFromMission(mission),
         ),
         ChangeNotifierProxyProvider<MowerStatusProvider, WeatherProvider>(
           create: (ctx) => WeatherProvider(service: ctx.read<WeatherService>()),
