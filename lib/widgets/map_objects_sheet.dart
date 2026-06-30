@@ -9,14 +9,18 @@ class MapObjectsSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
+    final count = mission.zones.length +
+        mission.riskZones.length +
+        mission.channels.length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _SheetHeader(
           title: '地圖物件',
-          subtitle:
-              '${mission.zones.length + mission.riskZones.length + mission.channels.length} items',
+          subtitle: mission.replanning
+              ? '重新規劃中…'
+              : '$count items · 點一下選取,垃圾桶刪除',
         ),
         const SizedBox(height: 10),
         ...mission.zones.map(
@@ -25,6 +29,10 @@ class MapObjectsSheet extends StatelessWidget {
             color: const Color(0xFF35B861),
             title: zone.name,
             detail: 'Zone ${zone.id} · ${zone.hasCoveragePath ? '已規劃' : '未規劃'}',
+            selected: mission.isObjectSelected('zone', zone.id),
+            onTap: () => mission.selectObject('zone', zone.id),
+            onDelete: () =>
+                _confirmDelete(context, mission, 'zone', zone.id, zone.name),
           ),
         ),
         ...mission.riskZones.map(
@@ -33,6 +41,10 @@ class MapObjectsSheet extends StatelessWidget {
             color: const Color(0xFFE55353),
             title: risk.name,
             detail: '禁入區 · ${risk.points.length} points',
+            selected: mission.isObjectSelected('risk', risk.id),
+            onTap: () => mission.selectObject('risk', risk.id),
+            onDelete: () =>
+                _confirmDelete(context, mission, 'risk', risk.id, risk.name),
           ),
         ),
         ...mission.channels.map(
@@ -41,6 +53,15 @@ class MapObjectsSheet extends StatelessWidget {
             color: const Color(0xFF25AFC6),
             title: channel.name,
             detail: '通道 · ${channel.points.length} points',
+            selected: mission.isObjectSelected('channel', channel.id),
+            onTap: () => mission.selectObject('channel', channel.id),
+            onDelete: () => _confirmDelete(
+              context,
+              mission,
+              'channel',
+              channel.id,
+              channel.name,
+            ),
           ),
         ),
         _ObjectRow(
@@ -57,6 +78,35 @@ class MapObjectsSheet extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  Future<void> _confirmDelete(
+    BuildContext context,
+    MissionMockProvider mission,
+    String kind,
+    int id,
+    String name,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('刪除物件'),
+        content: Text('確定刪除「$name」?刪除後會自動重新規劃覆蓋路徑。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('刪除'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await mission.deleteObject(kind, id);
+    }
   }
 }
 
@@ -103,56 +153,88 @@ class _ObjectRow extends StatelessWidget {
     required this.color,
     required this.title,
     required this.detail,
+    this.selected = false,
+    this.onTap,
+    this.onDelete,
   });
 
   final IconData icon;
   final Color color;
   final String title;
   final String detail;
+  final bool selected;
+  final VoidCallback? onTap;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
+      child: Material(
+        color: selected ? color.withValues(alpha: 0.10) : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(12),
+              border: selected
+                  ? Border.all(color: color.withValues(alpha: 0.6), width: 1.4)
+                  : null,
             ),
-            child: Icon(icon, color: color, size: 22),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 14,
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, color: color, size: 22),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                        ),
+                      ),
+                      Text(
+                        detail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF78909C),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                Text(
-                  detail,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF78909C),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
+                if (onDelete != null)
+                  IconButton(
+                    icon: const Icon(
+                      Icons.delete_outline,
+                      color: Color(0xFF90A4AE),
+                    ),
+                    onPressed: onDelete,
+                    tooltip: '刪除',
                   ),
-                ),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

@@ -12,7 +12,6 @@ class MissionModeBar extends StatelessWidget {
     final mission = context.watch<MissionMockProvider>();
     final items = const [
       _ModeItem(MissionMode.objects, Icons.layers_outlined, '物件'),
-      _ModeItem(MissionMode.record, Icons.edit_location_alt_outlined, '記錄'),
       _ModeItem(MissionMode.plan, Icons.tune_outlined, '規劃'),
       _ModeItem(MissionMode.run, Icons.play_circle_outline, '執行'),
       _ModeItem(MissionMode.logs, Icons.receipt_long_outlined, '日誌'),

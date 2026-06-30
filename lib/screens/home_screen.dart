@@ -18,7 +18,6 @@ import '../widgets/mission_map_canvas.dart';
 import '../widgets/mission_mode_bar.dart';
 import '../widgets/operation_log_sheet.dart';
 import '../widgets/planning_control_sheet.dart';
-import '../widgets/record_control_sheet.dart';
 import '../widgets/robot_info_popup.dart';
 import '../widgets/top_status_pill.dart';
 import 'self_check_screen.dart';
@@ -1158,8 +1157,30 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     return Scaffold(
       body: GestureDetector(
         onLongPressStart: _onLongPress,
-        onTap: () {
-          if (fleet.selectedRobotId != null) _dismissPopup();
+        onTapUp: (details) {
+          if (fleet.selectedRobotId != null) {
+            _dismissPopup();
+            return;
+          }
+          // Ignore taps that land on the bottom panel.
+          if (details.localPosition.dy > size.height - effectivePanelH) {
+            return;
+          }
+          final proj = _canvasKey.currentState?.lastProjection;
+          if (proj == null) return;
+          final world = proj.unproject(details.localPosition);
+          final wRight = proj.unproject(
+            details.localPosition + const Offset(22, 0),
+          );
+          final tol = math
+              .sqrt(
+                math.pow(wRight.x - world.x, 2) +
+                    math.pow(wRight.y - world.y, 2),
+              )
+              .toDouble();
+          if (!mission.selectObjectAt(world, channelTol: tol)) {
+            mission.clearObjectSelection();
+          }
         },
         child: Stack(
           children: [
@@ -1175,8 +1196,8 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
             Positioned(
               top: media.padding.top + 10,
               left: 12,
-              right: 76,
-              child: const TopStatusPill(),
+              right: 12,
+              child: const Center(child: TopStatusPill()),
             ),
             Positioned(
               top: media.padding.top + 78,
@@ -1202,7 +1223,6 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                   isCollapsed: _panelCollapsed,
                   onToggle: () =>
                       setState(() => _panelCollapsed = !_panelCollapsed),
-                  onManual: widget.onManual,
                 ),
               ),
             ),
@@ -1433,12 +1453,10 @@ class _MissionBottomPanel extends StatelessWidget {
   const _MissionBottomPanel({
     required this.isCollapsed,
     required this.onToggle,
-    required this.onManual,
   });
 
   final bool isCollapsed;
   final VoidCallback onToggle;
-  final VoidCallback onManual;
 
   @override
   Widget build(BuildContext context) {
@@ -1506,7 +1524,6 @@ class _MissionBottomPanel extends StatelessWidget {
                       child: _ModePanel(
                         key: ValueKey(mission.selectedMode),
                         mode: mission.selectedMode,
-                        onManual: onManual,
                       ),
                     ),
                   ),
@@ -1521,18 +1538,15 @@ class _MissionBottomPanel extends StatelessWidget {
 }
 
 class _ModePanel extends StatelessWidget {
-  const _ModePanel({super.key, required this.mode, required this.onManual});
+  const _ModePanel({super.key, required this.mode});
 
   final MissionMode mode;
-  final VoidCallback onManual;
 
   @override
   Widget build(BuildContext context) {
     switch (mode) {
       case MissionMode.objects:
         return const MapObjectsSheet();
-      case MissionMode.record:
-        return RecordControlSheet(onGoManual: onManual);
       case MissionMode.plan:
         return const PlanningControlSheet();
       case MissionMode.run:

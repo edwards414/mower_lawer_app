@@ -1,6 +1,6 @@
 import 'dart:ui' as ui;
 
-enum MissionMode { objects, record, plan, run, logs }
+enum MissionMode { objects, plan, run, logs }
 
 enum RecordObjectType { zone, risk, channel }
 

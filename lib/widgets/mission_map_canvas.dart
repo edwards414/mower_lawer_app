@@ -324,6 +324,9 @@ class _MissionMapPainter extends CustomPainter {
           stroke: const Color(0xFF2DA653),
           strokeWidth: 3,
         );
+        if (mission.isObjectSelected('zone', zone.id)) {
+          _drawSelectionHighlight(canvas, zone.points, project, closed: true);
+        }
         _drawLabel(
           canvas,
           zone.name,
@@ -343,6 +346,9 @@ class _MissionMapPainter extends CustomPainter {
           stroke: const Color(0xFFE04A4A),
           strokeWidth: 3,
         );
+        if (mission.isObjectSelected('risk', risk.id)) {
+          _drawSelectionHighlight(canvas, risk.points, project, closed: true);
+        }
       }
     }
 
@@ -355,6 +361,10 @@ class _MissionMapPainter extends CustomPainter {
           color: const Color(0xFF25AFC6),
           strokeWidth: 5,
         );
+        if (mission.isObjectSelected('channel', channel.id)) {
+          _drawSelectionHighlight(canvas, channel.points, project,
+              closed: false);
+        }
       }
     }
 
@@ -704,6 +714,45 @@ class _MissionMapPainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round
         ..strokeWidth = strokeWidth,
     );
+  }
+
+  /// Bright outline + vertex dots over a selected object.
+  void _drawSelectionHighlight(
+    Canvas canvas,
+    List<MapPoint> points,
+    Offset Function(MapPoint point) project, {
+    required bool closed,
+  }) {
+    if (points.isEmpty) return;
+    const accent = Color(0xFF1384E8);
+    final path = Path()
+      ..moveTo(project(points.first).dx, project(points.first).dy);
+    for (final p in points.skip(1)) {
+      final o = project(p);
+      path.lineTo(o.dx, o.dy);
+    }
+    if (closed) path.close();
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeJoin = StrokeJoin.round
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 4,
+    );
+    for (final p in points) {
+      final o = project(p);
+      canvas.drawCircle(o, 5, Paint()..color = Colors.white);
+      canvas.drawCircle(
+        o,
+        5,
+        Paint()
+          ..color = accent
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
   }
 
   void _drawPolyline(

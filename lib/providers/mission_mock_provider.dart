@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/geo_anchor.dart';
 import '../models/image_mission_draft.dart';
 import '../models/mission_mock.dart';
 import '../services/image_mission_processor.dart';
@@ -49,6 +50,10 @@ class MissionMockProvider extends ChangeNotifier {
   // True once a custom image mission has been imported into the backend; used
   // to restore full-freespace coverage when switching back to zigzag/spiral.
   bool _imageMissionActive = false;
+  // Satellite base-map toggle + the geo-anchor (from /adapter/map_datum) used
+  // to place the local map-frame overlays on real-world satellite imagery.
+  bool satelliteBaseMap = false;
+  GeoAnchor? mapGeoAnchor;
   NavMockStatus navStatus = NavMockStatus.idle;
   MissionLayerVisibility layers = const MissionLayerVisibility();
 
@@ -192,6 +197,12 @@ class MissionMockProvider extends ChangeNotifier {
         qos: const {'durability': 'transient_local', 'reliability': 'reliable'},
       );
     }
+    _rosbridge.subscribe(
+      '/adapter/map_datum',
+      type: 'std_msgs/msg/String',
+      throttleRateMs: 1000,
+      qos: const {'durability': 'transient_local', 'reliability': 'reliable'},
+    );
     _rosbridge.subscribe(
       '/adapter/robot_pose',
       type: 'geometry_msgs/msg/PoseStamped',
@@ -901,7 +912,6 @@ class MissionMockProvider extends ChangeNotifier {
     }
     recordingType = type;
     _recordingViaRos = false;
-    selectedMode = MissionMode.record;
     recordPointCount = 8;
     recordTrail = const [];
     _recordingStartedAt = DateTime.now();
@@ -992,6 +1002,11 @@ class MissionMockProvider extends ChangeNotifier {
       coverage: coverage,
       invalidSegments: invalidSegments,
     );
+    notifyListeners();
+  }
+
+  void toggleSatelliteBaseMap() {
+    satelliteBaseMap = !satelliteBaseMap;
     notifyListeners();
   }
 
@@ -1452,6 +1467,157 @@ class MissionMockProvider extends ChangeNotifier {
   void selectZone(int zoneId) {
     selectedZoneId = zoneId;
     notifyListeners();
+  }
+
+  // ── Object selection / editing (物件頁: 選取 / 刪除 / …) ─────────────────────
+  // selectedObjectKind: 'zone' | 'risk' | 'channel'.
+  String? selectedObjectKind;
+  int? selectedObjectId;
+  bool replanning = false;
+
+  bool isObjectSelected(String kind, int id) =>
+      selectedObjectKind == kind && selectedObjectId == id;
+
+  void selectObject(String kind, int id) {
+    selectedObjectKind = kind;
+    selectedObjectId = id;
+    notifyListeners();
+  }
+
+  void clearObjectSelection() {
+    if (selectedObjectKind == null && selectedObjectId == null) {
+      return;
+    }
+    selectedObjectKind = null;
+    selectedObjectId = null;
+    notifyListeners();
+  }
+
+  /// Hit-test a world point: zones/risks by polygon, channels by proximity.
+  /// Selects the first hit and returns true; clears nothing on a miss.
+  bool selectObjectAt(MapPoint world, {double channelTol = 1.0}) {
+    for (final z in zones) {
+      if (_pointInPolygon(world, z.points)) {
+        selectObject('zone', z.id);
+        return true;
+      }
+    }
+    for (final r in riskZones) {
+      if (_pointInPolygon(world, r.points)) {
+        selectObject('risk', r.id);
+        return true;
+      }
+    }
+    for (final c in channels) {
+      if (_nearPolyline(world, c.points, channelTol)) {
+        selectObject('channel', c.id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Delete an object via the backend /edit_zone service, then re-plan.
+  Future<void> deleteObject(String kind, int id) async {
+    if (rosConnected) {
+      _addLog('INFO', '刪除 $kind #$id');
+      final r = await _rosbridge.callService(
+        '/edit_zone',
+        args: {'op': 'delete', 'kind': kind, 'id': id, 'points': <dynamic>[]},
+      );
+      if (!r.success) {
+        _addLog('ERROR', r.message.isEmpty ? '刪除失敗' : r.message);
+        return;
+      }
+      _addLog('SUCCESS', r.message.isEmpty ? '$kind #$id 已刪除' : r.message);
+      if (isObjectSelected(kind, id)) {
+        clearObjectSelection();
+      }
+      await _replanAfterEdit();
+      return;
+    }
+    // Offline/mock: remove locally so the demo still responds.
+    _removeObjectLocally(kind, id);
+    if (isObjectSelected(kind, id)) {
+      clearObjectSelection();
+    }
+    _addLog('SUCCESS', '$kind #$id 已刪除（mock）');
+    notifyListeners();
+  }
+
+  void _removeObjectLocally(String kind, int id) {
+    switch (kind) {
+      case 'zone':
+        zones = zones.where((z) => z.id != id).toList();
+        _ensureSelectedZone();
+      case 'risk':
+        riskZones = riskZones.where((z) => z.id != id).toList();
+      case 'channel':
+        channels = channels.where((c) => c.id != id).toList();
+    }
+  }
+
+  /// Re-run the planning chain after an object edit so coverage updates.
+  Future<void> _replanAfterEdit() async {
+    if (!rosConnected) {
+      return;
+    }
+    replanning = true;
+    notifyListeners();
+    const steps = [
+      '/load_zone_list',
+      '/create_free_space',
+      '/create_risk_map',
+      '/generate_coverage_path',
+    ];
+    for (final s in steps) {
+      final r = await _rosbridge.callService(s);
+      _addLog(
+        r.success ? 'INFO' : 'WARN',
+        '$s ${r.success ? '完成' : (r.message.isEmpty ? '失敗' : r.message)}',
+      );
+    }
+    replanning = false;
+    notifyListeners();
+  }
+
+  bool _pointInPolygon(MapPoint p, List<MapPoint> poly) {
+    if (poly.length < 3) {
+      return false;
+    }
+    var inside = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      final xi = poly[i].x, yi = poly[i].y;
+      final xj = poly[j].x, yj = poly[j].y;
+      final denom = (yj - yi) == 0 ? 1e-9 : (yj - yi);
+      final intersect = ((yi > p.y) != (yj > p.y)) &&
+          (p.x < (xj - xi) * (p.y - yi) / denom + xi);
+      if (intersect) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  bool _nearPolyline(MapPoint p, List<MapPoint> line, double tol) {
+    for (var i = 0; i < line.length - 1; i++) {
+      if (_distToSegment(p, line[i], line[i + 1]) <= tol) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  double _distToSegment(MapPoint p, MapPoint a, MapPoint b) {
+    final dx = b.x - a.x, dy = b.y - a.y;
+    final len2 = dx * dx + dy * dy;
+    if (len2 == 0) {
+      return math.sqrt((p.x - a.x) * (p.x - a.x) + (p.y - a.y) * (p.y - a.y));
+    }
+    var t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+    t = t.clamp(0.0, 1.0);
+    final cx = a.x + t * dx, cy = a.y + t * dy;
+    return math.sqrt((p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy));
   }
 
   void startExecution() {
