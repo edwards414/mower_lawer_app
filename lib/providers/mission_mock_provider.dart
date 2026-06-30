@@ -42,6 +42,9 @@ class MissionMockProvider extends ChangeNotifier {
   MissionMode selectedMode = MissionMode.objects;
   RecordObjectType? recordingType;
   CoveragePatternKind coveragePattern = CoveragePatternKind.zigzag;
+  // True once a custom image mission has been imported into the backend; used
+  // to restore full-freespace coverage when switching back to zigzag/spiral.
+  bool _imageMissionActive = false;
   NavMockStatus navStatus = NavMockStatus.idle;
   MissionLayerVisibility layers = const MissionLayerVisibility();
 
@@ -897,7 +900,9 @@ class MissionMockProvider extends ChangeNotifier {
     coveragePattern = pattern;
     _coveragePatternEditedAt = DateTime.now();
     _addLog('INFO', 'Coverage pattern set to ${pattern.name}');
-    if (rosConnected) {
+    // 'custom' is the image-mission pipeline, not a boustrophedon sweep — the
+    // backend coverage_pattern param only understands zigzag/spiral.
+    if (rosConnected && pattern != CoveragePatternKind.custom) {
       unawaited(
         _setRosDoubleParam(
           '/boustrophedon_coverage/set_parameters',
@@ -906,6 +911,21 @@ class MissionMockProvider extends ChangeNotifier {
           type: 4,
         ),
       );
+      // Leaving custom: discard the imported image, restore the full freespace
+      // coverage area, and drop the perimeter ring.
+      if (_imageMissionActive) {
+        _imageMissionActive = false;
+        unawaited(_rosbridge.callService('/restore_free_space_coverage'));
+        unawaited(
+          _setRosDoubleParam(
+            '/boustrophedon_coverage/set_parameters',
+            'boundary_ring',
+            false,
+            type: 1,
+          ),
+        );
+        _addLog('INFO', '已切回完整自由空間（捨棄圖片範圍）');
+      }
     }
   }
 
@@ -1217,6 +1237,15 @@ class MissionMockProvider extends ChangeNotifier {
           (response.values['zone_id'] as num?)?.toInt() ?? draft.zoneId;
       freeSpaceReady = true;
       riskMapReady = true;
+      _imageMissionActive = true;
+      // Custom missions add an outer-contour perimeter pass; set this BEFORE
+      // generating so coverage_node reads it (await to guarantee ordering).
+      await _setRosDoubleParam(
+        '/boustrophedon_coverage/set_parameters',
+        'boundary_ring',
+        true,
+        type: 1,
+      );
       _addLog('SUCCESS', '圖片任務已匯入，準備生成 Coverage Path');
       unawaited(_runRosPlanningStep('coverage'));
     } else {
@@ -1248,6 +1277,7 @@ class MissionMockProvider extends ChangeNotifier {
             'name': name,
             'value': {
               'type': type,
+              if (type == 1) 'bool_value': value,
               if (type == 3) 'double_value': value,
               if (type == 4) 'string_value': value,
             },

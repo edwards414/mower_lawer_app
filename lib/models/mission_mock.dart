@@ -4,7 +4,7 @@ enum MissionMode { objects, record, plan, run, logs }
 
 enum RecordObjectType { zone, risk, channel }
 
-enum CoveragePatternKind { zigzag, spiral }
+enum CoveragePatternKind { zigzag, spiral, custom }
 
 enum NavMockStatus { idle, executing, paused, failed }
 
