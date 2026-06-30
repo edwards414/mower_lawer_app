@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 
 class RecordControlSheet extends StatelessWidget {
-  const RecordControlSheet({super.key});
+  const RecordControlSheet({super.key, required this.onGoManual});
+
+  /// Switch to the manual-control page, where recording actually happens
+  /// (you drive the robot to trace each boundary).
+  final VoidCallback onGoManual;
 
   @override
   Widget build(BuildContext context) {
@@ -18,47 +21,26 @@ class RecordControlSheet extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          '開始記錄',
+          '記錄物件',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
         ),
         const SizedBox(height: 4),
         const Text(
-          '選擇物件後，地圖會進入記錄狀態。',
+          '工作區 / 禁入區 / 通道都是「開著車繞一圈邊界」記錄出來的，'
+          '所以記錄在手動遙控頁進行。',
           style: TextStyle(
             color: Color(0xFF78909C),
             fontWeight: FontWeight.w700,
           ),
         ),
         const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(
-              child: _RecordTypeButton(
-                icon: Icons.crop_square,
-                label: '工作區',
-                color: const Color(0xFF35B861),
-                onTap: () => mission.startRecording(RecordObjectType.zone),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _RecordTypeButton(
-                icon: Icons.dangerous_outlined,
-                label: '禁入區',
-                color: const Color(0xFFE55353),
-                onTap: () => mission.startRecording(RecordObjectType.risk),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _RecordTypeButton(
-                icon: Icons.timeline,
-                label: '通道',
-                color: const Color(0xFF25AFC6),
-                onTap: () => mission.startRecording(RecordObjectType.channel),
-              ),
-            ),
-          ],
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: onGoManual,
+            icon: const Icon(Icons.sports_esports_outlined),
+            label: const Text('前往手動遙控頁記錄'),
+          ),
         ),
       ],
     );
@@ -140,54 +122,6 @@ class _ActiveRecordPanel extends StatelessWidget {
     final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
-  }
-}
-
-class _RecordTypeButton extends StatelessWidget {
-  const _RecordTypeButton({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(16),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withValues(alpha: 0.28)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 26),
-            const SizedBox(height: 8),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                label,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
 

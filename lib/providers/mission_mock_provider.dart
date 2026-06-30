@@ -41,6 +41,10 @@ class MissionMockProvider extends ChangeNotifier {
 
   MissionMode selectedMode = MissionMode.objects;
   RecordObjectType? recordingType;
+  // How the active recording was started: true = real ROS (*_start sent),
+  // false = mock fallback. Latched at start so stopRecording matches it even
+  // if the connection state changes mid-recording.
+  bool _recordingViaRos = false;
   CoveragePatternKind coveragePattern = CoveragePatternKind.zigzag;
   // True once a custom image mission has been imported into the backend; used
   // to restore full-freespace coverage when switching back to zigzag/spiral.
@@ -55,6 +59,10 @@ class MissionMockProvider extends ChangeNotifier {
   int selectedZoneId = 1;
   int currentSegment = 3;
   int recordPointCount = 0;
+  // Live breadcrumb of the robot's own pose captured while recording, used to
+  // draw the in-progress shape on the map. The backend (path_record_node) does
+  // the authoritative odom-sampled recording; this is just the visual trail.
+  List<MapPoint> recordTrail = const [];
   bool freeSpaceReady = true;
   bool riskMapReady = true;
   bool channelMapReady = true;
@@ -758,7 +766,26 @@ class MissionMockProvider extends ChangeNotifier {
     }
     _hasLiveRobotPose = true;
     liveDataActive = true;
+    if (recordingType != null && rosConnected) {
+      _appendRecordTrail(robotPosition);
+    }
     notifyListeners();
+  }
+
+  /// Append a pose to the live record trail, skipping points closer than ~5cm
+  /// to the previous one (mirrors the backend `min_dist` sampling).
+  void _appendRecordTrail(MapPoint p) {
+    if (recordTrail.isEmpty) {
+      recordTrail = [p];
+    } else {
+      final last = recordTrail.last;
+      final dx = p.x - last.x;
+      final dy = p.y - last.y;
+      if (dx * dx + dy * dy >= 0.0025) {
+        recordTrail = [...recordTrail, p];
+      }
+    }
+    recordPointCount = recordTrail.length;
   }
 
   final Map<int, bool> _zoneCoverageById = {};
@@ -852,15 +879,34 @@ class MissionMockProvider extends ChangeNotifier {
   }
 
   void startRecording(RecordObjectType type) {
+    if (recordingType != null) {
+      return;
+    }
+    // Live ROS path: drive the robot to trace the boundary; the backend
+    // (path_record_node) samples /odom while we accumulate a visual trail.
+    if (rosConnected) {
+      recordingType = type;
+      _recordingViaRos = true;
+      _recordingStartedAt = DateTime.now();
+      recordTrail = _hasLiveRobotPose ? [robotPosition] : const [];
+      recordPointCount = recordTrail.length;
+      unawaited(_callRecordService(_recordStartService(type)));
+      notifyListeners();
+      return;
+    }
+    // Mock fallback (no rosbridge): keep the old fake counter behaviour.
     if (!mockDataEnabled) {
       _addLog('WARN', 'Mock 記錄已關閉，等待 ROS 記錄流程串接');
       return;
     }
     recordingType = type;
+    _recordingViaRos = false;
     selectedMode = MissionMode.record;
     recordPointCount = 8;
+    recordTrail = const [];
     _recordingStartedAt = DateTime.now();
     _addLog('INFO', '開始${_recordTypeName(type)}');
+    notifyListeners();
   }
 
   void stopRecording({required bool save}) {
@@ -868,15 +914,68 @@ class MissionMockProvider extends ChangeNotifier {
     if (type == null) {
       return;
     }
+    // Branch on how this recording was STARTED, not on the current connection
+    // state — a recording can outlive a connection change, and the backend
+    // *_start was only sent in the ROS branch.
+    if (_recordingViaRos) {
+      if (save) {
+        unawaited(_finishRecording(type));
+      } else {
+        unawaited(_callRecordService('/record_cancel'));
+      }
+      if (!rosConnected) {
+        _addLog('WARN', 'rosbridge 已斷線，記錄結束指令可能未送達後端');
+      }
+    }
     _addLog(
       save ? 'SUCCESS' : 'WARN',
       '${_recordTypeName(type)}${save ? '已儲存' : '已取消'}',
     );
     recordingType = null;
+    _recordingViaRos = false;
     recordPointCount = 0;
+    recordTrail = const [];
     _recordingStartedAt = null;
     selectedMode = MissionMode.objects;
     notifyListeners();
+  }
+
+  String _recordStartService(RecordObjectType type) {
+    switch (type) {
+      case RecordObjectType.zone:
+        return '/record_zone_start';
+      case RecordObjectType.risk:
+        return '/risk_zone_start';
+      case RecordObjectType.channel:
+        return '/channel_record_start';
+    }
+  }
+
+  String _recordEndService(RecordObjectType type) {
+    switch (type) {
+      case RecordObjectType.zone:
+        return '/record_zone_end';
+      case RecordObjectType.risk:
+        return '/risk_zone_end';
+      case RecordObjectType.channel:
+        return '/channel_record_end';
+    }
+  }
+
+  Future<void> _callRecordService(String service) async {
+    _addLog('INFO', '呼叫 $service');
+    final response = await _rosbridge.callService(service);
+    _addLog(
+      response.success ? 'SUCCESS' : 'ERROR',
+      response.message.isEmpty
+          ? '$service ${response.success ? '已送出' : '失敗'}'
+          : response.message,
+    );
+  }
+
+  Future<void> _finishRecording(RecordObjectType type) async {
+    await _callRecordService(_recordEndService(type));
+    await _callRecordService('/save_zone_list');
   }
 
   void updateLayer({
@@ -1510,7 +1609,10 @@ class MissionMockProvider extends ChangeNotifier {
     if (mockDataEnabled && !_hasLiveRobotPose) {
       _advanceRobot();
     }
-    if (recordingType != null && mockDataEnabled) {
+    // Mock fake-counter only in the pure-mock fallback. During a real
+    // recording recordPointCount is owned solely by _appendRecordTrail, so
+    // gate this on !rosConnected to avoid the two writers fighting.
+    if (recordingType != null && mockDataEnabled && !rosConnected) {
       recordPointCount += 2;
     }
     if (navStatus == NavMockStatus.executing &&

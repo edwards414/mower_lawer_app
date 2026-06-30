@@ -90,6 +90,11 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
 
   @override
   Widget build(BuildContext context) {
+    // Manual-control tab goes full-screen in landscape: hide the bottom nav
+    // (the in-page ✕ button still exits, so the user is never trapped).
+    final hideNav =
+        MediaQuery.of(context).orientation == Orientation.landscape &&
+        _selectedIndex == 2;
     return Scaffold(
       backgroundColor: const Color(0xFFF6F7F8),
       body: IndexedStack(
@@ -107,40 +112,42 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
           const _MoreTab(),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        height: 70,
-        selectedIndex: _selectedIndex,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        indicatorColor: const Color(0xFFE3F5EA),
-        onDestinationSelected: (index) {
-          if (_selectedIndex == 2 && index != 2) {
-            context.read<MissionMockProvider>().stopManualControl();
-          }
-          setState(() => _selectedIndex = index);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            label: '首頁',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.map_outlined),
-            label: '地圖',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.sports_esports_outlined),
-            label: '手動控制',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            label: '排程',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.more_horiz_outlined),
-            label: '更多',
-          ),
-        ],
-      ),
+      bottomNavigationBar: hideNav
+          ? null
+          : NavigationBar(
+              height: 70,
+              selectedIndex: _selectedIndex,
+              labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+              indicatorColor: const Color(0xFFE3F5EA),
+              onDestinationSelected: (index) {
+                if (_selectedIndex == 2 && index != 2) {
+                  context.read<MissionMockProvider>().stopManualControl();
+                }
+                setState(() => _selectedIndex = index);
+              },
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.home_outlined),
+                  label: '首頁',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.map_outlined),
+                  label: '地圖',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.sports_esports_outlined),
+                  label: '手動控制',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.calendar_month_outlined),
+                  label: '排程',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.more_horiz_outlined),
+                  label: '更多',
+                ),
+              ],
+            ),
     );
   }
 }
@@ -1088,8 +1095,7 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
   bool _panelCollapsed = false;
 
   void _onLongPress(LongPressStartDetails details) {
-    final positions =
-        _canvasKey.currentState?.robotScreenPositions ?? {};
+    final positions = _canvasKey.currentState?.robotScreenPositions ?? {};
     const threshold = 44.0;
     int? nearest;
     double nearestDist = double.infinity;
@@ -1114,10 +1120,16 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
   Offset _clampedPopupOrigin(Offset robotPos, Size screenSize) {
     const popupW = 220.0;
     const popupH = 148.0;
-    final left = (robotPos.dx - popupW / 2).clamp(8.0, screenSize.width - popupW - 8);
+    final left = (robotPos.dx - popupW / 2).clamp(
+      8.0,
+      screenSize.width - popupW - 8,
+    );
     final double top;
     if (robotPos.dy > screenSize.height * 0.55) {
-      top = (robotPos.dy - popupH - 32).clamp(8.0, screenSize.height - popupH - 8);
+      top = (robotPos.dy - popupH - 32).clamp(
+        8.0,
+        screenSize.height - popupH - 8,
+      );
     } else {
       top = (robotPos.dy + 32).clamp(8.0, screenSize.height - popupH - 8);
     }
@@ -1190,6 +1202,7 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                   isCollapsed: _panelCollapsed,
                   onToggle: () =>
                       setState(() => _panelCollapsed = !_panelCollapsed),
+                  onManual: widget.onManual,
                 ),
               ),
             ),
@@ -1420,10 +1433,12 @@ class _MissionBottomPanel extends StatelessWidget {
   const _MissionBottomPanel({
     required this.isCollapsed,
     required this.onToggle,
+    required this.onManual,
   });
 
   final bool isCollapsed;
   final VoidCallback onToggle;
+  final VoidCallback onManual;
 
   @override
   Widget build(BuildContext context) {
@@ -1491,6 +1506,7 @@ class _MissionBottomPanel extends StatelessWidget {
                       child: _ModePanel(
                         key: ValueKey(mission.selectedMode),
                         mode: mission.selectedMode,
+                        onManual: onManual,
                       ),
                     ),
                   ),
@@ -1505,9 +1521,10 @@ class _MissionBottomPanel extends StatelessWidget {
 }
 
 class _ModePanel extends StatelessWidget {
-  const _ModePanel({super.key, required this.mode});
+  const _ModePanel({super.key, required this.mode, required this.onManual});
 
   final MissionMode mode;
+  final VoidCallback onManual;
 
   @override
   Widget build(BuildContext context) {
@@ -1515,7 +1532,7 @@ class _ModePanel extends StatelessWidget {
       case MissionMode.objects:
         return const MapObjectsSheet();
       case MissionMode.record:
-        return const RecordControlSheet();
+        return RecordControlSheet(onGoManual: onManual);
       case MissionMode.plan:
         return const PlanningControlSheet();
       case MissionMode.run:

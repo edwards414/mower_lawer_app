@@ -829,20 +829,51 @@ class _MissionMapPainter extends CustomPainter {
     Canvas canvas,
     Offset Function(MapPoint point) project,
   ) {
-    final robot = mission.robotPosition;
-    final points = [
-      MapPoint(robot.x - 11, robot.y + 5),
-      MapPoint(robot.x - 7, robot.y - 3),
-      MapPoint(robot.x - 1, robot.y + 2),
-      robot,
-    ];
-    _drawPolyline(
-      canvas,
-      points,
-      project,
-      color: const Color(0xFF222222),
-      strokeWidth: 3,
+    final trail = mission.recordTrail;
+    if (trail.isEmpty) return;
+
+    final type = mission.recordingType;
+    final Color color;
+    switch (type) {
+      case RecordObjectType.zone:
+        color = const Color(0xFF35B861);
+      case RecordObjectType.risk:
+        color = const Color(0xFFE55353);
+      case RecordObjectType.channel:
+        color = const Color(0xFF25AFC6);
+      case null:
+        color = const Color(0xFF222222);
+    }
+    final isArea =
+        type == RecordObjectType.zone || type == RecordObjectType.risk;
+
+    if (isArea && trail.length >= 3) {
+      // Area types preview as a translucent closing polygon.
+      _drawPolygon(
+        canvas,
+        trail,
+        project,
+        fill: color.withValues(alpha: 0.16),
+        stroke: color,
+        strokeWidth: 4,
+      );
+    } else if (trail.length >= 2) {
+      _drawPolyline(canvas, trail, project, color: color, strokeWidth: 4);
+    }
+
+    // Start anchor.
+    final start = project(trail.first);
+    canvas.drawCircle(start, 6, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      start,
+      6,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
     );
+    // Live head at the current robot position.
+    canvas.drawCircle(project(trail.last), 4.5, Paint()..color = color);
   }
 
   // ─── Labels / scale ────────────────────────────────────────────────────────
