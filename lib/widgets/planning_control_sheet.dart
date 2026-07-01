@@ -68,6 +68,17 @@ class PlanningControlSheet extends StatelessWidget {
           unit: 'm',
           onChanged: mission.setStripWidth,
         ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text(
+            '沿 zone 邊界先割一圈',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: const Text('填內部前先沿每個 zone 外緣繞一圈'),
+          value: mission.boundaryRing,
+          onChanged: mission.setBoundaryRing,
+        ),
         const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,

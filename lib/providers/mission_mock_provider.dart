@@ -61,6 +61,7 @@ class MissionMockProvider extends ChangeNotifier {
   double robotHeadingRad = 0.3;
   double coverageProgress = 0.42;
   double stripWidthM = 0.8;
+  bool boundaryRing = false;
   int selectedZoneId = 1;
   int currentSegment = 3;
   int recordPointCount = 0;
@@ -96,6 +97,7 @@ class MissionMockProvider extends ChangeNotifier {
 
   DateTime? _stripWidthEditedAt;
   DateTime? _coveragePatternEditedAt;
+  DateTime? _boundaryRingEditedAt;
   static const _editGrace = Duration(seconds: 2);
   bool liveDataActive = false;
   bool mockDataEnabled = true;
@@ -762,6 +764,13 @@ class MissionMockProvider extends ChangeNotifier {
         coveragePattern = CoveragePatternKind.zigzag;
       }
     }
+    if (_boundaryRingEditedAt == null ||
+        now.difference(_boundaryRingEditedAt!) > _editGrace) {
+      final ring = dto['boundaryRing'];
+      if (ring is bool) {
+        boundaryRing = ring;
+      }
+    }
     liveDataActive = true;
     notifyListeners();
   }
@@ -1039,6 +1048,7 @@ class MissionMockProvider extends ChangeNotifier {
       // coverage area, and drop the perimeter ring.
       if (_imageMissionActive) {
         _imageMissionActive = false;
+        boundaryRing = false;
         unawaited(_rosbridge.callService('/restore_free_space_coverage'));
         unawaited(
           _setRosDoubleParam(
@@ -1062,6 +1072,22 @@ class MissionMockProvider extends ChangeNotifier {
           '/boustrophedon_coverage/set_parameters',
           'strip_width_m',
           value,
+        ),
+      );
+    }
+    notifyListeners();
+  }
+
+  void setBoundaryRing(bool value) {
+    boundaryRing = value;
+    _boundaryRingEditedAt = DateTime.now();
+    if (rosConnected) {
+      unawaited(
+        _setRosDoubleParam(
+          '/boustrophedon_coverage/set_parameters',
+          'boundary_ring',
+          value,
+          type: 1,
         ),
       );
     }
@@ -1362,6 +1388,7 @@ class MissionMockProvider extends ChangeNotifier {
       freeSpaceReady = true;
       riskMapReady = true;
       _imageMissionActive = true;
+      boundaryRing = true;
       // Custom missions add an outer-contour perimeter pass; set this BEFORE
       // generating so coverage_node reads it (await to guarantee ordering).
       await _setRosDoubleParam(
