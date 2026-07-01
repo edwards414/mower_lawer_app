@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show SynchronousFuture;
@@ -26,9 +27,50 @@ class SatelliteMapView extends StatelessWidget {
 
   /// Provided at run time via `--dart-define-from-file=.env` (MAPBOX_TOKEN).
   static const String _mapboxToken = String.fromEnvironment('MAPBOX_TOKEN');
-  static const double _initialZoom = 19.0;
 
   LatLng _ll(MapPoint p) => anchor.worldToLatLng(p.x, p.y);
+
+  /// Bounded viewing area (so the satellite view can't pan off to arbitrary
+  /// places on Earth): the map content extent — freespace grid + zones + robot
+  /// — squared, expanded by a margin, with a sensible minimum size.
+  LatLngBounds _contentBounds() {
+    double? minX, minY, maxX, maxY;
+    void add(double x, double y) {
+      minX = (minX == null || x < minX!) ? x : minX;
+      maxX = (maxX == null || x > maxX!) ? x : maxX;
+      minY = (minY == null || y < minY!) ? y : minY;
+      maxY = (maxY == null || y > maxY!) ? y : maxY;
+    }
+
+    final fs = mission.freeSpaceLayer;
+    if (fs != null) {
+      add(fs.originX, fs.originY);
+      add(fs.originX + fs.width * fs.resolution,
+          fs.originY + fs.height * fs.resolution);
+    }
+    for (final z in mission.zones) {
+      for (final p in z.points) {
+        add(p.x, p.y);
+      }
+    }
+    add(mission.robotPosition.x, mission.robotPosition.y);
+
+    final cx = (minX! + maxX!) / 2;
+    final cy = (minY! + maxY!) / 2;
+    // Square half-extent: at least 10 m, plus a 20% + 2 m margin.
+    final half = math.max(
+              math.max((maxX! - minX!) / 2, (maxY! - minY!) / 2),
+              10.0,
+            ) *
+            1.2 +
+        2.0;
+    return LatLngBounds.fromPoints([
+      anchor.worldToLatLng(cx - half, cy - half),
+      anchor.worldToLatLng(cx + half, cy - half),
+      anchor.worldToLatLng(cx - half, cy + half),
+      anchor.worldToLatLng(cx + half, cy + half),
+    ]);
+  }
 
   /// A raster grid layer placed by its world-frame corners (image top-left =
   /// (originX, originY), matching the schematic canvas' drawImageRect).
@@ -78,14 +120,27 @@ class SatelliteMapView extends StatelessWidget {
           ),
     ];
 
+    final bounds = _contentBounds();
+
     return Stack(
       children: [
         FlutterMap(
           options: MapOptions(
-            initialCenter: LatLng(anchor.originLat, anchor.originLon),
-            initialZoom: _initialZoom,
+            // Open framed on the content; keep the map CENTRE locked to it (so
+            // you can't pan away to arbitrary places), but allow zooming out to
+            // see the surroundings (z16–z22, ~6 levels).
+            initialCameraFit: CameraFit.bounds(
+              bounds: bounds,
+              padding: const EdgeInsets.all(24),
+            ),
+            cameraConstraint: CameraConstraint.containCenter(bounds: bounds),
+            minZoom: 16,
             maxZoom: 22,
-            minZoom: 3,
+            // Enable all gestures incl. mouse-wheel / trackpad zoom (works in
+            // the desktop-run iOS sim); rotation off to keep north up.
+            interactionOptions: const InteractionOptions(
+              flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+            ),
           ),
           children: [
             if (_mapboxToken.isNotEmpty)
