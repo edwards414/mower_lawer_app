@@ -388,6 +388,10 @@ class _MissionMapPainter extends CustomPainter {
       _drawRecordingTrace(canvas, project);
     }
 
+    if (mission.drawMode && mission.draftPolygon.isNotEmpty) {
+      _drawDraft(canvas, project);
+    }
+
     // Draw fleet robots; fall back to single robot if fleet is empty.
     final Map<int, Offset> robotPositions = {};
     if (robots.isNotEmpty) {
@@ -713,6 +717,53 @@ class _MissionMapPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeJoin = StrokeJoin.round
         ..strokeWidth = strokeWidth,
+    );
+  }
+
+  /// In-progress hand-drawn polygon (P2): growing line + vertex dots, with a
+  /// faint closing edge back to the start once it is a polygon.
+  void _drawDraft(
+    Canvas canvas,
+    Offset Function(MapPoint point) project,
+  ) {
+    final pts = mission.draftPolygon;
+    if (pts.isEmpty) return;
+    const c = Color(0xFFE55353);
+    if (pts.length >= 2) {
+      _drawPolyline(canvas, pts, project, color: c, strokeWidth: 4);
+    }
+    if (pts.length >= 3) {
+      final close = Path()
+        ..moveTo(project(pts.last).dx, project(pts.last).dy)
+        ..lineTo(project(pts.first).dx, project(pts.first).dy);
+      canvas.drawPath(
+        close,
+        Paint()
+          ..color = c.withValues(alpha: 0.45)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
+    for (final v in pts) {
+      final o = project(v);
+      canvas.drawCircle(o, 5, Paint()..color = Colors.white);
+      canvas.drawCircle(
+        o,
+        5,
+        Paint()
+          ..color = c
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
+    // Emphasise the start vertex.
+    canvas.drawCircle(
+      project(pts.first),
+      8,
+      Paint()
+        ..color = c
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
     );
   }
 

@@ -16,6 +16,7 @@ import '../widgets/manual_control_overlay.dart';
 import '../widgets/map_objects_sheet.dart';
 import '../widgets/mission_map_canvas.dart';
 import '../widgets/mission_mode_bar.dart';
+import '../widgets/satellite_map_view.dart';
 import '../widgets/operation_log_sheet.dart';
 import '../widgets/planning_control_sheet.dart';
 import '../widgets/robot_info_popup.dart';
@@ -1158,6 +1159,18 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
       body: GestureDetector(
         onLongPressStart: _onLongPress,
         onTapUp: (details) {
+          // Drawing takes precedence over robot-popup dismissal / selection,
+          // so the first tap after entering draw mode drops a vertex.
+          if (mission.drawMode) {
+            if (details.localPosition.dy > size.height - effectivePanelH) {
+              return;
+            }
+            final proj = _canvasKey.currentState?.lastProjection;
+            if (proj != null) {
+              mission.addDraftVertex(proj.unproject(details.localPosition));
+            }
+            return;
+          }
           if (fleet.selectedRobotId != null) {
             _dismissPopup();
             return;
@@ -1185,19 +1198,38 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
         child: Stack(
           children: [
             Positioned.fill(
-              child: MissionMapCanvas(
-                key: _canvasKey,
-                mission: mission,
-                robots: fleet.robots,
-                selectedRobotId: fleet.selectedRobotId,
-                bottomInset: effectivePanelH,
-              ),
+              // While drawing, force the vector canvas (it owns the projection
+              // that tap-to-vertex needs); satellite has no projection yet.
+              child:
+                  (mission.satelliteBaseMap &&
+                      mission.mapGeoAnchor != null &&
+                      !mission.drawMode)
+                  ? SatelliteMapView(
+                      mission: mission,
+                      anchor: mission.mapGeoAnchor!,
+                    )
+                  : MissionMapCanvas(
+                      key: _canvasKey,
+                      mission: mission,
+                      robots: fleet.robots,
+                      selectedRobotId: fleet.selectedRobotId,
+                      bottomInset: effectivePanelH,
+                    ),
             ),
             Positioned(
               top: media.padding.top + 10,
               left: 12,
               right: 12,
               child: const Center(child: TopStatusPill()),
+            ),
+            Positioned(
+              top: media.padding.top + 78,
+              left: 12,
+              child: _SatelliteToggle(
+                on: mission.satelliteBaseMap,
+                enabled: mission.mapGeoAnchor != null,
+                onTap: mission.toggleSatelliteBaseMap,
+              ),
             ),
             Positioned(
               top: media.padding.top + 78,
@@ -1211,6 +1243,18 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                 onManual: widget.onManual,
               ),
             ),
+            if (mission.drawMode)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: effectivePanelH + 12,
+                child: _DrawControlBar(
+                  count: mission.draftPolygon.length,
+                  onUndo: mission.undoDraftVertex,
+                  onCancel: mission.cancelDraw,
+                  onCommit: mission.commitDraw,
+                ),
+              ),
             Positioned(
               left: 0,
               right: 0,
@@ -1366,6 +1410,40 @@ class _ProgressRingPainter extends CustomPainter {
   }
 }
 
+class _SatelliteToggle extends StatelessWidget {
+  const _SatelliteToggle({
+    required this.on,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final bool on;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = on && enabled;
+    return Material(
+      color: active ? const Color(0xFF167A4A) : Colors.black.withValues(alpha: 0.55),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: enabled ? onTap : null,
+        child: SizedBox(
+          width: 46,
+          height: 46,
+          child: Icon(
+            on ? Icons.satellite_alt : Icons.satellite_alt_outlined,
+            color: enabled ? Colors.white : Colors.white38,
+            size: 24,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MapActionRail extends StatelessWidget {
   const _MapActionRail({
     required this.onAdd,
@@ -1409,6 +1487,91 @@ class _MapActionRail extends StatelessWidget {
           onTap: onManual,
         ),
       ],
+    );
+  }
+}
+
+class _DrawControlBar extends StatelessWidget {
+  const _DrawControlBar({
+    required this.count,
+    required this.onUndo,
+    required this.onCancel,
+    required this.onCommit,
+  });
+
+  final int count;
+  final VoidCallback onUndo;
+  final VoidCallback onCancel;
+  final VoidCallback onCommit;
+
+  @override
+  Widget build(BuildContext context) {
+    final canSave = count >= 3;
+    final compact = TextButton.styleFrom(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      minimumSize: Size.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    // Swallow taps on the bar (incl. rounded-corner gaps) so they don't drop
+    // a map vertex behind it.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapUp: (_) {},
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.edit_location_alt_outlined,
+                color: Color(0xFFE5852F),
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '點地圖加頂點 · $count 點',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: count > 0 ? onUndo : null,
+                style: compact.copyWith(
+                  foregroundColor: WidgetStateProperty.all(Colors.white70),
+                ),
+                child: const Text('復原'),
+              ),
+              TextButton(
+                onPressed: onCancel,
+                style: compact.copyWith(
+                  foregroundColor: WidgetStateProperty.all(
+                    const Color(0xFFB0BEC5),
+                  ),
+                ),
+                child: const Text('取消'),
+              ),
+              const SizedBox(width: 4),
+              FilledButton(
+                onPressed: canSave ? onCommit : null,
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('閉合儲存'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

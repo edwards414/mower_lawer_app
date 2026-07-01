@@ -354,6 +354,16 @@ class MissionMockProvider extends ChangeNotifier {
             _applyZoneSummaries(dto);
           }
           break;
+        case '/adapter/map_datum':
+          final dto = _decodeStringMessage(event.message);
+          if (dto is Map<String, dynamic>) {
+            final anchor = GeoAnchor.fromJson(dto);
+            if (anchor != null) {
+              mapGeoAnchor = anchor;
+              notifyListeners();
+            }
+          }
+          break;
         default:
           final dto = _decodeStringMessage(event.message);
           if (dto is Map<String, dynamic>) {
@@ -1618,6 +1628,96 @@ class MissionMockProvider extends ChangeNotifier {
     t = t.clamp(0.0, 1.0);
     final cx = a.x + t * dx, cy = a.y + t * dy;
     return math.sqrt((p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy));
+  }
+
+  // ── Draw a new object by tapping vertices on the map (P2) ───────────────────
+  bool drawMode = false;
+  String drawKind = 'risk';
+  List<MapPoint> draftPolygon = const [];
+
+  void startDrawRisk() {
+    drawMode = true;
+    drawKind = 'risk';
+    draftPolygon = const [];
+    clearObjectSelection();
+    _addLog('INFO', '開始繪製危險區：點地圖加頂點,至少 3 點後閉合儲存');
+    notifyListeners();
+  }
+
+  void addDraftVertex(MapPoint p) {
+    if (!drawMode) {
+      return;
+    }
+    draftPolygon = [...draftPolygon, p];
+    notifyListeners();
+  }
+
+  void undoDraftVertex() {
+    if (!drawMode || draftPolygon.isEmpty) {
+      return;
+    }
+    draftPolygon = draftPolygon.sublist(0, draftPolygon.length - 1);
+    notifyListeners();
+  }
+
+  void cancelDraw() {
+    if (!drawMode) {
+      return;
+    }
+    drawMode = false;
+    draftPolygon = const [];
+    _addLog('WARN', '取消繪製');
+    notifyListeners();
+  }
+
+  Future<void> commitDraw() async {
+    if (!drawMode) {
+      return;
+    }
+    final pts = List<MapPoint>.of(draftPolygon);
+    if (pts.length < 3) {
+      _addLog('WARN', '危險區至少需要 3 個點');
+      return;
+    }
+    final kind = drawKind;
+    drawMode = false;
+    draftPolygon = const [];
+    notifyListeners();
+
+    if (rosConnected) {
+      _addLog('INFO', '新增 $kind（${pts.length} 點）');
+      final r = await _rosbridge.callService(
+        '/edit_zone',
+        args: {
+          'op': 'add',
+          'kind': kind,
+          'id': 0,
+          'points': pts.map((p) => {'x': p.x, 'y': p.y, 'z': 0.0}).toList(),
+        },
+      );
+      if (!r.success) {
+        _addLog('ERROR', r.message.isEmpty ? '新增失敗' : r.message);
+        // Restore the draft so the user can retry instead of losing the work.
+        draftPolygon = pts;
+        drawMode = true;
+        notifyListeners();
+        return;
+      }
+      _addLog('SUCCESS', r.message.isEmpty ? '已新增 $kind' : r.message);
+      await _replanAfterEdit();
+      return;
+    }
+    _addRiskLocally(pts);
+    _addLog('SUCCESS', '已新增 $kind（mock）');
+    notifyListeners();
+  }
+
+  void _addRiskLocally(List<MapPoint> pts) {
+    final id = riskZones.fold<int>(0, (m, z) => z.id > m ? z.id : m) + 1;
+    riskZones = [
+      ...riskZones,
+      MissionZone(id: id, name: 'Risk $id', points: pts),
+    ];
   }
 
   void startExecution() {

@@ -80,6 +80,16 @@ class AddObjectSheet extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 10),
+            _AddObjectCard(
+              icon: Icons.edit_location_alt_outlined,
+              label: '地圖手繪危險區（點頂點）',
+              color: const Color(0xFFE5852F),
+              onTap: () {
+                Navigator.of(context).pop();
+                mission.startDrawRisk();
+              },
+            ),
           ],
         ),
       ),

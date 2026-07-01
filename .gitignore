@@ -4,6 +4,9 @@
 *.pyc
 *.swp
 .DS_Store
+
+# Secrets (Mapbox token etc.) — loaded via --dart-define-from-file=.env
+.env
 .atom/
 .build/
 .buildlog/
