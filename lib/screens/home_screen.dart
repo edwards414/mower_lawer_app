@@ -1093,8 +1093,34 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
   final _canvasKey = GlobalKey<MissionMapCanvasState>();
   Offset? _popupOffset;
   bool _panelCollapsed = false;
+  int? _dragVertexIndex;
+
+  /// Index of the edit-polygon vertex nearest to a screen point, within a
+  /// grab radius; null if none.
+  int? _vertexAt(Offset local, {double radius = 30.0}) {
+    final proj = _canvasKey.currentState?.lastProjection;
+    if (proj == null) return null;
+    final pts = context.read<MissionMockProvider>().editPolygon;
+    int? nearest;
+    var best = radius;
+    for (var i = 0; i < pts.length; i++) {
+      final d = (proj.project(pts[i]) - local).distance;
+      if (d < best) {
+        best = d;
+        nearest = i;
+      }
+    }
+    return nearest;
+  }
 
   void _onLongPress(LongPressStartDetails details) {
+    final mission = context.read<MissionMockProvider>();
+    // In vertex-edit mode, a long-press on a vertex deletes it.
+    if (mission.editVertexMode) {
+      final vi = _vertexAt(details.localPosition);
+      if (vi != null) mission.deleteVertex(vi);
+      return;
+    }
     final positions = _canvasKey.currentState?.robotScreenPositions ?? {};
     const threshold = 44.0;
     int? nearest;
@@ -1148,7 +1174,10 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
         : math.min(size.height * 0.43, 370.0);
 
     final collapsedH = 48.0 + media.padding.bottom;
-    final effectivePanelH = _panelCollapsed ? collapsedH : panelHeight;
+    // Collapse the panel during draw / vertex-edit so more map is reachable.
+    final collapsed =
+        _panelCollapsed || mission.drawMode || mission.editVertexMode;
+    final effectivePanelH = collapsed ? collapsedH : panelHeight;
 
     final selectedRobot = fleet.selectedRobot;
     final popupOrigin = (_popupOffset != null && selectedRobot != null)
@@ -1158,6 +1187,31 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     return Scaffold(
       body: GestureDetector(
         onLongPressStart: _onLongPress,
+        // Pan handlers exist ONLY in vertex-edit mode; otherwise they are null
+        // so the PanGestureRecognizer doesn't compete with the panel's scroll.
+        onPanStart: mission.editVertexMode
+            ? (details) => setState(
+                () => _dragVertexIndex = _vertexAt(details.localPosition),
+              )
+            : null,
+        onPanUpdate: mission.editVertexMode
+            ? (details) {
+                if (_dragVertexIndex == null) return;
+                final proj = _canvasKey.currentState?.lastProjection;
+                if (proj == null) return;
+                mission.moveVertex(
+                  _dragVertexIndex!,
+                  proj.unproject(details.localPosition),
+                );
+              }
+            : null,
+        onPanEnd: mission.editVertexMode
+            ? (_) {
+                if (_dragVertexIndex != null) {
+                  setState(() => _dragVertexIndex = null);
+                }
+              }
+            : null,
         onTapUp: (details) {
           // Drawing takes precedence over robot-popup dismissal / selection,
           // so the first tap after entering draw mode drops a vertex.
@@ -1169,6 +1223,11 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
             if (proj != null) {
               mission.addDraftVertex(proj.unproject(details.localPosition));
             }
+            return;
+          }
+          // In vertex-edit a tap must not re-run selection; only dismiss a popup.
+          if (mission.editVertexMode) {
+            if (fleet.selectedRobotId != null) _dismissPopup();
             return;
           }
           if (fleet.selectedRobotId != null) {
@@ -1203,7 +1262,8 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
               child:
                   (mission.satelliteBaseMap &&
                       mission.mapGeoAnchor != null &&
-                      !mission.drawMode)
+                      !mission.drawMode &&
+                      !mission.editVertexMode)
                   ? SatelliteMapView(
                       mission: mission,
                       anchor: mission.mapGeoAnchor!,
@@ -1255,6 +1315,17 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                   onCommit: mission.commitDraw,
                 ),
               ),
+            if (mission.editVertexMode)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: effectivePanelH + 12,
+                child: _VertexEditBar(
+                  count: mission.editPolygon.length,
+                  onCancel: mission.cancelVertexEdit,
+                  onCommit: mission.commitVertexEdit,
+                ),
+              ),
             Positioned(
               left: 0,
               right: 0,
@@ -1264,7 +1335,7 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                 curve: Curves.easeInOut,
                 height: effectivePanelH,
                 child: _MissionBottomPanel(
-                  isCollapsed: _panelCollapsed,
+                  isCollapsed: collapsed,
                   onToggle: () =>
                       setState(() => _panelCollapsed = !_panelCollapsed),
                 ),
@@ -1567,6 +1638,71 @@ class _DrawControlBar extends StatelessWidget {
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 child: const Text('閉合儲存'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VertexEditBar extends StatelessWidget {
+  const _VertexEditBar({
+    required this.count,
+    required this.onCancel,
+    required this.onCommit,
+  });
+
+  final int count;
+  final VoidCallback onCancel;
+  final VoidCallback onCommit;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapUp: (_) {},
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              const Icon(Icons.open_with, color: Color(0xFF1384E8), size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '拖曳頂點 · 長按刪除 · $count 點',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: onCancel,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  foregroundColor: const Color(0xFFB0BEC5),
+                ),
+                child: const Text('取消'),
+              ),
+              const SizedBox(width: 4),
+              FilledButton(
+                onPressed: onCommit,
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('完成儲存'),
               ),
             ],
           ),

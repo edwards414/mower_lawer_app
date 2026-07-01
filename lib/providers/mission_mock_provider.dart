@@ -1720,6 +1720,153 @@ class MissionMockProvider extends ChangeNotifier {
     ];
   }
 
+  // ── Vertex editing of an existing object (P3) ───────────────────────────────
+  bool editVertexMode = false;
+  String editKind = 'zone';
+  int editId = 0;
+  List<MapPoint> editPolygon = const [];
+
+  void startVertexEdit(String kind, int id) {
+    final pts = _objectPoints(kind, id);
+    if (pts == null || pts.isEmpty) {
+      return;
+    }
+    editVertexMode = true;
+    editKind = kind;
+    editId = id;
+    editPolygon = List<MapPoint>.of(pts);
+    selectObject(kind, id);
+    drawMode = false;
+    _addLog('INFO', '編輯 $kind #$id 頂點：拖曳移動,長按刪除,完成儲存');
+    notifyListeners();
+  }
+
+  List<MapPoint>? _objectPoints(String kind, int id) {
+    switch (kind) {
+      case 'zone':
+        final m = zones.where((e) => e.id == id);
+        return m.isEmpty ? null : m.first.points;
+      case 'risk':
+        final m = riskZones.where((e) => e.id == id);
+        return m.isEmpty ? null : m.first.points;
+      case 'channel':
+        final m = channels.where((e) => e.id == id);
+        return m.isEmpty ? null : m.first.points;
+    }
+    return null;
+  }
+
+  void moveVertex(int index, MapPoint world) {
+    if (!editVertexMode || index < 0 || index >= editPolygon.length) {
+      return;
+    }
+    final next = List<MapPoint>.of(editPolygon);
+    next[index] = world;
+    editPolygon = next;
+    notifyListeners();
+  }
+
+  void deleteVertex(int index) {
+    if (!editVertexMode || index < 0 || index >= editPolygon.length) {
+      return;
+    }
+    final minPts = editKind == 'channel' ? 2 : 3;
+    if (editPolygon.length <= minPts) {
+      _addLog('WARN', '至少需要 $minPts 個頂點');
+      return;
+    }
+    editPolygon = List<MapPoint>.of(editPolygon)..removeAt(index);
+    notifyListeners();
+  }
+
+  void cancelVertexEdit() {
+    if (!editVertexMode) {
+      return;
+    }
+    editVertexMode = false;
+    editPolygon = const [];
+    _addLog('WARN', '取消編輯');
+    notifyListeners();
+  }
+
+  Future<void> commitVertexEdit() async {
+    if (!editVertexMode) {
+      return;
+    }
+    final pts = List<MapPoint>.of(editPolygon);
+    final kind = editKind;
+    final id = editId;
+    final minPts = kind == 'channel' ? 2 : 3;
+    if (pts.length < minPts) {
+      _addLog('WARN', '至少需要 $minPts 個頂點');
+      return;
+    }
+    editVertexMode = false;
+    editPolygon = const [];
+    notifyListeners();
+
+    if (rosConnected) {
+      _addLog('INFO', '更新 $kind #$id（${pts.length} 點）');
+      final r = await _rosbridge.callService(
+        '/edit_zone',
+        args: {
+          'op': 'update',
+          'kind': kind,
+          'id': id,
+          'points': pts.map((p) => {'x': p.x, 'y': p.y, 'z': 0.0}).toList(),
+        },
+      );
+      if (!r.success) {
+        _addLog('ERROR', r.message.isEmpty ? '更新失敗' : r.message);
+        // Restore for retry — but only if the user hasn't started another
+        // edit/draw during the async gap (don't clobber the new one).
+        if (!editVertexMode && !drawMode) {
+          editVertexMode = true;
+          editKind = kind;
+          editId = id;
+          editPolygon = pts;
+        }
+        notifyListeners();
+        return;
+      }
+      _addLog('SUCCESS', r.message.isEmpty ? '已更新 $kind #$id' : r.message);
+      // Keep the edited shape visible during the replan (same shape the
+      // backend republishes) instead of snapping back to the old points.
+      _updateObjectLocally(kind, id, pts);
+      await _replanAfterEdit();
+      return;
+    }
+    _updateObjectLocally(kind, id, pts);
+    _addLog('SUCCESS', '已更新 $kind #$id（mock）');
+    notifyListeners();
+  }
+
+  void _updateObjectLocally(String kind, int id, List<MapPoint> pts) {
+    switch (kind) {
+      case 'zone':
+        zones = zones
+            .map((z) => z.id == id
+                ? MissionZone(
+                    id: z.id,
+                    name: z.name,
+                    points: pts,
+                    hasCoveragePath: z.hasCoveragePath,
+                  )
+                : z)
+            .toList();
+      case 'risk':
+        riskZones = riskZones
+            .map((z) =>
+                z.id == id ? MissionZone(id: z.id, name: z.name, points: pts) : z)
+            .toList();
+      case 'channel':
+        channels = channels
+            .map((c) =>
+                c.id == id ? ChannelPath(id: c.id, name: c.name, points: pts) : c)
+            .toList();
+    }
+  }
+
   void startExecution() {
     if (rosConnected) {
       unawaited(_startRosExecution());
