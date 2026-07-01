@@ -16,9 +16,9 @@ import '../widgets/manual_control_overlay.dart';
 import '../widgets/map_objects_sheet.dart';
 import '../widgets/mission_map_canvas.dart';
 import '../widgets/mission_mode_bar.dart';
+import '../widgets/satellite_map_view.dart';
 import '../widgets/operation_log_sheet.dart';
 import '../widgets/planning_control_sheet.dart';
-import '../widgets/record_control_sheet.dart';
 import '../widgets/robot_info_popup.dart';
 import '../widgets/top_status_pill.dart';
 import 'self_check_screen.dart';
@@ -90,6 +90,11 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
 
   @override
   Widget build(BuildContext context) {
+    // Manual-control tab goes full-screen in landscape: hide the bottom nav
+    // (the in-page ✕ button still exits, so the user is never trapped).
+    final hideNav =
+        MediaQuery.of(context).orientation == Orientation.landscape &&
+        _selectedIndex == 2;
     return Scaffold(
       backgroundColor: const Color(0xFFF6F7F8),
       body: IndexedStack(
@@ -107,40 +112,42 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
           const _MoreTab(),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        height: 70,
-        selectedIndex: _selectedIndex,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        indicatorColor: const Color(0xFFE3F5EA),
-        onDestinationSelected: (index) {
-          if (_selectedIndex == 2 && index != 2) {
-            context.read<MissionMockProvider>().stopManualControl();
-          }
-          setState(() => _selectedIndex = index);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            label: '首頁',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.map_outlined),
-            label: '地圖',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.sports_esports_outlined),
-            label: '手動控制',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            label: '排程',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.more_horiz_outlined),
-            label: '更多',
-          ),
-        ],
-      ),
+      bottomNavigationBar: hideNav
+          ? null
+          : NavigationBar(
+              height: 70,
+              selectedIndex: _selectedIndex,
+              labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+              indicatorColor: const Color(0xFFE3F5EA),
+              onDestinationSelected: (index) {
+                if (_selectedIndex == 2 && index != 2) {
+                  context.read<MissionMockProvider>().stopManualControl();
+                }
+                setState(() => _selectedIndex = index);
+              },
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.home_outlined),
+                  label: '首頁',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.map_outlined),
+                  label: '地圖',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.sports_esports_outlined),
+                  label: '手動控制',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.calendar_month_outlined),
+                  label: '排程',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.more_horiz_outlined),
+                  label: '更多',
+                ),
+              ],
+            ),
     );
   }
 }
@@ -1088,8 +1095,7 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
   bool _panelCollapsed = false;
 
   void _onLongPress(LongPressStartDetails details) {
-    final positions =
-        _canvasKey.currentState?.robotScreenPositions ?? {};
+    final positions = _canvasKey.currentState?.robotScreenPositions ?? {};
     const threshold = 44.0;
     int? nearest;
     double nearestDist = double.infinity;
@@ -1114,10 +1120,16 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
   Offset _clampedPopupOrigin(Offset robotPos, Size screenSize) {
     const popupW = 220.0;
     const popupH = 148.0;
-    final left = (robotPos.dx - popupW / 2).clamp(8.0, screenSize.width - popupW - 8);
+    final left = (robotPos.dx - popupW / 2).clamp(
+      8.0,
+      screenSize.width - popupW - 8,
+    );
     final double top;
     if (robotPos.dy > screenSize.height * 0.55) {
-      top = (robotPos.dy - popupH - 32).clamp(8.0, screenSize.height - popupH - 8);
+      top = (robotPos.dy - popupH - 32).clamp(
+        8.0,
+        screenSize.height - popupH - 8,
+      );
     } else {
       top = (robotPos.dy + 32).clamp(8.0, screenSize.height - popupH - 8);
     }
@@ -1146,25 +1158,78 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     return Scaffold(
       body: GestureDetector(
         onLongPressStart: _onLongPress,
-        onTap: () {
-          if (fleet.selectedRobotId != null) _dismissPopup();
+        onTapUp: (details) {
+          // Drawing takes precedence over robot-popup dismissal / selection,
+          // so the first tap after entering draw mode drops a vertex.
+          if (mission.drawMode) {
+            if (details.localPosition.dy > size.height - effectivePanelH) {
+              return;
+            }
+            final proj = _canvasKey.currentState?.lastProjection;
+            if (proj != null) {
+              mission.addDraftVertex(proj.unproject(details.localPosition));
+            }
+            return;
+          }
+          if (fleet.selectedRobotId != null) {
+            _dismissPopup();
+            return;
+          }
+          // Ignore taps that land on the bottom panel.
+          if (details.localPosition.dy > size.height - effectivePanelH) {
+            return;
+          }
+          final proj = _canvasKey.currentState?.lastProjection;
+          if (proj == null) return;
+          final world = proj.unproject(details.localPosition);
+          final wRight = proj.unproject(
+            details.localPosition + const Offset(22, 0),
+          );
+          final tol = math
+              .sqrt(
+                math.pow(wRight.x - world.x, 2) +
+                    math.pow(wRight.y - world.y, 2),
+              )
+              .toDouble();
+          if (!mission.selectObjectAt(world, channelTol: tol)) {
+            mission.clearObjectSelection();
+          }
         },
         child: Stack(
           children: [
             Positioned.fill(
-              child: MissionMapCanvas(
-                key: _canvasKey,
-                mission: mission,
-                robots: fleet.robots,
-                selectedRobotId: fleet.selectedRobotId,
-                bottomInset: effectivePanelH,
-              ),
+              // While drawing, force the vector canvas (it owns the projection
+              // that tap-to-vertex needs); satellite has no projection yet.
+              child:
+                  (mission.satelliteBaseMap &&
+                      mission.mapGeoAnchor != null &&
+                      !mission.drawMode)
+                  ? SatelliteMapView(
+                      mission: mission,
+                      anchor: mission.mapGeoAnchor!,
+                    )
+                  : MissionMapCanvas(
+                      key: _canvasKey,
+                      mission: mission,
+                      robots: fleet.robots,
+                      selectedRobotId: fleet.selectedRobotId,
+                      bottomInset: effectivePanelH,
+                    ),
             ),
             Positioned(
               top: media.padding.top + 10,
               left: 12,
-              right: 76,
-              child: const TopStatusPill(),
+              right: 12,
+              child: const Center(child: TopStatusPill()),
+            ),
+            Positioned(
+              top: media.padding.top + 78,
+              left: 12,
+              child: _SatelliteToggle(
+                on: mission.satelliteBaseMap,
+                enabled: mission.mapGeoAnchor != null,
+                onTap: mission.toggleSatelliteBaseMap,
+              ),
             ),
             Positioned(
               top: media.padding.top + 78,
@@ -1178,6 +1243,18 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                 onManual: widget.onManual,
               ),
             ),
+            if (mission.drawMode)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: effectivePanelH + 12,
+                child: _DrawControlBar(
+                  count: mission.draftPolygon.length,
+                  onUndo: mission.undoDraftVertex,
+                  onCancel: mission.cancelDraw,
+                  onCommit: mission.commitDraw,
+                ),
+              ),
             Positioned(
               left: 0,
               right: 0,
@@ -1333,6 +1410,40 @@ class _ProgressRingPainter extends CustomPainter {
   }
 }
 
+class _SatelliteToggle extends StatelessWidget {
+  const _SatelliteToggle({
+    required this.on,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final bool on;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = on && enabled;
+    return Material(
+      color: active ? const Color(0xFF167A4A) : Colors.black.withValues(alpha: 0.55),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: enabled ? onTap : null,
+        child: SizedBox(
+          width: 46,
+          height: 46,
+          child: Icon(
+            on ? Icons.satellite_alt : Icons.satellite_alt_outlined,
+            color: enabled ? Colors.white : Colors.white38,
+            size: 24,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MapActionRail extends StatelessWidget {
   const _MapActionRail({
     required this.onAdd,
@@ -1376,6 +1487,91 @@ class _MapActionRail extends StatelessWidget {
           onTap: onManual,
         ),
       ],
+    );
+  }
+}
+
+class _DrawControlBar extends StatelessWidget {
+  const _DrawControlBar({
+    required this.count,
+    required this.onUndo,
+    required this.onCancel,
+    required this.onCommit,
+  });
+
+  final int count;
+  final VoidCallback onUndo;
+  final VoidCallback onCancel;
+  final VoidCallback onCommit;
+
+  @override
+  Widget build(BuildContext context) {
+    final canSave = count >= 3;
+    final compact = TextButton.styleFrom(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      minimumSize: Size.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    // Swallow taps on the bar (incl. rounded-corner gaps) so they don't drop
+    // a map vertex behind it.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapUp: (_) {},
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.edit_location_alt_outlined,
+                color: Color(0xFFE5852F),
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '點地圖加頂點 · $count 點',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: count > 0 ? onUndo : null,
+                style: compact.copyWith(
+                  foregroundColor: WidgetStateProperty.all(Colors.white70),
+                ),
+                child: const Text('復原'),
+              ),
+              TextButton(
+                onPressed: onCancel,
+                style: compact.copyWith(
+                  foregroundColor: WidgetStateProperty.all(
+                    const Color(0xFFB0BEC5),
+                  ),
+                ),
+                child: const Text('取消'),
+              ),
+              const SizedBox(width: 4),
+              FilledButton(
+                onPressed: canSave ? onCommit : null,
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('閉合儲存'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1514,8 +1710,6 @@ class _ModePanel extends StatelessWidget {
     switch (mode) {
       case MissionMode.objects:
         return const MapObjectsSheet();
-      case MissionMode.record:
-        return const RecordControlSheet();
       case MissionMode.plan:
         return const PlanningControlSheet();
       case MissionMode.run:

@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/geo_anchor.dart';
 import '../models/image_mission_draft.dart';
 import '../models/mission_mock.dart';
 import '../services/image_mission_processor.dart';
@@ -41,7 +42,18 @@ class MissionMockProvider extends ChangeNotifier {
 
   MissionMode selectedMode = MissionMode.objects;
   RecordObjectType? recordingType;
+  // How the active recording was started: true = real ROS (*_start sent),
+  // false = mock fallback. Latched at start so stopRecording matches it even
+  // if the connection state changes mid-recording.
+  bool _recordingViaRos = false;
   CoveragePatternKind coveragePattern = CoveragePatternKind.zigzag;
+  // True once a custom image mission has been imported into the backend; used
+  // to restore full-freespace coverage when switching back to zigzag/spiral.
+  bool _imageMissionActive = false;
+  // Satellite base-map toggle + the geo-anchor (from /adapter/map_datum) used
+  // to place the local map-frame overlays on real-world satellite imagery.
+  bool satelliteBaseMap = false;
+  GeoAnchor? mapGeoAnchor;
   NavMockStatus navStatus = NavMockStatus.idle;
   MissionLayerVisibility layers = const MissionLayerVisibility();
 
@@ -52,6 +64,10 @@ class MissionMockProvider extends ChangeNotifier {
   int selectedZoneId = 1;
   int currentSegment = 3;
   int recordPointCount = 0;
+  // Live breadcrumb of the robot's own pose captured while recording, used to
+  // draw the in-progress shape on the map. The backend (path_record_node) does
+  // the authoritative odom-sampled recording; this is just the visual trail.
+  List<MapPoint> recordTrail = const [];
   bool freeSpaceReady = true;
   bool riskMapReady = true;
   bool channelMapReady = true;
@@ -181,6 +197,12 @@ class MissionMockProvider extends ChangeNotifier {
         qos: const {'durability': 'transient_local', 'reliability': 'reliable'},
       );
     }
+    _rosbridge.subscribe(
+      '/adapter/map_datum',
+      type: 'std_msgs/msg/String',
+      throttleRateMs: 1000,
+      qos: const {'durability': 'transient_local', 'reliability': 'reliable'},
+    );
     _rosbridge.subscribe(
       '/adapter/robot_pose',
       type: 'geometry_msgs/msg/PoseStamped',
@@ -330,6 +352,16 @@ class MissionMockProvider extends ChangeNotifier {
           final dto = _decodeStringMessage(event.message);
           if (dto is List) {
             _applyZoneSummaries(dto);
+          }
+          break;
+        case '/adapter/map_datum':
+          final dto = _decodeStringMessage(event.message);
+          if (dto is Map<String, dynamic>) {
+            final anchor = GeoAnchor.fromJson(dto);
+            if (anchor != null) {
+              mapGeoAnchor = anchor;
+              notifyListeners();
+            }
           }
           break;
         default:
@@ -755,7 +787,26 @@ class MissionMockProvider extends ChangeNotifier {
     }
     _hasLiveRobotPose = true;
     liveDataActive = true;
+    if (recordingType != null && rosConnected) {
+      _appendRecordTrail(robotPosition);
+    }
     notifyListeners();
+  }
+
+  /// Append a pose to the live record trail, skipping points closer than ~5cm
+  /// to the previous one (mirrors the backend `min_dist` sampling).
+  void _appendRecordTrail(MapPoint p) {
+    if (recordTrail.isEmpty) {
+      recordTrail = [p];
+    } else {
+      final last = recordTrail.last;
+      final dx = p.x - last.x;
+      final dy = p.y - last.y;
+      if (dx * dx + dy * dy >= 0.0025) {
+        recordTrail = [...recordTrail, p];
+      }
+    }
+    recordPointCount = recordTrail.length;
   }
 
   final Map<int, bool> _zoneCoverageById = {};
@@ -849,15 +900,33 @@ class MissionMockProvider extends ChangeNotifier {
   }
 
   void startRecording(RecordObjectType type) {
+    if (recordingType != null) {
+      return;
+    }
+    // Live ROS path: drive the robot to trace the boundary; the backend
+    // (path_record_node) samples /odom while we accumulate a visual trail.
+    if (rosConnected) {
+      recordingType = type;
+      _recordingViaRos = true;
+      _recordingStartedAt = DateTime.now();
+      recordTrail = _hasLiveRobotPose ? [robotPosition] : const [];
+      recordPointCount = recordTrail.length;
+      unawaited(_callRecordService(_recordStartService(type)));
+      notifyListeners();
+      return;
+    }
+    // Mock fallback (no rosbridge): keep the old fake counter behaviour.
     if (!mockDataEnabled) {
       _addLog('WARN', 'Mock 記錄已關閉，等待 ROS 記錄流程串接');
       return;
     }
     recordingType = type;
-    selectedMode = MissionMode.record;
+    _recordingViaRos = false;
     recordPointCount = 8;
+    recordTrail = const [];
     _recordingStartedAt = DateTime.now();
     _addLog('INFO', '開始${_recordTypeName(type)}');
+    notifyListeners();
   }
 
   void stopRecording({required bool save}) {
@@ -865,15 +934,68 @@ class MissionMockProvider extends ChangeNotifier {
     if (type == null) {
       return;
     }
+    // Branch on how this recording was STARTED, not on the current connection
+    // state — a recording can outlive a connection change, and the backend
+    // *_start was only sent in the ROS branch.
+    if (_recordingViaRos) {
+      if (save) {
+        unawaited(_finishRecording(type));
+      } else {
+        unawaited(_callRecordService('/record_cancel'));
+      }
+      if (!rosConnected) {
+        _addLog('WARN', 'rosbridge 已斷線，記錄結束指令可能未送達後端');
+      }
+    }
     _addLog(
       save ? 'SUCCESS' : 'WARN',
       '${_recordTypeName(type)}${save ? '已儲存' : '已取消'}',
     );
     recordingType = null;
+    _recordingViaRos = false;
     recordPointCount = 0;
+    recordTrail = const [];
     _recordingStartedAt = null;
     selectedMode = MissionMode.objects;
     notifyListeners();
+  }
+
+  String _recordStartService(RecordObjectType type) {
+    switch (type) {
+      case RecordObjectType.zone:
+        return '/record_zone_start';
+      case RecordObjectType.risk:
+        return '/risk_zone_start';
+      case RecordObjectType.channel:
+        return '/channel_record_start';
+    }
+  }
+
+  String _recordEndService(RecordObjectType type) {
+    switch (type) {
+      case RecordObjectType.zone:
+        return '/record_zone_end';
+      case RecordObjectType.risk:
+        return '/risk_zone_end';
+      case RecordObjectType.channel:
+        return '/channel_record_end';
+    }
+  }
+
+  Future<void> _callRecordService(String service) async {
+    _addLog('INFO', '呼叫 $service');
+    final response = await _rosbridge.callService(service);
+    _addLog(
+      response.success ? 'SUCCESS' : 'ERROR',
+      response.message.isEmpty
+          ? '$service ${response.success ? '已送出' : '失敗'}'
+          : response.message,
+    );
+  }
+
+  Future<void> _finishRecording(RecordObjectType type) async {
+    await _callRecordService(_recordEndService(type));
+    await _callRecordService('/save_zone_list');
   }
 
   void updateLayer({
@@ -893,11 +1015,18 @@ class MissionMockProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void toggleSatelliteBaseMap() {
+    satelliteBaseMap = !satelliteBaseMap;
+    notifyListeners();
+  }
+
   void setCoveragePattern(CoveragePatternKind pattern) {
     coveragePattern = pattern;
     _coveragePatternEditedAt = DateTime.now();
     _addLog('INFO', 'Coverage pattern set to ${pattern.name}');
-    if (rosConnected) {
+    // 'custom' is the image-mission pipeline, not a boustrophedon sweep — the
+    // backend coverage_pattern param only understands zigzag/spiral.
+    if (rosConnected && pattern != CoveragePatternKind.custom) {
       unawaited(
         _setRosDoubleParam(
           '/boustrophedon_coverage/set_parameters',
@@ -906,6 +1035,21 @@ class MissionMockProvider extends ChangeNotifier {
           type: 4,
         ),
       );
+      // Leaving custom: discard the imported image, restore the full freespace
+      // coverage area, and drop the perimeter ring.
+      if (_imageMissionActive) {
+        _imageMissionActive = false;
+        unawaited(_rosbridge.callService('/restore_free_space_coverage'));
+        unawaited(
+          _setRosDoubleParam(
+            '/boustrophedon_coverage/set_parameters',
+            'boundary_ring',
+            false,
+            type: 1,
+          ),
+        );
+        _addLog('INFO', '已切回完整自由空間（捨棄圖片範圍）');
+      }
     }
   }
 
@@ -1217,6 +1361,15 @@ class MissionMockProvider extends ChangeNotifier {
           (response.values['zone_id'] as num?)?.toInt() ?? draft.zoneId;
       freeSpaceReady = true;
       riskMapReady = true;
+      _imageMissionActive = true;
+      // Custom missions add an outer-contour perimeter pass; set this BEFORE
+      // generating so coverage_node reads it (await to guarantee ordering).
+      await _setRosDoubleParam(
+        '/boustrophedon_coverage/set_parameters',
+        'boundary_ring',
+        true,
+        type: 1,
+      );
       _addLog('SUCCESS', '圖片任務已匯入，準備生成 Coverage Path');
       unawaited(_runRosPlanningStep('coverage'));
     } else {
@@ -1248,6 +1401,7 @@ class MissionMockProvider extends ChangeNotifier {
             'name': name,
             'value': {
               'type': type,
+              if (type == 1) 'bool_value': value,
               if (type == 3) 'double_value': value,
               if (type == 4) 'string_value': value,
             },
@@ -1323,6 +1477,247 @@ class MissionMockProvider extends ChangeNotifier {
   void selectZone(int zoneId) {
     selectedZoneId = zoneId;
     notifyListeners();
+  }
+
+  // ── Object selection / editing (物件頁: 選取 / 刪除 / …) ─────────────────────
+  // selectedObjectKind: 'zone' | 'risk' | 'channel'.
+  String? selectedObjectKind;
+  int? selectedObjectId;
+  bool replanning = false;
+
+  bool isObjectSelected(String kind, int id) =>
+      selectedObjectKind == kind && selectedObjectId == id;
+
+  void selectObject(String kind, int id) {
+    selectedObjectKind = kind;
+    selectedObjectId = id;
+    notifyListeners();
+  }
+
+  void clearObjectSelection() {
+    if (selectedObjectKind == null && selectedObjectId == null) {
+      return;
+    }
+    selectedObjectKind = null;
+    selectedObjectId = null;
+    notifyListeners();
+  }
+
+  /// Hit-test a world point: zones/risks by polygon, channels by proximity.
+  /// Selects the first hit and returns true; clears nothing on a miss.
+  bool selectObjectAt(MapPoint world, {double channelTol = 1.0}) {
+    for (final z in zones) {
+      if (_pointInPolygon(world, z.points)) {
+        selectObject('zone', z.id);
+        return true;
+      }
+    }
+    for (final r in riskZones) {
+      if (_pointInPolygon(world, r.points)) {
+        selectObject('risk', r.id);
+        return true;
+      }
+    }
+    for (final c in channels) {
+      if (_nearPolyline(world, c.points, channelTol)) {
+        selectObject('channel', c.id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Delete an object via the backend /edit_zone service, then re-plan.
+  Future<void> deleteObject(String kind, int id) async {
+    if (rosConnected) {
+      _addLog('INFO', '刪除 $kind #$id');
+      final r = await _rosbridge.callService(
+        '/edit_zone',
+        args: {'op': 'delete', 'kind': kind, 'id': id, 'points': <dynamic>[]},
+      );
+      if (!r.success) {
+        _addLog('ERROR', r.message.isEmpty ? '刪除失敗' : r.message);
+        return;
+      }
+      _addLog('SUCCESS', r.message.isEmpty ? '$kind #$id 已刪除' : r.message);
+      if (isObjectSelected(kind, id)) {
+        clearObjectSelection();
+      }
+      await _replanAfterEdit();
+      return;
+    }
+    // Offline/mock: remove locally so the demo still responds.
+    _removeObjectLocally(kind, id);
+    if (isObjectSelected(kind, id)) {
+      clearObjectSelection();
+    }
+    _addLog('SUCCESS', '$kind #$id 已刪除（mock）');
+    notifyListeners();
+  }
+
+  void _removeObjectLocally(String kind, int id) {
+    switch (kind) {
+      case 'zone':
+        zones = zones.where((z) => z.id != id).toList();
+        _ensureSelectedZone();
+      case 'risk':
+        riskZones = riskZones.where((z) => z.id != id).toList();
+      case 'channel':
+        channels = channels.where((c) => c.id != id).toList();
+    }
+  }
+
+  /// Re-run the planning chain after an object edit so coverage updates.
+  Future<void> _replanAfterEdit() async {
+    if (!rosConnected) {
+      return;
+    }
+    replanning = true;
+    notifyListeners();
+    const steps = [
+      '/load_zone_list',
+      '/create_free_space',
+      '/create_risk_map',
+      '/generate_coverage_path',
+    ];
+    for (final s in steps) {
+      final r = await _rosbridge.callService(s);
+      _addLog(
+        r.success ? 'INFO' : 'WARN',
+        '$s ${r.success ? '完成' : (r.message.isEmpty ? '失敗' : r.message)}',
+      );
+    }
+    replanning = false;
+    notifyListeners();
+  }
+
+  bool _pointInPolygon(MapPoint p, List<MapPoint> poly) {
+    if (poly.length < 3) {
+      return false;
+    }
+    var inside = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      final xi = poly[i].x, yi = poly[i].y;
+      final xj = poly[j].x, yj = poly[j].y;
+      final denom = (yj - yi) == 0 ? 1e-9 : (yj - yi);
+      final intersect = ((yi > p.y) != (yj > p.y)) &&
+          (p.x < (xj - xi) * (p.y - yi) / denom + xi);
+      if (intersect) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  bool _nearPolyline(MapPoint p, List<MapPoint> line, double tol) {
+    for (var i = 0; i < line.length - 1; i++) {
+      if (_distToSegment(p, line[i], line[i + 1]) <= tol) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  double _distToSegment(MapPoint p, MapPoint a, MapPoint b) {
+    final dx = b.x - a.x, dy = b.y - a.y;
+    final len2 = dx * dx + dy * dy;
+    if (len2 == 0) {
+      return math.sqrt((p.x - a.x) * (p.x - a.x) + (p.y - a.y) * (p.y - a.y));
+    }
+    var t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+    t = t.clamp(0.0, 1.0);
+    final cx = a.x + t * dx, cy = a.y + t * dy;
+    return math.sqrt((p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy));
+  }
+
+  // ── Draw a new object by tapping vertices on the map (P2) ───────────────────
+  bool drawMode = false;
+  String drawKind = 'risk';
+  List<MapPoint> draftPolygon = const [];
+
+  void startDrawRisk() {
+    drawMode = true;
+    drawKind = 'risk';
+    draftPolygon = const [];
+    clearObjectSelection();
+    _addLog('INFO', '開始繪製危險區：點地圖加頂點,至少 3 點後閉合儲存');
+    notifyListeners();
+  }
+
+  void addDraftVertex(MapPoint p) {
+    if (!drawMode) {
+      return;
+    }
+    draftPolygon = [...draftPolygon, p];
+    notifyListeners();
+  }
+
+  void undoDraftVertex() {
+    if (!drawMode || draftPolygon.isEmpty) {
+      return;
+    }
+    draftPolygon = draftPolygon.sublist(0, draftPolygon.length - 1);
+    notifyListeners();
+  }
+
+  void cancelDraw() {
+    if (!drawMode) {
+      return;
+    }
+    drawMode = false;
+    draftPolygon = const [];
+    _addLog('WARN', '取消繪製');
+    notifyListeners();
+  }
+
+  Future<void> commitDraw() async {
+    if (!drawMode) {
+      return;
+    }
+    final pts = List<MapPoint>.of(draftPolygon);
+    if (pts.length < 3) {
+      _addLog('WARN', '危險區至少需要 3 個點');
+      return;
+    }
+    final kind = drawKind;
+    drawMode = false;
+    draftPolygon = const [];
+    notifyListeners();
+
+    if (rosConnected) {
+      _addLog('INFO', '新增 $kind（${pts.length} 點）');
+      final r = await _rosbridge.callService(
+        '/edit_zone',
+        args: {
+          'op': 'add',
+          'kind': kind,
+          'id': 0,
+          'points': pts.map((p) => {'x': p.x, 'y': p.y, 'z': 0.0}).toList(),
+        },
+      );
+      if (!r.success) {
+        _addLog('ERROR', r.message.isEmpty ? '新增失敗' : r.message);
+        // Restore the draft so the user can retry instead of losing the work.
+        draftPolygon = pts;
+        drawMode = true;
+        notifyListeners();
+        return;
+      }
+      _addLog('SUCCESS', r.message.isEmpty ? '已新增 $kind' : r.message);
+      await _replanAfterEdit();
+      return;
+    }
+    _addRiskLocally(pts);
+    _addLog('SUCCESS', '已新增 $kind（mock）');
+    notifyListeners();
+  }
+
+  void _addRiskLocally(List<MapPoint> pts) {
+    final id = riskZones.fold<int>(0, (m, z) => z.id > m ? z.id : m) + 1;
+    riskZones = [
+      ...riskZones,
+      MissionZone(id: id, name: 'Risk $id', points: pts),
+    ];
   }
 
   void startExecution() {
@@ -1480,7 +1875,10 @@ class MissionMockProvider extends ChangeNotifier {
     if (mockDataEnabled && !_hasLiveRobotPose) {
       _advanceRobot();
     }
-    if (recordingType != null && mockDataEnabled) {
+    // Mock fake-counter only in the pure-mock fallback. During a real
+    // recording recordPointCount is owned solely by _appendRecordTrail, so
+    // gate this on !rosConnected to avoid the two writers fighting.
+    if (recordingType != null && mockDataEnabled && !rosConnected) {
       recordPointCount += 2;
     }
     if (navStatus == NavMockStatus.executing &&

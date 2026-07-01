@@ -26,35 +26,19 @@ class PlanningControlSheet extends StatelessWidget {
             _ReadyBadge(label: mission.coverageReady ? 'Ready' : 'Draft'),
           ],
         ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _PlanActionChip(
-              label: '自由空間',
-              ready: mission.freeSpaceReady,
-              onTap: () => mission.runPlanningStep('free_space'),
-            ),
-            _PlanActionChip(
-              label: '風險地圖',
-              ready: mission.riskMapReady,
-              onTap: () => mission.runPlanningStep('risk_map'),
-            ),
-            _PlanActionChip(
-              label: '通道地圖',
-              ready: mission.channelMapReady,
-              onTap: () => mission.runPlanningStep('channel_map'),
-            ),
-          ],
-        ),
         const SizedBox(height: 14),
         SizedBox(
           width: double.infinity,
           child: SegmentedButton<CoveragePatternKind>(
+            showSelectedIcon: false,
             selected: {mission.coveragePattern},
             onSelectionChanged: (selection) {
-              mission.setCoveragePattern(selection.first);
+              final pattern = selection.first;
+              mission.setCoveragePattern(pattern);
+              // 'Custom' opens the uploaded-image coverage flow.
+              if (pattern == CoveragePatternKind.custom) {
+                _openImageMission(context);
+              }
             },
             segments: const [
               ButtonSegment(
@@ -66,6 +50,11 @@ class PlanningControlSheet extends StatelessWidget {
                 value: CoveragePatternKind.spiral,
                 label: Text('Spiral'),
                 icon: Icon(Icons.blur_circular),
+              ),
+              ButtonSegment(
+                value: CoveragePatternKind.custom,
+                label: Text('Custom'),
+                icon: Icon(Icons.image_outlined),
               ),
             ],
           ),
@@ -82,24 +71,6 @@ class PlanningControlSheet extends StatelessWidget {
         const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: () => showModalBottomSheet<void>(
-              context: context,
-              useSafeArea: true,
-              isScrollControlled: true,
-              backgroundColor: Colors.white,
-              shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-              ),
-              builder: (_) => const ImageMissionSheet(),
-            ),
-            icon: const Icon(Icons.image_outlined),
-            label: const Text('圖片任務'),
-          ),
-        ),
-        const SizedBox(height: 8),
-        SizedBox(
-          width: double.infinity,
           child: FilledButton.icon(
             onPressed: () => mission.runPlanningStep('coverage'),
             icon: const Icon(Icons.route),
@@ -107,6 +78,19 @@ class PlanningControlSheet extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  void _openImageMission(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (_) => const ImageMissionSheet(),
     );
   }
 }
@@ -131,34 +115,6 @@ class _ReadyBadge extends StatelessWidget {
           fontWeight: FontWeight.w900,
           fontSize: 12,
         ),
-      ),
-    );
-  }
-}
-
-class _PlanActionChip extends StatelessWidget {
-  const _PlanActionChip({
-    required this.label,
-    required this.ready,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool ready;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ActionChip(
-      avatar: Icon(
-        ready ? Icons.check_circle : Icons.radio_button_unchecked,
-        color: ready ? const Color(0xFF167A4A) : const Color(0xFF78909C),
-      ),
-      label: Text(label),
-      onPressed: onTap,
-      backgroundColor: Colors.white,
-      side: BorderSide(
-        color: ready ? const Color(0x5535B861) : const Color(0xFFD8DDE0),
       ),
     );
   }

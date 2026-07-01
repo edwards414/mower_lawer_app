@@ -25,7 +25,7 @@ class ImageAlignmentPage extends StatefulWidget {
   State<ImageAlignmentPage> createState() => _ImageAlignmentPageState();
 }
 
-enum _DragMode { none, translate, rotate, scaleCorner }
+enum _DragMode { none, translate, rotate, scaleCorner, panView }
 
 class _ImageAlignmentPageState extends State<ImageAlignmentPage> {
   final GlobalKey<MissionMapCanvasState> _canvasKey = GlobalKey();
@@ -52,6 +52,8 @@ class _ImageAlignmentPageState extends State<ImageAlignmentPage> {
   // rotate-by-handle: rotate about the image centre
   MapPoint _rotCenterWorld = const MapPoint(0, 0);
   double _rotStartAngle = 0.0;
+  // pan-view: the framed world rect when the pan gesture started
+  Rect? _panStartBounds;
 
   @override
   void initState() {
@@ -175,14 +177,20 @@ class _ImageAlignmentPageState extends State<ImageAlignmentPage> {
 
   void _onPanStart(DragStartDetails details) {
     final proj = _canvasKey.currentState?.lastProjection;
-    final overlay = _overlay();
-    if (proj == null || overlay == null) {
+    if (proj == null) {
       _mode = _DragMode.none;
       return;
     }
     final local = details.localPosition;
-    _startPlacement = _placement;
     _startLocal = local;
+    final overlay = _overlay();
+    if (overlay == null) {
+      // Image still decoding: only the background view can be panned.
+      _mode = _DragMode.panView;
+      _panStartBounds = _worldBoundsOverride;
+      return;
+    }
+    _startPlacement = _placement;
 
     final corners = alignmentCornerScreens(overlay, proj.project);
     final rotateHandle = alignmentRotateHandleScreen(overlay, proj.project);
@@ -218,7 +226,9 @@ class _ImageAlignmentPageState extends State<ImageAlignmentPage> {
       _mode = _DragMode.translate;
       _startAnchor = _placement.mapAnchor;
     } else {
-      _mode = _DragMode.none;
+      // Empty map area → pan the whole view (mouse drag or touch).
+      _mode = _DragMode.panView;
+      _panStartBounds = _worldBoundsOverride;
     }
   }
 
@@ -276,6 +286,20 @@ class _ImageAlignmentPageState extends State<ImageAlignmentPage> {
           );
         });
         break;
+      case _DragMode.panView:
+        final base = _panStartBounds;
+        if (base == null) {
+          break;
+        }
+        final dScreen = local - _startLocal;
+        // Move the framed rect opposite to the finger so the map content
+        // follows the drag (screen px → world m via proj.scale).
+        final next = base.translate(
+          -dScreen.dx / proj.scale,
+          -dScreen.dy / proj.scale,
+        );
+        setState(() => _worldBoundsOverride = _clampViewBounds(next));
+        break;
       case _DragMode.none:
         break;
     }
@@ -283,6 +307,23 @@ class _ImageAlignmentPageState extends State<ImageAlignmentPage> {
 
   void _onPanEnd(DragEndDetails details) {
     _mode = _DragMode.none;
+    _panStartBounds = null;
+  }
+
+  /// Keep the framed view centred within the initial fit so panning can never
+  /// lose the map entirely off-screen.
+  Rect _clampViewBounds(Rect r) {
+    final base = _baseBounds;
+    if (base == null) {
+      return r;
+    }
+    final cx = r.center.dx.clamp(base.left, base.right).toDouble();
+    final cy = r.center.dy.clamp(base.top, base.bottom).toDouble();
+    return Rect.fromCenter(
+      center: Offset(cx, cy),
+      width: r.width,
+      height: r.height,
+    );
   }
 
   double _distWorld(MapPoint a, MapPoint b) {
@@ -342,6 +383,7 @@ class _ImageAlignmentPageState extends State<ImageAlignmentPage> {
             _HelpRow(Icons.crop_square, '拖四角方塊 = 等比例縮放'),
             _HelpRow(Icons.rotate_right, '拖頂端圓點 = 旋轉'),
             _HelpRow(Icons.place, '點一下圖片 = 設定起點（綠點）'),
+            _HelpRow(Icons.pan_tool, '拖空白處 = 平移地圖視角'),
             _HelpRow(Icons.zoom_in, '＋／－ 或滾輪 = 縮放整張地圖'),
             _HelpRow(Icons.restart_alt, '重設 = 還原圖片位置'),
             _HelpRow(Icons.check_circle, '確認對齊 = 完成，回到送出'),

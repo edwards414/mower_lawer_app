@@ -324,6 +324,9 @@ class _MissionMapPainter extends CustomPainter {
           stroke: const Color(0xFF2DA653),
           strokeWidth: 3,
         );
+        if (mission.isObjectSelected('zone', zone.id)) {
+          _drawSelectionHighlight(canvas, zone.points, project, closed: true);
+        }
         _drawLabel(
           canvas,
           zone.name,
@@ -343,6 +346,9 @@ class _MissionMapPainter extends CustomPainter {
           stroke: const Color(0xFFE04A4A),
           strokeWidth: 3,
         );
+        if (mission.isObjectSelected('risk', risk.id)) {
+          _drawSelectionHighlight(canvas, risk.points, project, closed: true);
+        }
       }
     }
 
@@ -355,6 +361,10 @@ class _MissionMapPainter extends CustomPainter {
           color: const Color(0xFF25AFC6),
           strokeWidth: 5,
         );
+        if (mission.isObjectSelected('channel', channel.id)) {
+          _drawSelectionHighlight(canvas, channel.points, project,
+              closed: false);
+        }
       }
     }
 
@@ -376,6 +386,10 @@ class _MissionMapPainter extends CustomPainter {
 
     if (mission.recordingType != null) {
       _drawRecordingTrace(canvas, project);
+    }
+
+    if (mission.drawMode && mission.draftPolygon.isNotEmpty) {
+      _drawDraft(canvas, project);
     }
 
     // Draw fleet robots; fall back to single robot if fleet is empty.
@@ -706,6 +720,92 @@ class _MissionMapPainter extends CustomPainter {
     );
   }
 
+  /// In-progress hand-drawn polygon (P2): growing line + vertex dots, with a
+  /// faint closing edge back to the start once it is a polygon.
+  void _drawDraft(
+    Canvas canvas,
+    Offset Function(MapPoint point) project,
+  ) {
+    final pts = mission.draftPolygon;
+    if (pts.isEmpty) return;
+    const c = Color(0xFFE55353);
+    if (pts.length >= 2) {
+      _drawPolyline(canvas, pts, project, color: c, strokeWidth: 4);
+    }
+    if (pts.length >= 3) {
+      final close = Path()
+        ..moveTo(project(pts.last).dx, project(pts.last).dy)
+        ..lineTo(project(pts.first).dx, project(pts.first).dy);
+      canvas.drawPath(
+        close,
+        Paint()
+          ..color = c.withValues(alpha: 0.45)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
+    for (final v in pts) {
+      final o = project(v);
+      canvas.drawCircle(o, 5, Paint()..color = Colors.white);
+      canvas.drawCircle(
+        o,
+        5,
+        Paint()
+          ..color = c
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
+    // Emphasise the start vertex.
+    canvas.drawCircle(
+      project(pts.first),
+      8,
+      Paint()
+        ..color = c
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
+    );
+  }
+
+  /// Bright outline + vertex dots over a selected object.
+  void _drawSelectionHighlight(
+    Canvas canvas,
+    List<MapPoint> points,
+    Offset Function(MapPoint point) project, {
+    required bool closed,
+  }) {
+    if (points.isEmpty) return;
+    const accent = Color(0xFF1384E8);
+    final path = Path()
+      ..moveTo(project(points.first).dx, project(points.first).dy);
+    for (final p in points.skip(1)) {
+      final o = project(p);
+      path.lineTo(o.dx, o.dy);
+    }
+    if (closed) path.close();
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeJoin = StrokeJoin.round
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 4,
+    );
+    for (final p in points) {
+      final o = project(p);
+      canvas.drawCircle(o, 5, Paint()..color = Colors.white);
+      canvas.drawCircle(
+        o,
+        5,
+        Paint()
+          ..color = accent
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
+  }
+
   void _drawPolyline(
     Canvas canvas,
     List<MapPoint> points,
@@ -829,20 +929,51 @@ class _MissionMapPainter extends CustomPainter {
     Canvas canvas,
     Offset Function(MapPoint point) project,
   ) {
-    final robot = mission.robotPosition;
-    final points = [
-      MapPoint(robot.x - 11, robot.y + 5),
-      MapPoint(robot.x - 7, robot.y - 3),
-      MapPoint(robot.x - 1, robot.y + 2),
-      robot,
-    ];
-    _drawPolyline(
-      canvas,
-      points,
-      project,
-      color: const Color(0xFF222222),
-      strokeWidth: 3,
+    final trail = mission.recordTrail;
+    if (trail.isEmpty) return;
+
+    final type = mission.recordingType;
+    final Color color;
+    switch (type) {
+      case RecordObjectType.zone:
+        color = const Color(0xFF35B861);
+      case RecordObjectType.risk:
+        color = const Color(0xFFE55353);
+      case RecordObjectType.channel:
+        color = const Color(0xFF25AFC6);
+      case null:
+        color = const Color(0xFF222222);
+    }
+    final isArea =
+        type == RecordObjectType.zone || type == RecordObjectType.risk;
+
+    if (isArea && trail.length >= 3) {
+      // Area types preview as a translucent closing polygon.
+      _drawPolygon(
+        canvas,
+        trail,
+        project,
+        fill: color.withValues(alpha: 0.16),
+        stroke: color,
+        strokeWidth: 4,
+      );
+    } else if (trail.length >= 2) {
+      _drawPolyline(canvas, trail, project, color: color, strokeWidth: 4);
+    }
+
+    // Start anchor.
+    final start = project(trail.first);
+    canvas.drawCircle(start, 6, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      start,
+      6,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
     );
+    // Live head at the current robot position.
+    canvas.drawCircle(project(trail.last), 4.5, Paint()..color = color);
   }
 
   // ─── Labels / scale ────────────────────────────────────────────────────────
