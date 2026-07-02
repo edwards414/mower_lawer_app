@@ -20,6 +20,7 @@ import '../widgets/satellite_map_view.dart';
 import '../widgets/operation_log_sheet.dart';
 import '../widgets/planning_control_sheet.dart';
 import '../widgets/robot_info_popup.dart';
+import '../widgets/site_library_sheet.dart';
 import '../widgets/top_status_pill.dart';
 import 'self_check_screen.dart';
 
@@ -1296,6 +1297,8 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
               right: 12,
               child: _MapActionRail(
                 onAdd: () => _showAppSheet(context, const AddObjectSheet()),
+                onSites: () =>
+                    _showAppSheet(context, const SiteLibrarySheet()),
                 onLayers: () =>
                     _showAppSheet(context, const _LayerToggleSheet()),
                 onSettings: () =>
@@ -1518,12 +1521,14 @@ class _SatelliteToggle extends StatelessWidget {
 class _MapActionRail extends StatelessWidget {
   const _MapActionRail({
     required this.onAdd,
+    required this.onSites,
     required this.onLayers,
     required this.onSettings,
     required this.onManual,
   });
 
   final VoidCallback onAdd;
+  final VoidCallback onSites;
   final VoidCallback onLayers;
   final VoidCallback onSettings;
   final VoidCallback onManual;
@@ -1538,6 +1543,12 @@ class _MapActionRail extends StatelessWidget {
           tooltip: '新增物件',
           color: const Color(0xFF1384E8),
           onTap: onAdd,
+        ),
+        const SizedBox(height: 10),
+        _RoundIconButton(
+          icon: Icons.collections_bookmark_outlined,
+          tooltip: '場地庫',
+          onTap: onSites,
         ),
         const SizedBox(height: 10),
         _RoundIconButton(

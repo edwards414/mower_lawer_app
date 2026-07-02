@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/geo_anchor.dart';
 import '../models/image_mission_draft.dart';
 import '../models/mission_mock.dart';
+import '../models/site_info.dart';
 import '../services/image_mission_processor.dart';
 import '../services/rosbridge_service.dart';
 
@@ -206,6 +207,12 @@ class MissionMockProvider extends ChangeNotifier {
       qos: const {'durability': 'transient_local', 'reliability': 'reliable'},
     );
     _rosbridge.subscribe(
+      '/site_list',
+      type: 'std_msgs/msg/String',
+      throttleRateMs: 200,
+      qos: const {'durability': 'transient_local', 'reliability': 'reliable'},
+    );
+    _rosbridge.subscribe(
       '/adapter/robot_pose',
       type: 'geometry_msgs/msg/PoseStamped',
       throttleRateMs: 100,
@@ -364,6 +371,12 @@ class MissionMockProvider extends ChangeNotifier {
               mapGeoAnchor = anchor;
               notifyListeners();
             }
+          }
+          break;
+        case '/site_list':
+          final dto = _decodeStringMessage(event.message);
+          if (dto is Map<String, dynamic>) {
+            _applySiteList(dto);
           }
           break;
         default:
@@ -1616,6 +1629,212 @@ class MissionMockProvider extends ChangeNotifier {
     }
     replanning = false;
     notifyListeners();
+  }
+
+  // ── 場地庫 (saved site library, backend /site_list + /site_op) ─────────────
+  List<SiteInfo> sites = const [];
+  String? activeSiteName;
+  bool siteOpBusy = false;
+
+  /// Last user-facing message from a site operation — backend `message` or
+  /// the mock equivalent, success AND failure. Drives the sheet's result
+  /// banner (and the SnackBars shown once the sheet closes).
+  String? siteOpMessage;
+
+  void _applySiteList(Map<String, dynamic> dto) {
+    final rawSites = dto['sites'];
+    sites = rawSites is List
+        ? rawSites
+              .whereType<Map>()
+              .map((s) => SiteInfo.fromJson(s.cast<String, dynamic>()))
+              .toList()
+        : const <SiteInfo>[];
+    activeSiteName = dto['active']?.toString();
+    notifyListeners();
+  }
+
+  /// Save the current planning (whole zone set) as a named site.
+  Future<String?> saveSiteAs(String name) =>
+      _withSiteBusy(() => _callSiteOp('save', name));
+
+  /// Load a saved site. The backend replaces its zone set and republishes the
+  /// marker topics; the app then regenerates the derived maps + coverage.
+  Future<String?> activateSite(String name) => _withSiteBusy(() async {
+    final error = await _callSiteOp('load', name);
+    if (error != null) {
+      return error;
+    }
+    await _replanAfterSiteLoad();
+    return null;
+  });
+
+  Future<String?> deleteSite(String name) =>
+      _withSiteBusy(() => _callSiteOp('delete', name));
+
+  Future<String?> renameSite(String oldName, String newName) =>
+      _withSiteBusy(() => _callSiteOp('rename', oldName, newName: newName));
+
+  /// Every site op runs inside this guard: [siteOpBusy] is set/cleared exactly
+  /// once per operation (spanning activateSite's whole load+replan chain) so
+  /// the sheet can disable all actions while any site op is in flight.
+  Future<String?> _withSiteBusy(Future<String?> Function() op) async {
+    siteOpBusy = true;
+    notifyListeners();
+    try {
+      return await op();
+    } finally {
+      siteOpBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<String?> _callSiteOp(
+    String op,
+    String name, {
+    String newName = '',
+  }) async {
+    if (!rosConnected) {
+      return _mockSiteOp(op, name, newName);
+    }
+    _addLog('INFO', '呼叫 /site_op $op「$name」');
+    final r = await _rosbridge.callService(
+      '/site_op',
+      args: {'op': op, 'name': name, 'new_name': newName},
+    );
+    final sitesJson = r.values['sites_json'];
+    if (sitesJson is String && sitesJson.isNotEmpty) {
+      try {
+        final dto = jsonDecode(sitesJson);
+        if (dto is Map<String, dynamic>) {
+          _applySiteList(dto);
+        }
+      } catch (error) {
+        _addLog('ERROR', 'sites_json 解析失敗: $error');
+      }
+    }
+    if (!r.success) {
+      return _siteOpFail(r.message.isEmpty ? '/site_op $op 失敗' : r.message);
+    }
+    siteOpMessage = r.message.isEmpty ? '/site_op $op 完成' : r.message;
+    _addLog('SUCCESS', siteOpMessage!);
+    notifyListeners();
+    return null;
+  }
+
+  /// Record a site-op failure in [siteOpMessage] (so the sheet banner always
+  /// reflects the last op) and return it as the error string.
+  String _siteOpFail(String message) {
+    siteOpMessage = message;
+    _addLog('ERROR', message);
+    notifyListeners();
+    return message;
+  }
+
+  /// Offline/mock: keep an in-memory site library so the demo still responds
+  /// (mirrors deleteObject's local fallback). Nothing is persisted.
+  String? _mockSiteOp(String op, String name, String newName) {
+    if (!mockDataEnabled) {
+      return _siteOpFail('請先連上 rosbridge');
+    }
+    switch (op) {
+      case 'save':
+        final now = DateTime.now();
+        final index = sites.indexWhere((s) => s.name == name);
+        final snapshot = SiteInfo(
+          name: name,
+          createdAt: index < 0 ? now : sites[index].createdAt,
+          updatedAt: now,
+          zoneCount: zones.length,
+          riskCount: riskZones.length,
+          channelCount: channels.length,
+          areaM2: zones.fold<double>(
+            0.0,
+            (sum, z) => sum + _polygonAreaM2(z.points),
+          ),
+        );
+        // Updating keeps the site's list position (backend keeps name order).
+        sites = index < 0
+            ? [...sites, snapshot]
+            : (List<SiteInfo>.of(sites)..[index] = snapshot);
+        activeSiteName = name;
+        siteOpMessage = '已儲存場地「$name」（mock）';
+      case 'load':
+        if (!sites.any((s) => s.name == name)) {
+          return _siteOpFail('找不到場地「$name」');
+        }
+        activeSiteName = name;
+        siteOpMessage = '已啟用場地「$name」（mock）';
+      case 'delete':
+        sites = sites.where((s) => s.name != name).toList();
+        if (activeSiteName == name) {
+          activeSiteName = null;
+        }
+        siteOpMessage = '已刪除場地「$name」（mock）';
+      case 'rename':
+        if (!sites.any((s) => s.name == name)) {
+          return _siteOpFail('找不到場地「$name」');
+        }
+        if (sites.any((s) => s.name == newName)) {
+          return _siteOpFail('場地「$newName」已存在');
+        }
+        sites = sites
+            .map(
+              (s) => s.name == name
+                  ? SiteInfo(
+                      name: newName,
+                      createdAt: s.createdAt,
+                      updatedAt: s.updatedAt,
+                      zoneCount: s.zoneCount,
+                      riskCount: s.riskCount,
+                      channelCount: s.channelCount,
+                      areaM2: s.areaM2,
+                      datumSource: s.datumSource,
+                    )
+                  : s,
+            )
+            .toList();
+        if (activeSiteName == name) {
+          activeSiteName = newName;
+        }
+        siteOpMessage = '已改名為「$newName」（mock）';
+      default:
+        return _siteOpFail('未知的操作 $op');
+    }
+    _addLog('SUCCESS', siteOpMessage!);
+    notifyListeners();
+    return null;
+  }
+
+  double _polygonAreaM2(List<MapPoint> points) {
+    if (points.length < 3) {
+      return 0.0;
+    }
+    var sum = 0.0;
+    for (var i = 0, j = points.length - 1; i < points.length; j = i++) {
+      sum += points[j].x * points[i].y - points[i].x * points[j].y;
+    }
+    return sum.abs() / 2.0;
+  }
+
+  /// Re-run the planning chain after a site load so the derived maps and
+  /// coverage match the loaded zone set. Same chain as [_replanAfterEdit]
+  /// WITHOUT the /load_zone_list step — the load already replaced the zones.
+  Future<void> _replanAfterSiteLoad() async {
+    if (!rosConnected) {
+      return;
+    }
+    const steps = [
+      '/create_free_space',
+      '/create_risk_map',
+      '/generate_coverage_path',
+    ];
+    for (final s in steps) {
+      final r = await _rosbridge.callService(s);
+      _addLog(
+        r.success ? 'INFO' : 'WARN',
+        '$s ${r.success ? '完成' : (r.message.isEmpty ? '失敗' : r.message)}',
+      );
+    }
   }
 
   bool _pointInPolygon(MapPoint p, List<MapPoint> poly) {
