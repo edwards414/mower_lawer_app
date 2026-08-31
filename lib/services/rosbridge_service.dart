@@ -4,7 +4,13 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'remote_access_config.dart';
+import 'websocket_connector.dart';
+
 enum RosbridgeConnectionState { disconnected, connecting, connected, retrying }
+
+typedef RosbridgeConnector =
+    WebSocketChannel Function(Uri uri, {Map<String, dynamic> headers});
 
 class RosbridgeTopicMessage {
   const RosbridgeTopicMessage({required this.topic, required this.message});
@@ -24,10 +30,11 @@ class RosbridgeServiceResponse {
   final bool result;
   final Map<String, dynamic> values;
 
-  bool get success {
-    final value = values['success'];
-    return value is bool ? value : result;
-  }
+  /// A domain-level ACK is valid only when both the rosbridge envelope and the
+  /// ROS service response explicitly report success. Falling back to
+  /// [result] when `values.success` is missing would turn a malformed response
+  /// into an accepted mower command.
+  bool get success => result && values['success'] == true;
 
   String get message => values['message']?.toString() ?? '';
 }
@@ -35,14 +42,23 @@ class RosbridgeServiceResponse {
 class RosbridgeService {
   static const _robotIpPreferenceKey = 'robot_ip';
   static const _rosbridgePort = 9090;
+  static const _useSavedRobotIp = bool.fromEnvironment(
+    'USE_SAVED_ROBOT_IP',
+    defaultValue: false,
+  );
   static const _defaultUrl = String.fromEnvironment(
     'ROSBRIDGE_URL',
-    defaultValue: 'ws://127.0.0.1:9090',
+    defaultValue: 'wss://control.fxrbindi.com',
   );
 
-  RosbridgeService({String url = _defaultUrl}) : _url = url;
+  RosbridgeService({
+    String url = _defaultUrl,
+    RosbridgeConnector connector = connectWebSocket,
+  }) : _url = url,
+       _connector = connector;
 
   String _url;
+  final RosbridgeConnector _connector;
   final Map<String, _RosbridgeSubscription> _subscriptions = {};
   final Map<String, String> _advertisements = {};
   final Map<String, Completer<RosbridgeServiceResponse>> _pendingCalls = {};
@@ -56,6 +72,7 @@ class RosbridgeService {
   Timer? _reconnectTimer;
   bool _disposed = false;
   bool _connected = false;
+  Completer<void>? _connectionReady;
   int _callSequence = 0;
 
   String get url => _url;
@@ -87,6 +104,11 @@ class RosbridgeService {
   }
 
   Future<void> loadSavedRobotIp() async {
+    // Production connects through the authenticated public relay. A saved LAN
+    // IP is used only by builds that explicitly opt into local development.
+    if (!_useSavedRobotIp) {
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     final savedIp = prefs.getString(_robotIpPreferenceKey);
     if (savedIp == null || validateRobotIp(savedIp) != null) {
@@ -124,7 +146,10 @@ class RosbridgeService {
     }
     _states.add(RosbridgeConnectionState.connecting);
     try {
-      final channel = WebSocketChannel.connect(Uri.parse(_url));
+      final channel = _connector(
+        Uri.parse(_url),
+        headers: RemoteAccessConfig.cloudflareAccessHeaders,
+      );
       _channel = channel;
       _socketSubscription = channel.stream.listen(
         _handleSocketData,
@@ -138,6 +163,10 @@ class RosbridgeService {
               return;
             }
             _connected = true;
+            final ready = _connectionReady;
+            if (ready != null && !ready.isCompleted) {
+              ready.complete();
+            }
             _states.add(RosbridgeConnectionState.connected);
             for (final subscription in _subscriptions.values) {
               _send(subscription.toMessage());
@@ -194,15 +223,36 @@ class RosbridgeService {
     String service, {
     Map<String, dynamic> args = const {},
     Duration timeout = const Duration(seconds: 12),
-  }) {
-    connect();
+  }) async {
+    final startedAt = DateTime.now();
+    if (!await _waitForConnection(timeout)) {
+      return RosbridgeServiceResponse(
+        service: service,
+        result: false,
+        values: const {
+          'success': false,
+          'message': 'rosbridge connection timeout',
+        },
+      );
+    }
+    final remaining = timeout - DateTime.now().difference(startedAt);
+    if (remaining <= Duration.zero) {
+      return RosbridgeServiceResponse(
+        service: service,
+        result: false,
+        values: const {
+          'success': false,
+          'message': 'rosbridge connection timeout',
+        },
+      );
+    }
     final id =
         'call_${DateTime.now().millisecondsSinceEpoch}_${_callSequence++}';
     final completer = Completer<RosbridgeServiceResponse>();
     _pendingCalls[id] = completer;
     _send({'op': 'call_service', 'id': id, 'service': service, 'args': args});
     return completer.future.timeout(
-      timeout,
+      remaining,
       onTimeout: () {
         _pendingCalls.remove(id);
         return RosbridgeServiceResponse(
@@ -215,6 +265,26 @@ class RosbridgeService {
         );
       },
     );
+  }
+
+  Future<bool> _waitForConnection(Duration timeout) async {
+    if (_disposed) {
+      return false;
+    }
+    if (_connected) {
+      return true;
+    }
+    final current = _connectionReady;
+    final ready = current == null || current.isCompleted
+        ? (_connectionReady = Completer<void>())
+        : current;
+    connect();
+    try {
+      await ready.future.timeout(timeout);
+      return !_disposed && _connected;
+    } on TimeoutException {
+      return false;
+    }
   }
 
   bool publish(
@@ -241,41 +311,49 @@ class RosbridgeService {
     if (raw is! String) {
       return;
     }
-    final decoded = jsonDecode(raw);
-    if (decoded is! Map) {
-      return;
-    }
-    final data = decoded.cast<String, dynamic>();
-    switch (data['op']) {
-      case 'publish':
-        final topic = data['topic']?.toString();
-        final message = data['msg'];
-        if (topic != null && message is Map) {
-          _messages.add(
-            RosbridgeTopicMessage(
-              topic: topic,
-              message: message.cast<String, dynamic>(),
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) {
+        return;
+      }
+      final data = decoded.cast<String, dynamic>();
+      switch (data['op']) {
+        case 'publish':
+          final topic = data['topic']?.toString();
+          final message = data['msg'];
+          if (topic != null && message is Map) {
+            _messages.add(
+              RosbridgeTopicMessage(
+                topic: topic,
+                message: message.cast<String, dynamic>(),
+              ),
+            );
+          }
+          break;
+        case 'service_response':
+          final id = data['id']?.toString();
+          final completer = id == null ? null : _pendingCalls.remove(id);
+          if (completer == null || completer.isCompleted) {
+            return;
+          }
+          final values = data['values'] is Map
+              ? (data['values'] as Map).cast<String, dynamic>()
+              : <String, dynamic>{};
+          completer.complete(
+            RosbridgeServiceResponse(
+              service: data['service']?.toString() ?? '',
+              result: data['result'] == true,
+              values: values,
             ),
           );
-        }
-        break;
-      case 'service_response':
-        final id = data['id']?.toString();
-        final completer = id == null ? null : _pendingCalls.remove(id);
-        if (completer == null || completer.isCompleted) {
-          return;
-        }
-        final values = data['values'] is Map
-            ? (data['values'] as Map).cast<String, dynamic>()
-            : <String, dynamic>{};
-        completer.complete(
-          RosbridgeServiceResponse(
-            service: data['service']?.toString() ?? '',
-            result: data['result'] == true,
-            values: values,
-          ),
-        );
-        break;
+          break;
+      }
+    } on FormatException {
+      // A malformed rosbridge frame must not terminate the socket listener.
+      return;
+    } on TypeError {
+      // Ignore structurally-invalid payloads and keep processing later frames.
+      return;
     }
   }
 
@@ -318,8 +396,24 @@ class RosbridgeService {
 
   void dispose() {
     _disposed = true;
+    final ready = _connectionReady;
+    if (ready != null && !ready.isCompleted) {
+      ready.complete();
+    }
     _reconnectTimer?.cancel();
     _closeSocket();
+    for (final entry in _pendingCalls.entries) {
+      if (!entry.value.isCompleted) {
+        entry.value.complete(
+          RosbridgeServiceResponse(
+            service: entry.key,
+            result: false,
+            values: const {'success': false, 'message': 'rosbridge disposed'},
+          ),
+        );
+      }
+    }
+    _pendingCalls.clear();
     _messages.close();
     _states.close();
   }

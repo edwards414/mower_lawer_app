@@ -25,7 +25,9 @@ class SatelliteMapView extends StatelessWidget {
   final MissionMockProvider mission;
   final GeoAnchor anchor;
 
-  /// Provided at run time via `--dart-define-from-file=.env` (MAPBOX_TOKEN).
+  /// Inject at build/run time with `--dart-define=MAPBOX_TOKEN=...` or a
+  /// gitignored `--dart-define-from-file`. Never keep a fallback token in the
+  /// source tree: even a Mapbox public token should be scoped and rotatable.
   static const String _mapboxToken = String.fromEnvironment('MAPBOX_TOKEN');
 
   LatLng _ll(MapPoint p) => anchor.worldToLatLng(p.x, p.y);
@@ -45,8 +47,10 @@ class SatelliteMapView extends StatelessWidget {
     final fs = mission.freeSpaceLayer;
     if (fs != null) {
       add(fs.originX, fs.originY);
-      add(fs.originX + fs.width * fs.resolution,
-          fs.originY + fs.height * fs.resolution);
+      add(
+        fs.originX + fs.width * fs.resolution,
+        fs.originY + fs.height * fs.resolution,
+      );
     }
     for (final z in mission.zones) {
       for (final p in z.points) {
@@ -58,10 +62,8 @@ class SatelliteMapView extends StatelessWidget {
     final cx = (minX! + maxX!) / 2;
     final cy = (minY! + maxY!) / 2;
     // Square half-extent: at least 10 m, plus a 20% + 2 m margin.
-    final half = math.max(
-              math.max((maxX! - minX!) / 2, (maxY! - minY!) / 2),
-              10.0,
-            ) *
+    final half =
+        math.max(math.max((maxX! - minX!) / 2, (maxY! - minY!) / 2), 10.0) *
             1.2 +
         2.0;
     return LatLngBounds.fromPoints([
@@ -83,9 +85,14 @@ class SatelliteMapView extends StatelessWidget {
     return RotatedOverlayImage(
       imageProvider: _UiImageProvider(layer.image),
       topLeftCorner: anchor.worldToLatLng(layer.originX, layer.originY),
-      bottomLeftCorner: anchor.worldToLatLng(layer.originX, layer.originY + worldH),
-      bottomRightCorner:
-          anchor.worldToLatLng(layer.originX + worldW, layer.originY + worldH),
+      bottomLeftCorner: anchor.worldToLatLng(
+        layer.originX,
+        layer.originY + worldH,
+      ),
+      bottomRightCorner: anchor.worldToLatLng(
+        layer.originX + worldW,
+        layer.originY + worldH,
+      ),
       opacity: opacity,
     );
   }

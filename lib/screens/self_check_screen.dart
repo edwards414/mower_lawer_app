@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../models/mission_mock.dart';
+import '../providers/mission_mock_provider.dart';
 
 class SelfCheckScreen extends StatelessWidget {
   const SelfCheckScreen({super.key, required this.onComplete});
@@ -7,14 +11,103 @@ class SelfCheckScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final checks = const [
-      _CheckItem(Icons.hub_outlined, 'ROS adapter mock', '已連線'),
-      _CheckItem(Icons.route_outlined, 'Nav2 狀態', '待命'),
-      _CheckItem(Icons.my_location, '定位品質', 'RTK fixed'),
-      _CheckItem(Icons.map_outlined, '任務地圖資料', 'Demo loaded'),
-      _CheckItem(Icons.battery_full, '電量', '85%'),
-      _CheckItem(Icons.health_and_safety_outlined, '安全狀態', 'Clear'),
-    ];
+    final mission = context.watch<MissionMockProvider>();
+    final battery = mission.batteryPercent;
+    final mapReady =
+        mission.zones.isNotEmpty ||
+        mission.freeSpaceReady ||
+        mission.coverageReady;
+    final navHealthy =
+        mission.hasFreshNavStatusSnapshot &&
+        mission.navStatus == NavMockStatus.idle;
+    final navCheckState = navHealthy
+        ? _CheckState.ready
+        : mission.hasFreshNavStatusSnapshot
+        ? _CheckState.warning
+        : _CheckState.waiting;
+    final checks = mission.mockDataEnabled
+        ? [
+            const _CheckItem(
+              Icons.science_outlined,
+              '資料模式',
+              'Demo 已由使用者手動開啟',
+              _CheckState.warning,
+            ),
+            const _CheckItem(
+              Icons.map_outlined,
+              '任務地圖資料',
+              'Demo 資料，不會送出真機任務',
+              _CheckState.warning,
+            ),
+            _CheckItem(
+              Icons.battery_full,
+              '電量',
+              '${battery?.round() ?? 0}%（Demo）',
+              _CheckState.warning,
+            ),
+            const _CheckItem(
+              Icons.health_and_safety_outlined,
+              '安全狀態',
+              'Demo 不代表真機安全狀態',
+              _CheckState.warning,
+            ),
+          ]
+        : [
+            _CheckItem(
+              Icons.hub_outlined,
+              'rosbridge',
+              mission.rosConnected ? '已連線' : '尚未連線',
+              mission.rosConnected ? _CheckState.ready : _CheckState.waiting,
+            ),
+            _CheckItem(
+              Icons.sensors_outlined,
+              '機器人 heartbeat',
+              mission.robotOnline ? '在線且資料新鮮' : '未收到新鮮 heartbeat',
+              mission.robotOnline ? _CheckState.ready : _CheckState.waiting,
+            ),
+            _CheckItem(
+              Icons.route_outlined,
+              'Nav2 狀態',
+              mission.hasFreshNavStatusSnapshot
+                  ? mission.navStatusLabel()
+                  : '尚未取得新鮮的後端狀態',
+              navCheckState,
+            ),
+            _CheckItem(
+              Icons.location_searching,
+              '機器人位置',
+              mission.hasFreshRobotPose ? 'pose 資料新鮮' : '尚未收到新鮮 pose',
+              mission.hasFreshRobotPose
+                  ? _CheckState.ready
+                  : _CheckState.waiting,
+            ),
+            _CheckItem(
+              Icons.my_location,
+              'GPS 定位',
+              mission.hasFreshGpsFix
+                  ? '定位有效 · 水平 σ ${mission.gpsHorizontalSigmaM!.toStringAsFixed(2)} m'
+                  : '需非零座標、已知 covariance，且水平 σ ≤ ${MissionMockProvider.maxGpsHorizontalSigmaM.toStringAsFixed(3)} m',
+              mission.hasFreshGpsFix ? _CheckState.ready : _CheckState.waiting,
+            ),
+            _CheckItem(
+              Icons.map_outlined,
+              '任務地圖資料',
+              mapReady ? '已收到真實圖層' : '尚未收到真實圖層',
+              mapReady ? _CheckState.ready : _CheckState.waiting,
+            ),
+            _CheckItem(
+              Icons.battery_full,
+              '電量',
+              battery == null ? '尚未收到新鮮電量' : '${battery.round()}%',
+              battery == null ? _CheckState.waiting : _CheckState.ready,
+            ),
+            const _CheckItem(
+              Icons.health_and_safety_outlined,
+              '安全狀態',
+              '後端尚未提供安全狀態 topic',
+              _CheckState.warning,
+            ),
+          ];
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F7F8),
@@ -86,9 +179,13 @@ class SelfCheckScreen extends StatelessWidget {
                           borderRadius: BorderRadius.circular(24),
                         ),
                       ),
-                      child: const Text(
-                        '進入任務地圖',
-                        style: TextStyle(fontWeight: FontWeight.w900),
+                      child: Text(
+                        mission.mockDataEnabled
+                            ? '進入 Demo 任務地圖'
+                            : mission.canControlRobot
+                            ? '進入任務地圖'
+                            : '以檢視模式進入',
+                        style: const TextStyle(fontWeight: FontWeight.w900),
                       ),
                     ),
                   ),
@@ -103,12 +200,15 @@ class SelfCheckScreen extends StatelessWidget {
 }
 
 class _CheckItem {
-  const _CheckItem(this.icon, this.title, this.detail);
+  const _CheckItem(this.icon, this.title, this.detail, this.state);
 
   final IconData icon;
   final String title;
   final String detail;
+  final _CheckState state;
 }
+
+enum _CheckState { ready, waiting, warning }
 
 class _CheckRow extends StatelessWidget {
   const _CheckRow({required this.item});
@@ -142,7 +242,19 @@ class _CheckRow extends StatelessWidget {
             ],
           ),
         ),
-        const Icon(Icons.check, color: Color(0xFF4ED59B), size: 24),
+        Icon(
+          switch (item.state) {
+            _CheckState.ready => Icons.check_circle,
+            _CheckState.waiting => Icons.hourglass_top,
+            _CheckState.warning => Icons.info_outline,
+          },
+          color: switch (item.state) {
+            _CheckState.ready => const Color(0xFF4ED59B),
+            _CheckState.waiting => const Color(0xFF78909C),
+            _CheckState.warning => const Color(0xFFE08C1A),
+          },
+          size: 24,
+        ),
       ],
     );
   }

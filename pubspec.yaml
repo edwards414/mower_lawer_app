@@ -44,6 +44,7 @@ dependencies:
   latlong2: ^0.9.1
   image_picker: ^1.2.2
   image: ^4.8.0
+  flutter_webrtc: ^1.5.2
 
 dev_dependencies:
   flutter_test:

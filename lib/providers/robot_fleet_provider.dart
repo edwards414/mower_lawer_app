@@ -27,11 +27,16 @@ import 'mission_mock_provider.dart';
 /// to. Robots on separate rosbridges/DOMAINs won't be discovered.
 class RobotFleetProvider extends ChangeNotifier {
   RobotFleetProvider({required RosbridgeService rosbridge})
-      : _rosbridge = rosbridge {
+    : _rosbridge = rosbridge {
     _rosMessages = _rosbridge.messages.listen(_handleRosMessage);
-    _discoveryTimer =
-        Timer.periodic(_discoveryInterval, (_) => unawaited(_pollTopics()));
-    _staleTimer = Timer.periodic(const Duration(seconds: 1), (_) => _staleTick());
+    _discoveryTimer = Timer.periodic(
+      _discoveryInterval,
+      (_) => unawaited(_pollTopics()),
+    );
+    _staleTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _staleTick(),
+    );
     unawaited(_pollTopics());
   }
 
@@ -67,6 +72,8 @@ class RobotFleetProvider extends ChangeNotifier {
   double _defaultHeading = 0.0;
   bool _defaultHasPose = false;
   bool _defaultOnline = false;
+  double _defaultBattery = 0.0;
+  bool _defaultHasBattery = false;
   double _defaultProgress = 0.0;
   RobotWorkStatus _defaultStatus = RobotWorkStatus.idle;
 
@@ -77,9 +84,9 @@ class RobotFleetProvider extends ChangeNotifier {
   RobotAgent? get selectedRobot => _selectedRobotId == null
       ? null
       : _robots.cast<RobotAgent?>().firstWhere(
-            (r) => r?.id == _selectedRobotId,
-            orElse: () => null,
-          );
+          (r) => r?.id == _selectedRobotId,
+          orElse: () => null,
+        );
 
   void selectRobot(int? id) {
     if (_selectedRobotId == id) return;
@@ -90,7 +97,7 @@ class RobotFleetProvider extends ChangeNotifier {
   /// Called from the ProxyProvider `update` (build phase) — mutates only, never
   /// notifies (the rebuild is already driven by [mission] notifying).
   void syncFromMission(MissionMockProvider mission) {
-    _demoActive = mission.mockDataEnabled && !mission.rosConnected;
+    _demoActive = mission.mockDataEnabled;
     if (_demoActive) {
       _robots = [
         RobotAgent(
@@ -98,7 +105,8 @@ class RobotFleetProvider extends ChangeNotifier {
           ns: _demoNs,
           name: 'GM-1',
           color: RobotAgent.palette[0],
-          batteryPercent: 86,
+          batteryPercent: mission.batteryPercent ?? 0.0,
+          hasBattery: mission.batteryPercent != null,
           progress: mission.coverageProgress,
           workStatus: RobotWorkStatus.working,
           assignedRowIndices: const [],
@@ -118,6 +126,9 @@ class RobotFleetProvider extends ChangeNotifier {
     _defaultHeading = mission.robotHeadingRad;
     _defaultHasPose = mission.hasLiveRobotPose;
     _defaultOnline = mission.robotOnline;
+    final defaultBattery = mission.batteryPercent;
+    _defaultBattery = defaultBattery ?? 0.0;
+    _defaultHasBattery = defaultBattery != null;
     _defaultProgress = mission.coverageProgress;
     _defaultStatus = _deriveStatus(
       online: mission.robotOnline,
@@ -130,7 +141,10 @@ class RobotFleetProvider extends ChangeNotifier {
   void distributeRows(List<List<MapPoint>> coverageRows) {
     if (_lastRowCount == coverageRows.length) return;
     _lastRowCount = coverageRows.length;
-    _robots = RobotAgent.distribute(robots: _robots, coverageRows: coverageRows);
+    _robots = RobotAgent.distribute(
+      robots: _robots,
+      coverageRows: coverageRows,
+    );
   }
 
   // ── Discovery ──────────────────────────────────────────────────────────────
@@ -181,11 +195,14 @@ class RobotFleetProvider extends ChangeNotifier {
       '/$ns/battery_state',
       type: 'sensor_msgs/msg/BatteryState',
       throttleRateMs: 500,
+      qos: const {'durability': 'volatile', 'reliability': 'best_effort'},
     );
   }
 
   void _removeRobot(String ns) {
-    if (ns == _defaultNs) return; // never remove the default robot's shared subs
+    if (ns == _defaultNs) {
+      return; // never remove the default robot's shared subs
+    }
     final id = _idByNs.remove(ns);
     _subscribedNs.remove(ns);
     _lastSeen.remove(ns);
@@ -283,6 +300,7 @@ class RobotFleetProvider extends ChangeNotifier {
     final double heading;
     final bool hasPose;
     final double progress;
+    final bool hasBattery;
     final RobotWorkStatus status;
     final DateTime? lastSeen;
 
@@ -293,6 +311,7 @@ class RobotFleetProvider extends ChangeNotifier {
       hasPose = _defaultHasPose;
       progress = _defaultProgress;
       status = _defaultStatus;
+      hasBattery = _defaultHasBattery;
       lastSeen = _lastSeen[ns];
     } else {
       final seen = _lastSeen[ns];
@@ -304,16 +323,20 @@ class RobotFleetProvider extends ChangeNotifier {
       hasPose = _poseByNs.containsKey(ns);
       progress = prev?.progress ?? _defaultProgress;
       status = online ? RobotWorkStatus.working : RobotWorkStatus.idle;
+      hasBattery = _batteryByNs.containsKey(ns) || (prev?.hasBattery ?? false);
       lastSeen = seen;
     }
 
-    final battery = _batteryByNs[ns] ?? prev?.batteryPercent ?? 0.0;
+    final battery = isDefault
+        ? _defaultBattery
+        : _batteryByNs[ns] ?? prev?.batteryPercent ?? 0.0;
     return RobotAgent(
       id: id,
       ns: ns,
       name: name,
       color: color,
       batteryPercent: battery,
+      hasBattery: hasBattery,
       progress: progress,
       workStatus: status,
       assignedRowIndices: prev?.assignedRowIndices ?? const [],

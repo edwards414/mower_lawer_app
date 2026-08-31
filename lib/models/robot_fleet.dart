@@ -21,12 +21,17 @@ class RobotAgent {
     this.online = true,
     this.lastSeen,
     this.hasPose = false,
+    this.hasBattery = true,
   });
 
   final int id;
   final String name;
   final Color color;
   final double batteryPercent;
+
+  /// False when [batteryPercent] is only an internal placeholder and must not
+  /// be presented as measured telemetry.
+  final bool hasBattery;
   final double progress;
   final RobotWorkStatus workStatus;
   final List<int> assignedRowIndices;
@@ -68,22 +73,23 @@ class RobotAgent {
     bool? online,
     DateTime? lastSeen,
     bool? hasPose,
-  }) =>
-      RobotAgent(
-        id: id,
-        name: name ?? this.name,
-        color: color ?? this.color,
-        batteryPercent: batteryPercent ?? this.batteryPercent,
-        progress: progress ?? this.progress,
-        workStatus: workStatus ?? this.workStatus,
-        assignedRowIndices: assignedRowIndices ?? this.assignedRowIndices,
-        position: position ?? this.position,
-        headingRad: headingRad ?? this.headingRad,
-        ns: ns ?? this.ns,
-        online: online ?? this.online,
-        lastSeen: lastSeen ?? this.lastSeen,
-        hasPose: hasPose ?? this.hasPose,
-      );
+    bool? hasBattery,
+  }) => RobotAgent(
+    id: id,
+    name: name ?? this.name,
+    color: color ?? this.color,
+    batteryPercent: batteryPercent ?? this.batteryPercent,
+    progress: progress ?? this.progress,
+    workStatus: workStatus ?? this.workStatus,
+    assignedRowIndices: assignedRowIndices ?? this.assignedRowIndices,
+    position: position ?? this.position,
+    headingRad: headingRad ?? this.headingRad,
+    ns: ns ?? this.ns,
+    online: online ?? this.online,
+    lastSeen: lastSeen ?? this.lastSeen,
+    hasPose: hasPose ?? this.hasPose,
+    hasBattery: hasBattery ?? this.hasBattery,
+  );
 
   static List<RobotAgent> distribute({
     required List<RobotAgent> robots,
@@ -96,12 +102,18 @@ class RobotAgent {
       final start = i * rowsPerRobot;
       final end = math.min(start + rowsPerRobot, coverageRows.length);
       final indices = [for (var j = start; j < end; j++) j];
-      final pos = _positionAtProgress(robots[i].progress, indices, coverageRows);
+      final pos = _positionAtProgress(
+        robots[i].progress,
+        indices,
+        coverageRows,
+      );
       return robots[i].copyWith(
         assignedRowIndices: indices,
         // Real robots keep their /<ns>/robot_pose; only seed position from the
         // coverage path for robots that have no live pose yet (e.g. demo).
-        position: robots[i].hasPose ? robots[i].position : (pos ?? robots[i].position),
+        position: robots[i].hasPose
+            ? robots[i].position
+            : (pos ?? robots[i].position),
       );
     });
   }
