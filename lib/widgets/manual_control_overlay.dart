@@ -6,26 +6,24 @@ import 'package:flutter/material.dart';
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 import 'mission_map_canvas.dart';
+import 'webrtc_camera_view.dart';
 
 class ManualControlOverlay extends StatefulWidget {
   const ManualControlOverlay({
     super.key,
     required this.mission,
-    required this.cameraFeed,
-    required this.onCameraFeedChanged,
     required this.onExit,
   });
 
   final MissionMockProvider mission;
-  final CameraFeed cameraFeed;
-  final ValueChanged<CameraFeed> onCameraFeedChanged;
   final VoidCallback onExit;
 
   @override
   State<ManualControlOverlay> createState() => _ManualControlOverlayState();
 }
 
-class _ManualControlOverlayState extends State<ManualControlOverlay> {
+class _ManualControlOverlayState extends State<ManualControlOverlay>
+    with WidgetsBindingObserver {
   static const _publishInterval = Duration(milliseconds: 100);
   static const _linearSpeed = 0.22;
   static const _angularSpeed = 0.75;
@@ -34,14 +32,32 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
   Timer? _publishTimer;
   double _linearX = 0.0;
   double _angularZ = 0.0;
-  // Landscape only: front/rear toggle + record chips are tucked into one
-  // expandable button to keep the split view clean.
+  // Landscape only: record chips are tucked into one expandable button to
+  // keep the split view clean.
   bool _controlsExpanded = false;
+  int _joystickResetEpoch = 0;
 
   bool get _moving => _linearX.abs() > 0.001 || _angularZ.abs() > 0.001;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      // Drop both the timer and joystick gesture state. A newly-resumed app
+      // must receive a fresh pointer-down before any non-zero velocity can be
+      // published again.
+      _stopAll();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _stopAll(rebuild: false);
     super.dispose();
   }
@@ -50,20 +66,18 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final mission = widget.mission;
-    final canDrive = mission.rosConnected;
+    final canDrive = mission.canDriveManually;
     final recording = mission.recordingType != null;
+    final pendingSave = mission.hasPendingRecordSave;
     final isPortrait = media.orientation == Orientation.portrait;
     final size = media.size;
     final joystickSize = size.shortestSide < 360 ? 100.0 : 124.0;
     final bottom = media.padding.bottom + 18.0;
     final topInset = media.padding.top + 12;
 
-    final cameraStage = _CameraStage(
-      feed: widget.cameraFeed,
-      topic: mission.cameraTopic(widget.cameraFeed),
-      frame: mission.cameraFrame(widget.cameraFeed),
-      error: mission.cameraError(widget.cameraFeed),
-      connected: mission.rosConnected,
+    final cameraStage = WebrtcCameraView(
+      feed: CameraFeed.front,
+      whepUrl: mission.whepUrl(CameraFeed.front),
     );
     final mapStage = MissionMapCanvas(
       mission: mission,
@@ -93,19 +107,16 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
             ],
           );
 
-    final cameraToggle = _CameraFeedToggle(
-      value: widget.cameraFeed,
-      onChanged: widget.onCameraFeedChanged,
-    );
     final recordHud = _RecordHud(
       mission: mission,
       onSave: () => mission.stopRecording(save: true),
       onCancel: () => mission.stopRecording(save: false),
     );
     final typeBar = _RecordTypeBar(
-      enabled: canDrive,
+      enabled: canDrive && !mission.recordCommandPending,
       onPick: mission.startRecording,
     );
+    final pendingSaveHud = _PendingRecordSaveHud(mission: mission);
 
     return Stack(
       children: [
@@ -126,22 +137,21 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
         Positioned(
           top: topInset,
           right: 12,
-          child: _ManualStatusPill(
-            connected: mission.rosConnected,
-            moving: _moving,
-          ),
+          child: _ManualStatusPill(connected: canDrive, moving: _moving),
         ),
 
         // ── Orientation-specific control band.
         if (isPortrait) ...[
-          // Front/rear toggle sits next to the exit button on the camera band.
-          Positioned(top: topInset, left: 64, child: cameraToggle),
           // Record band (chips → REC HUD) at the top of the map area.
           Positioned(
             top: cameraBand + 10,
             left: 12,
             right: 12,
-            child: recording ? recordHud : typeBar,
+            child: recording
+                ? recordHud
+                : pendingSave
+                ? pendingSaveHud
+                : typeBar,
           ),
         ] else if (recording) ...[
           // Landscape recording: REC HUD as a left panel (top-right is the
@@ -152,8 +162,15 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
             width: math.min(size.width * 0.5, 360.0),
             child: recordHud,
           ),
+        ] else if (pendingSave) ...[
+          Positioned(
+            top: topInset,
+            left: 64,
+            width: math.min(size.width * 0.5, 360.0),
+            child: pendingSaveHud,
+          ),
         ] else ...[
-          // Landscape idle: tuck the toggle + chips into one expandable button.
+          // Landscape idle: tuck the record chips into one expandable button.
           Positioned(
             top: topInset,
             left: 64,
@@ -169,14 +186,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
               top: topInset + 52,
               left: 12,
               width: math.min(size.width * 0.5, 320.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  cameraToggle,
-                  const SizedBox(height: 8),
-                  typeBar,
-                ],
-              ),
+              child: typeBar,
             ),
         ],
 
@@ -185,6 +195,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
           left: 18,
           bottom: bottom,
           child: _ManualJoystick(
+            key: ValueKey('linear-$_joystickResetEpoch'),
             size: joystickSize,
             axis: _JoystickAxis.vertical,
             enabled: canDrive,
@@ -195,6 +206,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
           right: 18,
           bottom: bottom,
           child: _ManualJoystick(
+            key: ValueKey('angular-$_joystickResetEpoch'),
             size: joystickSize,
             axis: _JoystickAxis.horizontal,
             enabled: canDrive,
@@ -223,7 +235,9 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
   }
 
   void _publishCurrent() {
-    if (!widget.mission.rosConnected) {
+    if (!widget.mission.canDriveManually) {
+      _linearX = 0.0;
+      _angularZ = 0.0;
       _stopTimer();
       return;
     }
@@ -233,6 +247,10 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
         angularZ: _angularZ,
       );
       _publishTimer ??= Timer.periodic(_publishInterval, (_) {
+        if (!widget.mission.canDriveManually) {
+          _stopAll();
+          return;
+        }
         widget.mission.publishManualVelocity(
           linearX: _linearX,
           angularZ: _angularZ,
@@ -253,6 +271,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
   void _stopAll({bool rebuild = true}) {
     _linearX = 0.0;
     _angularZ = 0.0;
+    _joystickResetEpoch += 1;
     _stopTimer();
     widget.mission.stopManualControl();
     if (mounted && rebuild) {
@@ -260,9 +279,12 @@ class _ManualControlOverlayState extends State<ManualControlOverlay> {
     }
   }
 
-  void _exitManual() {
+  Future<void> _exitManual() async {
     if (widget.mission.recordingType != null) {
-      widget.mission.stopRecording(save: false);
+      final stopped = await widget.mission.stopRecording(save: false);
+      if (!stopped) {
+        return;
+      }
     }
     _stopAll();
     widget.onExit();
@@ -395,6 +417,50 @@ class _RecordChip extends StatelessWidget {
   }
 }
 
+class _PendingRecordSaveHud extends StatelessWidget {
+  const _PendingRecordSaveHud({required this.mission});
+
+  final MissionMockProvider mission;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFE65100).withValues(alpha: 0.88),
+      borderRadius: BorderRadius.circular(18),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            const Icon(Icons.save_outlined, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '${mission.pendingRecordSaveTitle}已停止，但尚未持久化',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            _HudButton(
+              icon: Icons.refresh,
+              label: mission.recordCommandPending ? '儲存中' : '重試',
+              color: Colors.white,
+              onTap: mission.recordCommandPending
+                  ? null
+                  : () => unawaited(mission.retryPendingRecordSave()),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Live recording HUD: type, elapsed, point count, and finish/cancel.
 class _RecordHud extends StatelessWidget {
   const _RecordHud({
@@ -443,14 +509,14 @@ class _RecordHud extends StatelessWidget {
               icon: Icons.check,
               label: '存',
               color: const Color(0xFF35B861),
-              onTap: onSave,
+              onTap: mission.recordCommandPending ? null : onSave,
             ),
             const SizedBox(width: 6),
             _HudButton(
               icon: Icons.close,
               label: '取消',
               color: const Color(0xFF90A4AE),
-              onTap: onCancel,
+              onTap: mission.recordCommandPending ? null : onCancel,
             ),
           ],
         ),
@@ -470,183 +536,36 @@ class _HudButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.22),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withValues(alpha: 0.6)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 15),
-            const SizedBox(width: 3),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Rounded, bordered frame used for the shrunk camera while recording.
-class _CameraStage extends StatelessWidget {
-  const _CameraStage({
-    required this.feed,
-    required this.topic,
-    required this.frame,
-    required this.error,
-    required this.connected,
-  });
-
-  final CameraFeed feed;
-  final String topic;
-  final CameraFrame? frame;
-  final String? error;
-  final bool connected;
-
-  @override
-  Widget build(BuildContext context) {
-    final frame = this.frame;
-    if (frame != null) {
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          RawImage(image: frame.image, fit: BoxFit.cover),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0x66000000),
-                  Color(0x00000000),
-                  Color(0x66000000),
-                ],
-              ),
-            ),
+    return Opacity(
+      opacity: onTap == null ? 0.5 : 1,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.22),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color.withValues(alpha: 0.6)),
           ),
-        ],
-      );
-    }
-
-    final title = feed == CameraFeed.front ? '前鏡頭' : '後鏡頭';
-    final detail = error ?? (connected ? '等待 $topic' : '等待 rosbridge');
-    return DecoratedBox(
-      decoration: const BoxDecoration(color: Color(0xFF111827)),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.videocam_off_outlined,
-              color: Color(0xFFECEFF1),
-              size: 48,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.w900,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: color, size: 15),
+              const SizedBox(width: 3),
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              detail,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Color(0xFFB0BEC5),
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CameraFeedToggle extends StatelessWidget {
-  const _CameraFeedToggle({required this.value, required this.onChanged});
-
-  final CameraFeed value;
-  final ValueChanged<CameraFeed> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: 0.5),
-      borderRadius: BorderRadius.circular(22),
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _FeedButton(
-              label: '前',
-              selected: value == CameraFeed.front,
-              onTap: () => onChanged(CameraFeed.front),
-            ),
-            _FeedButton(
-              label: '後',
-              selected: value == CameraFeed.rear,
-              onTap: () => onChanged(CameraFeed.rear),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _FeedButton extends StatelessWidget {
-  const _FeedButton({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(18),
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 140),
-        width: 38,
-        height: 34,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected ? Colors.white : Colors.transparent,
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? const Color(0xFF111827) : Colors.white,
-            fontWeight: FontWeight.w900,
+            ],
           ),
         ),
       ),
@@ -690,6 +609,7 @@ enum _JoystickAxis { vertical, horizontal }
 
 class _ManualJoystick extends StatefulWidget {
   const _ManualJoystick({
+    super.key,
     required this.size,
     required this.axis,
     required this.enabled,
@@ -723,60 +643,60 @@ class _ManualJoystickState extends State<_ManualJoystick> {
     return Opacity(
       opacity: widget.enabled ? 1.0 : 0.48,
       child: GestureDetector(
-            onPanStart: widget.enabled ? _handlePanStart : null,
-            onPanUpdate: widget.enabled ? _handlePanUpdate : null,
-            onPanEnd: widget.enabled ? (_) => _release() : null,
-            onPanCancel: widget.enabled ? _release : null,
-            child: SizedBox(
-              width: widget.size,
-              height: widget.size,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.36),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.36),
-                    width: 1.4,
-                  ),
-                ),
-                child: Stack(
-                  children: [
-                    Center(
-                      child: Container(
-                        width: widget.axis == _JoystickAxis.vertical ? 4 : 62,
-                        height: widget.axis == _JoystickAxis.vertical ? 62 : 4,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ),
-                    AnimatedPositioned(
-                      duration: const Duration(milliseconds: 70),
-                      curve: Curves.easeOut,
-                      left: knobOffset.dx,
-                      top: knobOffset.dy,
-                      child: Container(
-                        width: knobSize,
-                        height: knobSize,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x66000000),
-                              blurRadius: 12,
-                              offset: Offset(0, 5),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+        onPanStart: widget.enabled ? _handlePanStart : null,
+        onPanUpdate: widget.enabled ? _handlePanUpdate : null,
+        onPanEnd: widget.enabled ? (_) => _release() : null,
+        onPanCancel: widget.enabled ? _release : null,
+        child: SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.36),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.36),
+                width: 1.4,
               ),
             ),
+            child: Stack(
+              children: [
+                Center(
+                  child: Container(
+                    width: widget.axis == _JoystickAxis.vertical ? 4 : 62,
+                    height: widget.axis == _JoystickAxis.vertical ? 62 : 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 70),
+                  curve: Curves.easeOut,
+                  left: knobOffset.dx,
+                  top: knobOffset.dy,
+                  child: Container(
+                    width: knobSize,
+                    height: knobSize,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x66000000),
+                          blurRadius: 12,
+                          offset: Offset(0, 5),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
+        ),
+      ),
     );
   }
 
@@ -822,7 +742,7 @@ class _ManualStatusPill extends StatelessWidget {
         ? moving
               ? '手動輸出中'
               : '手動待命'
-        : 'rosbridge 未連線';
+        : '機器人未就緒';
     final color = connected ? const Color(0xFF46D28B) : const Color(0xFFFFC857);
     return DecoratedBox(
       decoration: BoxDecoration(

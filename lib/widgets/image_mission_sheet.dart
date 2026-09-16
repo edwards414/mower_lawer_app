@@ -123,90 +123,91 @@ class _ImageMissionSheetState extends State<ImageMissionSheet> {
           child: AnimatedSize(
             duration: const Duration(milliseconds: 180),
             child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFD0D7DA),
-                    borderRadius: BorderRadius.circular(2),
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD0D7DA),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      '圖片任務',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '圖片任務',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
                     ),
-                  ),
-                  if (draft != null)
-                    TextButton.icon(
-                      onPressed: mission.clearImageMissionDraft,
-                      icon: const Icon(Icons.delete_outline),
-                      label: const Text('清除'),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              _StepPills(currentStep: _step),
-              const SizedBox(height: 14),
-              if (draft == null || _step == 0)
-                _PickStep(picking: _picking, onPick: _pickImage)
-              else if (_step == 1)
-                _ThresholdStep(
-                  draft: draft,
-                  onThresholdChanged: mission.updateImageMissionThreshold,
-                  onNext: () => setState(() => _step = 2),
-                )
-              else if (_step == 2)
-                _ScaleStep(
-                  draft: draft,
-                  previewZoom: _previewZoom,
-                  onResolutionChanged: mission.updateImageMissionResolution,
-                  onPreviewZoomChanged: (value) =>
-                      setState(() => _previewZoom = value),
-                  onBack: () => setState(() => _step = 1),
-                  onNext: draft.resolutionM > 0
-                      ? () => setState(() => _step = 3)
-                      : null,
-                )
-              else if (_step == 3)
-                _AlignStep(
-                  draft: draft,
-                  onOpenAlign: () => _openAlignment(mission),
-                  onBack: () => setState(() => _step = 2),
-                  onNext: draft.placement == null
-                      ? null
-                      : () => setState(() => _step = 4),
-                )
-              else
-                _RiskAndSubmitStep(
-                  draft: draft,
-                  previewZoom: _previewZoom,
-                  rosConnected: mission.rosConnected,
-                  onRiskPoint: (point) => _paintRisk(draft, point),
-                  onClearRisk: mission.clearImageMissionRiskMask,
-                  onBack: () => setState(() => _step = 3),
-                  onSubmit: mission.submitImageMissionDraft,
-                  onExecute: draft.submitted
-                      ? () {
-                          mission.startExecution();
-                          Navigator.of(context).pop();
-                        }
-                      : null,
+                    if (draft != null)
+                      TextButton.icon(
+                        onPressed: mission.clearImageMissionDraft,
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('清除'),
+                      ),
+                  ],
                 ),
-            ],
+                const SizedBox(height: 12),
+                _StepPills(currentStep: _step),
+                const SizedBox(height: 14),
+                if (draft == null || _step == 0)
+                  _PickStep(picking: _picking, onPick: _pickImage)
+                else if (_step == 1)
+                  _ThresholdStep(
+                    draft: draft,
+                    onThresholdChanged: mission.updateImageMissionThreshold,
+                    onNext: () => setState(() => _step = 2),
+                  )
+                else if (_step == 2)
+                  _ScaleStep(
+                    draft: draft,
+                    previewZoom: _previewZoom,
+                    onResolutionChanged: mission.updateImageMissionResolution,
+                    onPreviewZoomChanged: (value) =>
+                        setState(() => _previewZoom = value),
+                    onBack: () => setState(() => _step = 1),
+                    onNext: draft.resolutionM > 0
+                        ? () => setState(() => _step = 3)
+                        : null,
+                  )
+                else if (_step == 3)
+                  _AlignStep(
+                    draft: draft,
+                    onOpenAlign: () => _openAlignment(mission),
+                    onBack: () => setState(() => _step = 2),
+                    onNext: draft.placement == null
+                        ? null
+                        : () => setState(() => _step = 4),
+                  )
+                else
+                  _RiskAndSubmitStep(
+                    draft: draft,
+                    previewZoom: _previewZoom,
+                    rosConnected: mission.rosConnected,
+                    demoMode: mission.mockDataEnabled,
+                    onRiskPoint: (point) => _paintRisk(draft, point),
+                    onClearRisk: mission.clearImageMissionRiskMask,
+                    onBack: () => setState(() => _step = 3),
+                    onSubmit: mission.submitImageMissionDraft,
+                    onExecute: draft.submitted && mission.canStartMission
+                        ? () {
+                            mission.startExecution();
+                            Navigator.of(context).pop();
+                          }
+                        : null,
+                  ),
+              ],
+            ),
           ),
-        ),
         ),
       ),
     );
@@ -510,6 +511,7 @@ class _RiskAndSubmitStep extends StatelessWidget {
     required this.draft,
     required this.previewZoom,
     required this.rosConnected,
+    required this.demoMode,
     required this.onRiskPoint,
     required this.onClearRisk,
     required this.onBack,
@@ -520,6 +522,7 @@ class _RiskAndSubmitStep extends StatelessWidget {
   final ImageMissionDraft draft;
   final double previewZoom;
   final bool rosConnected;
+  final bool demoMode;
   final ValueChanged<MapPoint> onRiskPoint;
   final VoidCallback onClearRisk;
   final VoidCallback onBack;
@@ -578,7 +581,10 @@ class _RiskAndSubmitStep extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: FilledButton.icon(
-                onPressed: draft.canSubmit && !draft.submitting
+                onPressed:
+                    draft.canSubmit &&
+                        !draft.submitting &&
+                        (demoMode || rosConnected)
                     ? () => unawaitedSubmit(context)
                     : null,
                 icon: draft.submitting
@@ -588,7 +594,13 @@ class _RiskAndSubmitStep extends StatelessWidget {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.route_outlined),
-                label: Text(rosConnected ? '送出生成路徑' : 'Mock 送出'),
+                label: Text(
+                  demoMode
+                      ? 'Demo 建立路徑'
+                      : rosConnected
+                      ? '送出生成路徑'
+                      : '等待 rosbridge',
+                ),
               ),
             ),
           ],

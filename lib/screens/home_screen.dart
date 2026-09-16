@@ -6,10 +6,12 @@ import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
-import '../providers/mower_status_provider.dart';
 import '../providers/weather_provider.dart';
 import '../services/rosbridge_service.dart';
 import '../providers/robot_fleet_provider.dart';
+import '../providers/robot_info_provider.dart';
+import '../models/robot_info.dart';
+import 'recorder_screen.dart';
 import '../widgets/add_object_sheet.dart';
 import '../widgets/execution_control_sheet.dart';
 import '../widgets/manual_control_overlay.dart';
@@ -20,6 +22,8 @@ import '../widgets/satellite_map_view.dart';
 import '../widgets/operation_log_sheet.dart';
 import '../widgets/planning_control_sheet.dart';
 import '../widgets/robot_info_popup.dart';
+import '../widgets/robot_version_card.dart';
+import '../widgets/site_library_sheet.dart';
 import '../widgets/top_status_pill.dart';
 import 'self_check_screen.dart';
 
@@ -100,13 +104,25 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          const _DashboardHomePage(),
-          MissionMapScreen(onManual: () => setState(() => _selectedIndex = 2)),
-          _ManualControlTab(
-            onGoHome: () {
-              context.read<MissionMockProvider>().stopManualControl();
-              setState(() => _selectedIndex = 0);
-            },
+          _DashboardHomePage(
+            onShowVersions: () => setState(() => _selectedIndex = 4),
+          ),
+          // Operating pages are blocked while the robot's API version is
+          // outside what this app supports (see RobotInfoProvider).
+          CompatibilityGate(
+            onShowVersions: () => setState(() => _selectedIndex = 4),
+            child: MissionMapScreen(
+              onManual: () => setState(() => _selectedIndex = 2),
+            ),
+          ),
+          CompatibilityGate(
+            onShowVersions: () => setState(() => _selectedIndex = 4),
+            child: _ManualControlTab(
+              onGoHome: () {
+                context.read<MissionMockProvider>().stopManualControl();
+                setState(() => _selectedIndex = 0);
+              },
+            ),
           ),
           const _ScheduleTab(),
           const _MoreTab(),
@@ -162,46 +178,51 @@ class _ManualControlTab extends StatefulWidget {
 }
 
 class _ManualControlTabState extends State<_ManualControlTab> {
-  CameraFeed _cameraFeed = CameraFeed.front;
-
   @override
   Widget build(BuildContext context) {
     return Consumer<MissionMockProvider>(
-      builder: (context, mission, _) => ManualControlOverlay(
-        mission: mission,
-        cameraFeed: _cameraFeed,
-        onCameraFeedChanged: (feed) => setState(() => _cameraFeed = feed),
-        onExit: widget.onGoHome,
-      ),
+      builder: (context, mission, _) =>
+          ManualControlOverlay(mission: mission, onExit: widget.onGoHome),
     );
   }
 }
 
 class _DashboardHomePage extends StatelessWidget {
-  const _DashboardHomePage();
+  const _DashboardHomePage({this.onShowVersions});
+
+  final VoidCallback? onShowVersions;
 
   @override
   Widget build(BuildContext context) {
+    final incompatible = context.select<RobotInfoProvider, bool>(
+      (p) =>
+          p.compatibility == RobotCompatibility.robotTooOld ||
+          p.compatibility == RobotCompatibility.appTooOld,
+    );
     return ColoredBox(
       color: const Color(0xFFF6F7F8),
       child: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
           physics: const BouncingScrollPhysics(),
-          children: const [
-            _DashboardHeader(),
-            SizedBox(height: 16),
-            _ConnectionCard(),
-            SizedBox(height: 10),
-            _WeatherCard(),
-            SizedBox(height: 10),
-            _BatteryCard(),
-            SizedBox(height: 10),
-            _MissionSummaryCard(),
-            SizedBox(height: 10),
-            _NextScheduleCard(),
-            SizedBox(height: 10),
-            _DockStatusCard(),
+          children: [
+            const _DashboardHeader(),
+            const SizedBox(height: 16),
+            if (incompatible) ...[
+              CompatibilityNotice(onShowVersions: onShowVersions),
+              const SizedBox(height: 10),
+            ],
+            const _ConnectionCard(),
+            const SizedBox(height: 10),
+            const _WeatherCard(),
+            const SizedBox(height: 10),
+            const _BatteryCard(),
+            const SizedBox(height: 10),
+            const _MissionSummaryCard(),
+            const SizedBox(height: 10),
+            const _NextScheduleCard(),
+            const SizedBox(height: 10),
+            const _DockStatusCard(),
           ],
         ),
       ),
@@ -267,16 +288,21 @@ class _ConnectionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
-    final mowerStatus = context.watch<MowerStatusProvider>().status;
-    final online = mission.rosConnected || mission.mockDataEnabled;
-    final statusLabel = online ? '在線上' : '等待連線';
-    final detail = mission.rosConnected
-        ? 'ROS 即時資料 · 最後更新：剛剛'
-        : mission.mockDataEnabled
-        ? 'Mock fallback · 最後更新：剛剛'
-        : mowerStatus == null
-        ? '狀態讀取中'
-        : '等待 ROS 真實資料';
+    final online = mission.robotOnline && !mission.mockDataEnabled;
+    final statusLabel = mission.mockDataEnabled
+        ? 'Demo 模式'
+        : online
+        ? '機器人在線'
+        : mission.rosConnected
+        ? '機器人離線'
+        : '等待連線';
+    final detail = mission.mockDataEnabled
+        ? '手動開啟的模擬資料 · 不控制真機'
+        : online
+        ? 'ROS 即時資料 · heartbeat 正常'
+        : mission.rosConnected
+        ? 'rosbridge 已連線 · heartbeat 不新鮮'
+        : '等待 rosbridge 與真實資料';
 
     return _DashboardCard(
       child: Row(
@@ -337,7 +363,6 @@ class _WeatherCard extends StatelessWidget {
     final weather = context.watch<WeatherProvider>();
     final snapshot = weather.snapshot;
     final loadingWithoutData = weather.isLoading && snapshot == null;
-    final unavailable = weather.errorMessage == '天氣暫不可用' && snapshot == null;
 
     return _DashboardCard(
       child: Column(
@@ -369,9 +394,9 @@ class _WeatherCard extends StatelessWidget {
                     Text(
                       loadingWithoutData
                           ? '天氣載入中'
-                          : unavailable
-                          ? '天氣暫不可用'
-                          : snapshot?.conditionLabel ?? '天氣暫不可用',
+                          : snapshot?.conditionLabel ??
+                                weather.errorMessage ??
+                                '等待天氣資料',
                       style: const TextStyle(
                         color: Color(0xFF17211C),
                         fontSize: 18,
@@ -499,8 +524,8 @@ class _BatteryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mowerStatus = context.watch<MowerStatusProvider>().status;
-    final battery = mowerStatus?.batteryPercent ?? 85;
+    final mission = context.watch<MissionMockProvider>();
+    final battery = mission.batteryPercent;
 
     return _DashboardCard(
       child: Column(
@@ -520,7 +545,7 @@ class _BatteryCard extends StatelessWidget {
               SizedBox(
                 width: 90,
                 child: Text(
-                  '${battery.round()}%',
+                  battery == null ? '--' : '${battery.round()}%',
                   style: const TextStyle(
                     color: Color(0xFF17211C),
                     fontSize: 34,
@@ -535,15 +560,21 @@ class _BatteryCard extends StatelessWidget {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(4),
                       child: LinearProgressIndicator(
-                        value: (battery / 100).clamp(0.0, 1.0),
+                        value: battery == null
+                            ? null
+                            : (battery / 100).clamp(0.0, 1.0),
                         minHeight: 10,
                         backgroundColor: const Color(0xFFE6ECE9),
                         color: const Color(0xFF168848),
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const Text(
-                      '預估剩餘 2 小時 15 分鐘',
+                    Text(
+                      mission.mockDataEnabled
+                          ? 'Demo 模擬電量'
+                          : battery == null
+                          ? '尚未收到新鮮的 /battery_state'
+                          : 'ROS 即時電量',
                       style: TextStyle(
                         color: Color(0xFF8A9691),
                         fontSize: 12,
@@ -564,15 +595,23 @@ class _BatteryCard extends StatelessWidget {
 class _MissionSummaryCard extends StatelessWidget {
   const _MissionSummaryCard();
 
-  static const double _totalAreaM2 = 1200;
-
   @override
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
     final zone = _selectedZone(mission);
     final progress = mission.coverageProgress.clamp(0.0, 1.0).toDouble();
-    final completed = (_totalAreaM2 * progress).round();
-    final remaining = (_totalAreaM2 - completed).round();
+    final active =
+        mission.navStatus == NavMockStatus.executing ||
+        mission.navStatus == NavMockStatus.paused;
+    final progressKnown =
+        mission.mockDataEnabled || (!active && progress >= 1.0);
+    final totalArea = zone == null ? null : _polygonAreaM2(zone.points);
+    final completed = totalArea == null || !progressKnown
+        ? null
+        : (totalArea * progress).round();
+    final remaining = totalArea == null || !progressKnown
+        ? null
+        : (totalArea - (completed ?? 0)).round();
     final executing = mission.navStatus == NavMockStatus.executing;
 
     return _DashboardCard(
@@ -628,10 +667,12 @@ class _MissionSummaryCard extends StatelessWidget {
                 width: 72,
                 height: 72,
                 child: CustomPaint(
-                  painter: _ProgressRingPainter(progress: progress),
+                  painter: _ProgressRingPainter(
+                    progress: progressKnown ? progress : 0,
+                  ),
                   child: Center(
                     child: Text(
-                      '${(progress * 100).round()}%',
+                      progressKnown ? '${(progress * 100).round()}%' : '—',
                       style: const TextStyle(
                         color: Color(0xFF17211C),
                         fontSize: 16,
@@ -648,12 +689,18 @@ class _MissionSummaryCard extends StatelessWidget {
             children: [
               _MissionMetric(
                 label: '總草坪面積',
-                value: '${_totalAreaM2.round()} m²',
+                value: totalArea == null ? '--' : '${totalArea.round()} m²',
               ),
               const _VerticalDivider(),
-              _MissionMetric(label: '已完成', value: '$completed m²'),
+              _MissionMetric(
+                label: '已完成',
+                value: completed == null ? '--' : '$completed m²',
+              ),
               const _VerticalDivider(),
-              _MissionMetric(label: '剩餘', value: '$remaining m²'),
+              _MissionMetric(
+                label: '剩餘',
+                value: remaining == null ? '--' : '$remaining m²',
+              ),
             ],
           ),
         ],
@@ -668,6 +715,19 @@ class _MissionSummaryCard extends StatelessWidget {
       }
     }
     return null;
+  }
+
+  double _polygonAreaM2(List<MapPoint> points) {
+    if (points.length < 3) {
+      return 0;
+    }
+    var twiceArea = 0.0;
+    for (var i = 0; i < points.length; i += 1) {
+      final current = points[i];
+      final next = points[(i + 1) % points.length];
+      twiceArea += current.x * next.y - next.x * current.y;
+    }
+    return twiceArea.abs() / 2;
   }
 }
 
@@ -995,9 +1055,20 @@ class _MoreTab extends StatelessWidget {
                     onTap: () =>
                         _showAppSheet(context, const _LayerToggleSheet()),
                   ),
+                  const Divider(height: 24),
+                  _MoreActionRow(
+                    icon: Icons.videocam_outlined,
+                    title: '錄製 / Bag',
+                    detail: '錄製狀態、清單、上傳 R2',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const RecorderScreen()),
+                    ),
+                  ),
                 ],
               ),
             ),
+            const SizedBox(height: 10),
+            const _DashboardCard(child: RobotVersionCard()),
             const SizedBox(height: 10),
             _DashboardCard(
               child: Column(
@@ -1007,16 +1078,18 @@ class _MoreTab extends StatelessWidget {
                         ? Icons.radio_button_checked
                         : Icons.portable_wifi_off_outlined,
                     title: '資料來源',
-                    detail: mission.rosConnected
-                        ? 'ROS 即時資料'
-                        : mission.mockDataEnabled
-                        ? 'Mock fallback'
+                    detail: mission.mockDataEnabled
+                        ? 'Demo（與真機資料隔離）'
+                        : mission.rosConnected
+                        ? 'ROS 已連線 · ${mission.robotOnline ? '機器人在線' : 'heartbeat 不新鮮'}'
                         : '等待 ROS 真實資料',
                   ),
-                  const _InfoRow(
+                  _InfoRow(
                     icon: Icons.health_and_safety_outlined,
                     title: '安全狀態',
-                    detail: 'Clear',
+                    detail: mission.mockDataEnabled
+                        ? 'Demo 不代表真機安全'
+                        : '尚未提供安全狀態 topic',
                   ),
                 ],
               ),
@@ -1093,8 +1166,34 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
   final _canvasKey = GlobalKey<MissionMapCanvasState>();
   Offset? _popupOffset;
   bool _panelCollapsed = false;
+  int? _dragVertexIndex;
+
+  /// Index of the edit-polygon vertex nearest to a screen point, within a
+  /// grab radius; null if none.
+  int? _vertexAt(Offset local, {double radius = 30.0}) {
+    final proj = _canvasKey.currentState?.lastProjection;
+    if (proj == null) return null;
+    final pts = context.read<MissionMockProvider>().editPolygon;
+    int? nearest;
+    var best = radius;
+    for (var i = 0; i < pts.length; i++) {
+      final d = (proj.project(pts[i]) - local).distance;
+      if (d < best) {
+        best = d;
+        nearest = i;
+      }
+    }
+    return nearest;
+  }
 
   void _onLongPress(LongPressStartDetails details) {
+    final mission = context.read<MissionMockProvider>();
+    // In vertex-edit mode, a long-press on a vertex deletes it.
+    if (mission.editVertexMode) {
+      final vi = _vertexAt(details.localPosition);
+      if (vi != null) mission.deleteVertex(vi);
+      return;
+    }
     final positions = _canvasKey.currentState?.robotScreenPositions ?? {};
     const threshold = 44.0;
     int? nearest;
@@ -1148,7 +1247,10 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
         : math.min(size.height * 0.43, 370.0);
 
     final collapsedH = 48.0 + media.padding.bottom;
-    final effectivePanelH = _panelCollapsed ? collapsedH : panelHeight;
+    // Collapse the panel during draw / vertex-edit so more map is reachable.
+    final collapsed =
+        _panelCollapsed || mission.drawMode || mission.editVertexMode;
+    final effectivePanelH = collapsed ? collapsedH : panelHeight;
 
     final selectedRobot = fleet.selectedRobot;
     final popupOrigin = (_popupOffset != null && selectedRobot != null)
@@ -1158,6 +1260,31 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     return Scaffold(
       body: GestureDetector(
         onLongPressStart: _onLongPress,
+        // Pan handlers exist ONLY in vertex-edit mode; otherwise they are null
+        // so the PanGestureRecognizer doesn't compete with the panel's scroll.
+        onPanStart: mission.editVertexMode
+            ? (details) => setState(
+                () => _dragVertexIndex = _vertexAt(details.localPosition),
+              )
+            : null,
+        onPanUpdate: mission.editVertexMode
+            ? (details) {
+                if (_dragVertexIndex == null) return;
+                final proj = _canvasKey.currentState?.lastProjection;
+                if (proj == null) return;
+                mission.moveVertex(
+                  _dragVertexIndex!,
+                  proj.unproject(details.localPosition),
+                );
+              }
+            : null,
+        onPanEnd: mission.editVertexMode
+            ? (_) {
+                if (_dragVertexIndex != null) {
+                  setState(() => _dragVertexIndex = null);
+                }
+              }
+            : null,
         onTapUp: (details) {
           // Drawing takes precedence over robot-popup dismissal / selection,
           // so the first tap after entering draw mode drops a vertex.
@@ -1169,6 +1296,11 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
             if (proj != null) {
               mission.addDraftVertex(proj.unproject(details.localPosition));
             }
+            return;
+          }
+          // In vertex-edit a tap must not re-run selection; only dismiss a popup.
+          if (mission.editVertexMode) {
+            if (fleet.selectedRobotId != null) _dismissPopup();
             return;
           }
           if (fleet.selectedRobotId != null) {
@@ -1203,7 +1335,8 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
               child:
                   (mission.satelliteBaseMap &&
                       mission.mapGeoAnchor != null &&
-                      !mission.drawMode)
+                      !mission.drawMode &&
+                      !mission.editVertexMode)
                   ? SatelliteMapView(
                       mission: mission,
                       anchor: mission.mapGeoAnchor!,
@@ -1236,6 +1369,7 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
               right: 12,
               child: _MapActionRail(
                 onAdd: () => _showAppSheet(context, const AddObjectSheet()),
+                onSites: () => _showAppSheet(context, const SiteLibrarySheet()),
                 onLayers: () =>
                     _showAppSheet(context, const _LayerToggleSheet()),
                 onSettings: () =>
@@ -1255,6 +1389,17 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                   onCommit: mission.commitDraw,
                 ),
               ),
+            if (mission.editVertexMode)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: effectivePanelH + 12,
+                child: _VertexEditBar(
+                  count: mission.editPolygon.length,
+                  onCancel: mission.cancelVertexEdit,
+                  onCommit: mission.commitVertexEdit,
+                ),
+              ),
             Positioned(
               left: 0,
               right: 0,
@@ -1264,7 +1409,7 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                 curve: Curves.easeInOut,
                 height: effectivePanelH,
                 child: _MissionBottomPanel(
-                  isCollapsed: _panelCollapsed,
+                  isCollapsed: collapsed,
                   onToggle: () =>
                       setState(() => _panelCollapsed = !_panelCollapsed),
                 ),
@@ -1425,7 +1570,9 @@ class _SatelliteToggle extends StatelessWidget {
   Widget build(BuildContext context) {
     final active = on && enabled;
     return Material(
-      color: active ? const Color(0xFF167A4A) : Colors.black.withValues(alpha: 0.55),
+      color: active
+          ? const Color(0xFF167A4A)
+          : Colors.black.withValues(alpha: 0.55),
       shape: const CircleBorder(),
       child: InkWell(
         customBorder: const CircleBorder(),
@@ -1447,12 +1594,14 @@ class _SatelliteToggle extends StatelessWidget {
 class _MapActionRail extends StatelessWidget {
   const _MapActionRail({
     required this.onAdd,
+    required this.onSites,
     required this.onLayers,
     required this.onSettings,
     required this.onManual,
   });
 
   final VoidCallback onAdd;
+  final VoidCallback onSites;
   final VoidCallback onLayers;
   final VoidCallback onSettings;
   final VoidCallback onManual;
@@ -1467,6 +1616,12 @@ class _MapActionRail extends StatelessWidget {
           tooltip: '新增物件',
           color: const Color(0xFF1384E8),
           onTap: onAdd,
+        ),
+        const SizedBox(height: 10),
+        _RoundIconButton(
+          icon: Icons.collections_bookmark_outlined,
+          tooltip: '場地庫',
+          onTap: onSites,
         ),
         const SizedBox(height: 10),
         _RoundIconButton(
@@ -1567,6 +1722,71 @@ class _DrawControlBar extends StatelessWidget {
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 child: const Text('閉合儲存'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VertexEditBar extends StatelessWidget {
+  const _VertexEditBar({
+    required this.count,
+    required this.onCancel,
+    required this.onCommit,
+  });
+
+  final int count;
+  final VoidCallback onCancel;
+  final VoidCallback onCommit;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapUp: (_) {},
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              const Icon(Icons.open_with, color: Color(0xFF1384E8), size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '拖曳頂點 · 長按刪除 · $count 點',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: onCancel,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  foregroundColor: const Color(0xFFB0BEC5),
+                ),
+                child: const Text('取消'),
+              ),
+              const SizedBox(width: 4),
+              FilledButton(
+                onPressed: onCommit,
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('完成儲存'),
               ),
             ],
           ),
@@ -1814,7 +2034,10 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
     if (_initialized) {
       return;
     }
-    _ipController.text = context.read<MissionMockProvider>().robotIp;
+    final host = context.read<MissionMockProvider>().robotIp;
+    _ipController.text = RosbridgeService.validateRobotIp(host) == null
+        ? host
+        : '';
     _initialized = true;
   }
 
@@ -1827,6 +2050,17 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
   @override
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
+    final settingsLocked =
+        mission.connectionSettingsPending ||
+        mission.planningMutationPending ||
+        mission.navCommandPending ||
+        mission.cancelPending ||
+        mission.navStatus == NavMockStatus.executing ||
+        mission.navStatus == NavMockStatus.paused ||
+        mission.recordingType != null ||
+        mission.recordCommandPending ||
+        mission.manualControlActive ||
+        mission.hasPendingRecordSave;
 
     return SafeArea(
       child: Padding(
@@ -1850,7 +2084,7 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
                 validator: (value) =>
                     RosbridgeService.validateRobotIp(value ?? ''),
                 decoration: const InputDecoration(
-                  labelText: '機器人 IP',
+                  labelText: '區網模式機器人 IP',
                   hintText: '192.168.1.100',
                   prefixIcon: Icon(Icons.router_outlined),
                   border: OutlineInputBorder(),
@@ -1861,7 +2095,9 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                onPressed: _saving ? null : () => _saveRobotIp(context),
+                onPressed: _saving || settingsLocked
+                    ? null
+                    : () => _saveRobotIp(context),
                 icon: _saving
                     ? const SizedBox(
                         width: 18,
@@ -1881,10 +2117,10 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
             _InfoRow(
               icon: Icons.storage_outlined,
               title: '資料來源',
-              detail: mission.rosConnected
-                  ? 'ROS 即時資料'
-                  : mission.mockDataEnabled
-                  ? 'Mock fallback'
+              detail: mission.mockDataEnabled
+                  ? 'Demo（與真機資料隔離）'
+                  : mission.rosConnected
+                  ? 'ROS 已連線 · ${mission.robotOnline ? '機器人在線' : 'heartbeat 不新鮮'}'
                   : '等待 ROS 真實資料',
             ),
             SwitchListTile(
@@ -1895,17 +2131,19 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
               ),
               subtitle: Text(
                 mission.mockDataEnabled
-                    ? 'rosbridge 未連線時使用 demo fallback'
-                    : '關閉 demo，畫面只吃 ROS 真實 topic',
+                    ? '已明確隔離為 demo，不會送出真機任務'
+                    : '關閉 demo，畫面只顯示 ROS 真實資料',
                 style: const TextStyle(
                   color: Color(0xFF78909C),
                   fontWeight: FontWeight.w700,
                 ),
               ),
               value: mission.mockDataEnabled,
-              onChanged: (value) {
-                unawaited(mission.setMockDataEnabled(value));
-              },
+              onChanged: settingsLocked
+                  ? null
+                  : (value) {
+                      unawaited(mission.setMockDataEnabled(value));
+                    },
             ),
             _InfoRow(icon: Icons.map_outlined, title: '底圖模式', detail: '灰底任務地圖'),
             _InfoRow(
@@ -1936,7 +2174,7 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
       messenger.showSnackBar(SnackBar(content: Text(error)));
       return;
     }
-    messenger.showSnackBar(const SnackBar(content: Text('機器人 IP 已更新')));
+    messenger.showSnackBar(const SnackBar(content: Text('區網機器人 IP 已更新')));
     navigator.pop();
   }
 }

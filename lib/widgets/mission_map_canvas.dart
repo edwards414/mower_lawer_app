@@ -316,6 +316,8 @@ class _MissionMapPainter extends CustomPainter {
     if (mission.layers.zones) {
       for (final zone in mission.zones) {
         if (zone.points.length < 3) continue;
+        // Skip the object under vertex-edit; the editor draws it live instead.
+        if (_editingObject('zone', zone.id)) continue;
         _drawPolygon(
           canvas,
           zone.points,
@@ -338,6 +340,7 @@ class _MissionMapPainter extends CustomPainter {
 
     if (mission.layers.risks) {
       for (final risk in mission.riskZones) {
+        if (_editingObject('risk', risk.id)) continue;
         _drawPolygon(
           canvas,
           risk.points,
@@ -354,6 +357,7 @@ class _MissionMapPainter extends CustomPainter {
 
     if (mission.layers.channels) {
       for (final channel in mission.channels) {
+        if (_editingObject('channel', channel.id)) continue;
         _drawPolyline(
           canvas,
           channel.points,
@@ -366,6 +370,10 @@ class _MissionMapPainter extends CustomPainter {
               closed: false);
         }
       }
+    }
+
+    if (mission.editVertexMode && mission.editPolygon.isNotEmpty) {
+      _drawVertexEditor(canvas, project);
     }
 
     if (mission.layers.coverage) {
@@ -718,6 +726,46 @@ class _MissionMapPainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round
         ..strokeWidth = strokeWidth,
     );
+  }
+
+  bool _editingObject(String kind, int id) =>
+      mission.editVertexMode && mission.editKind == kind && mission.editId == id;
+
+  /// Vertex-edit overlay (P3): the object's live polygon with large draggable
+  /// handles.
+  void _drawVertexEditor(
+    Canvas canvas,
+    Offset Function(MapPoint point) project,
+  ) {
+    final pts = mission.editPolygon;
+    if (pts.isEmpty) return;
+    const accent = Color(0xFF1384E8);
+    final closed = mission.editKind != 'channel';
+    if (closed && pts.length >= 3) {
+      _drawPolygon(
+        canvas,
+        pts,
+        project,
+        fill: accent.withValues(alpha: 0.12),
+        stroke: accent,
+        strokeWidth: 3,
+      );
+    } else if (pts.length >= 2) {
+      _drawPolyline(canvas, pts, project, color: accent, strokeWidth: 3);
+    }
+    for (final v in pts) {
+      final o = project(v);
+      canvas.drawCircle(o, 9, Paint()..color = Colors.white);
+      canvas.drawCircle(
+        o,
+        9,
+        Paint()
+          ..color = accent
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3,
+      );
+      canvas.drawCircle(o, 3, Paint()..color = accent);
+    }
   }
 
   /// In-progress hand-drawn polygon (P2): growing line + vertex dots, with a

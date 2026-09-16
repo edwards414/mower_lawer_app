@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/mission_mock_provider.dart';
 import '../services/rosbridge_service.dart';
 
-/// Mower configuration screen for setting robot IP
+/// Optional LAN override for development and on-site maintenance.
 class MowerConfigScreen extends StatefulWidget {
   const MowerConfigScreen({super.key});
 
@@ -24,8 +24,11 @@ class _MowerConfigScreenState extends State<MowerConfigScreen> {
   }
 
   Future<void> _loadConfig() async {
+    final host = context.read<MissionMockProvider>().robotIp;
     setState(() {
-      _ipController.text = context.read<MissionMockProvider>().robotIp;
+      _ipController.text = RosbridgeService.validateRobotIp(host) == null
+          ? host
+          : '';
       _isLoading = false;
     });
   }
@@ -45,7 +48,7 @@ class _MowerConfigScreenState extends State<MowerConfigScreen> {
         }
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('機器人 IP 已更新')));
+        ).showSnackBar(const SnackBar(content: Text('區網機器人 IP 已更新')));
         Navigator.pop(context);
       }
     }
@@ -88,7 +91,7 @@ class _MowerConfigScreenState extends State<MowerConfigScreen> {
                       TextFormField(
                         controller: _ipController,
                         decoration: const InputDecoration(
-                          labelText: 'Robot IP Address',
+                          labelText: 'LAN Robot IP Address',
                           hintText: 'e.g.: 192.168.1.100',
                           border: OutlineInputBorder(),
                           prefixIcon: Icon(Icons.router),

@@ -11,6 +11,16 @@ class ExecutionControlSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
     final executing = mission.navStatus == NavMockStatus.executing;
+    final active = executing || mission.navStatus == NavMockStatus.paused;
+    final commandPending = mission.navCommandPending || mission.cancelPending;
+    final progressKnown = mission.mockDataEnabled;
+    final canCancel =
+        !mission.cancelRequestInFlight &&
+        !mission.cancelPending &&
+        ((mission.mockDataEnabled && executing) ||
+            (!mission.mockDataEnabled &&
+                mission.rosConnected &&
+                (active || mission.navCommandPending)));
     final selectedZoneId =
         mission.zones.any((zone) => zone.id == mission.selectedZoneId)
         ? mission.selectedZoneId
@@ -27,7 +37,7 @@ class ExecutionControlSheet extends StatelessWidget {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
               ),
             ),
-            _StatusBadge(label: mission.navStatusLabel(), active: executing),
+            _StatusBadge(label: mission.navStatusLabel(), active: active),
           ],
         ),
         const SizedBox(height: 12),
@@ -50,7 +60,7 @@ class ExecutionControlSheet extends StatelessWidget {
                     ),
                   )
                   .toList(),
-              onChanged: executing || mission.zones.isEmpty
+              onChanged: active || commandPending || mission.zones.isEmpty
                   ? null
                   : (value) {
                       if (value != null) {
@@ -64,7 +74,11 @@ class ExecutionControlSheet extends StatelessWidget {
         ClipRRect(
           borderRadius: BorderRadius.circular(10),
           child: LinearProgressIndicator(
-            value: mission.coverageProgress,
+            value: progressKnown
+                ? mission.coverageProgress
+                : active
+                ? null
+                : 0,
             minHeight: 10,
             backgroundColor: const Color(0xFFE2E8EA),
           ),
@@ -75,20 +89,29 @@ class ExecutionControlSheet extends StatelessWidget {
             Expanded(
               child: _RunMetric(
                 label: '進度',
-                value: '${(mission.coverageProgress * 100).round()}%',
+                value: progressKnown
+                    ? '${(mission.coverageProgress * 100).round()}%'
+                    : active
+                    ? '後端執行中'
+                    : mission.coverageProgress >= 1
+                    ? '已完成'
+                    : '未提供',
               ),
             ),
             Expanded(
               child: _RunMetric(
                 label: 'Segment',
-                value:
-                    '${mission.currentSegment}/${mission.coverageRows.length}',
+                value: progressKnown
+                    ? '${mission.currentSegment}/${mission.coverageRows.length}'
+                    : '未提供',
               ),
             ),
             Expanded(
               child: _RunMetric(
                 label: '速度',
-                value: executing ? '0.5 m/s' : '0.0 m/s',
+                value: mission.mockDataEnabled && executing
+                    ? '0.5 m/s（Demo）'
+                    : '—',
               ),
             ),
           ],
@@ -98,7 +121,9 @@ class ExecutionControlSheet extends StatelessWidget {
           children: [
             Expanded(
               child: FilledButton.icon(
-                onPressed: executing ? null : mission.startExecution,
+                onPressed: mission.canStartMission
+                    ? mission.startExecution
+                    : null,
                 icon: const Icon(Icons.play_arrow),
                 label: const Text('開始'),
               ),
@@ -106,7 +131,7 @@ class ExecutionControlSheet extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: executing ? mission.cancelExecution : null,
+                onPressed: canCancel ? mission.cancelExecution : null,
                 icon: const Icon(Icons.stop),
                 label: const Text('取消'),
               ),

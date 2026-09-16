@@ -31,6 +31,7 @@ class MapObjectsSheet extends StatelessWidget {
             detail: 'Zone ${zone.id} · ${zone.hasCoveragePath ? '已規劃' : '未規劃'}',
             selected: mission.isObjectSelected('zone', zone.id),
             onTap: () => mission.selectObject('zone', zone.id),
+            onEdit: () => mission.startVertexEdit('zone', zone.id),
             onDelete: () =>
                 _confirmDelete(context, mission, 'zone', zone.id, zone.name),
           ),
@@ -43,6 +44,7 @@ class MapObjectsSheet extends StatelessWidget {
             detail: '禁入區 · ${risk.points.length} points',
             selected: mission.isObjectSelected('risk', risk.id),
             onTap: () => mission.selectObject('risk', risk.id),
+            onEdit: () => mission.startVertexEdit('risk', risk.id),
             onDelete: () =>
                 _confirmDelete(context, mission, 'risk', risk.id, risk.name),
           ),
@@ -55,6 +57,7 @@ class MapObjectsSheet extends StatelessWidget {
             detail: '通道 · ${channel.points.length} points',
             selected: mission.isObjectSelected('channel', channel.id),
             onTap: () => mission.selectObject('channel', channel.id),
+            onEdit: () => mission.startVertexEdit('channel', channel.id),
             onDelete: () => _confirmDelete(
               context,
               mission,
@@ -155,6 +158,7 @@ class _ObjectRow extends StatelessWidget {
     required this.detail,
     this.selected = false,
     this.onTap,
+    this.onEdit,
     this.onDelete,
   });
 
@@ -164,6 +168,7 @@ class _ObjectRow extends StatelessWidget {
   final String detail;
   final bool selected;
   final VoidCallback? onTap;
+  final VoidCallback? onEdit;
   final VoidCallback? onDelete;
 
   @override
@@ -222,6 +227,13 @@ class _ObjectRow extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (onEdit != null)
+                  IconButton(
+                    icon: const Icon(Icons.tune, color: Color(0xFF1384E8)),
+                    onPressed: onEdit,
+                    tooltip: '調整頂點',
+                    visualDensity: VisualDensity.compact,
+                  ),
                 if (onDelete != null)
                   IconButton(
                     icon: const Icon(
@@ -230,6 +242,7 @@ class _ObjectRow extends StatelessWidget {
                     ),
                     onPressed: onDelete,
                     tooltip: '刪除',
+                    visualDensity: VisualDensity.compact,
                   ),
               ],
             ),

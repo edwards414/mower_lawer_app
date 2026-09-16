@@ -24,6 +24,11 @@ void main() {
       ]),
     );
 
+    provider.updateLocation(
+      demoMode: false,
+      latitude: 25.033,
+      longitude: 121.5654,
+    );
     await provider.refresh();
 
     expect(provider.snapshot, same(firstSnapshot));

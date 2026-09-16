@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'providers/mission_mock_provider.dart';
-import 'providers/mower_status_provider.dart';
+import 'providers/recorder_provider.dart';
 import 'providers/robot_fleet_provider.dart';
+import 'providers/robot_info_provider.dart';
 import 'providers/weather_provider.dart';
 import 'screens/home_screen.dart';
 import 'services/rosbridge_service.dart';
@@ -41,18 +42,29 @@ class MowerApp extends StatelessWidget {
           create: (ctx) =>
               MissionMockProvider(rosbridge: ctx.read<RosbridgeService>()),
         ),
-        ChangeNotifierProvider<MowerStatusProvider>(
-          create: (ctx) => MowerStatusProvider(ctx.read<RosService>()),
+        ChangeNotifierProvider<RecorderProvider>(
+          create: (ctx) =>
+              RecorderProvider(rosbridge: ctx.read<RosbridgeService>()),
+        ),
+        ChangeNotifierProvider<RobotInfoProvider>(
+          create: (ctx) =>
+              RobotInfoProvider(rosbridge: ctx.read<RosbridgeService>()),
         ),
         ChangeNotifierProxyProvider<MissionMockProvider, RobotFleetProvider>(
           create: (ctx) =>
               RobotFleetProvider(rosbridge: ctx.read<RosbridgeService>()),
           update: (_, mission, fleet) => fleet!..syncFromMission(mission),
         ),
-        ChangeNotifierProxyProvider<MowerStatusProvider, WeatherProvider>(
+        ChangeNotifierProxyProvider<MissionMockProvider, WeatherProvider>(
           create: (ctx) => WeatherProvider(service: ctx.read<WeatherService>()),
-          update: (_, mowerStatus, weather) =>
-              weather!..updateFromMowerStatus(mowerStatus.status),
+          update: (_, mission, weather) {
+            weather!.updateLocation(
+              demoMode: mission.mockDataEnabled,
+              latitude: mission.gpsLatitude,
+              longitude: mission.gpsLongitude,
+            );
+            return weather;
+          },
         ),
       ],
       child: MaterialApp(

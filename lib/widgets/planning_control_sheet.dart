@@ -32,14 +32,16 @@ class PlanningControlSheet extends StatelessWidget {
           child: SegmentedButton<CoveragePatternKind>(
             showSelectedIcon: false,
             selected: {mission.coveragePattern},
-            onSelectionChanged: (selection) {
-              final pattern = selection.first;
-              mission.setCoveragePattern(pattern);
-              // 'Custom' opens the uploaded-image coverage flow.
-              if (pattern == CoveragePatternKind.custom) {
-                _openImageMission(context);
-              }
-            },
+            onSelectionChanged: mission.canMutatePlanning
+                ? (selection) {
+                    final pattern = selection.first;
+                    mission.setCoveragePattern(pattern);
+                    // 'Custom' opens the uploaded-image coverage flow.
+                    if (pattern == CoveragePatternKind.custom) {
+                      _openImageMission(context);
+                    }
+                  }
+                : null,
             segments: const [
               ButtonSegment(
                 value: CoveragePatternKind.zigzag,
@@ -66,13 +68,48 @@ class PlanningControlSheet extends StatelessWidget {
           min: 0.3,
           max: 1.6,
           unit: 'm',
-          onChanged: mission.setStripWidth,
+          onChanged: mission.canMutatePlanning ? mission.setStripWidth : null,
+        ),
+        _ParameterSlider(
+          label: 'Waypoint Spacing',
+          value: mission.waypointSpacingM,
+          min: 0.05,
+          max: 0.7,
+          unit: 'm',
+          onChanged: mission.canMutatePlanning
+              ? mission.setWaypointSpacing
+              : null,
+        ),
+        if (mission.coveragePattern == CoveragePatternKind.zigzag)
+          _ParameterSlider(
+            label: 'Zigzag Angle',
+            value: mission.zigzagAngleDeg,
+            min: 0,
+            max: 180,
+            divisions: 12,
+            unit: '°',
+            onChanged: mission.canMutatePlanning
+                ? mission.setZigzagAngle
+                : null,
+          ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text(
+            '沿 zone 邊界先割一圈',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: const Text('填內部前先沿每個 zone 外緣繞一圈'),
+          value: mission.boundaryRing,
+          onChanged: mission.canMutatePlanning ? mission.setBoundaryRing : null,
         ),
         const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,
           child: FilledButton.icon(
-            onPressed: () => mission.runPlanningStep('coverage'),
+            onPressed: mission.canMutatePlanning
+                ? () => mission.runPlanningStep('coverage')
+                : null,
             icon: const Icon(Icons.route),
             label: const Text('生成覆蓋路徑'),
           ),
@@ -128,6 +165,7 @@ class _ParameterSlider extends StatelessWidget {
     required this.max,
     required this.unit,
     required this.onChanged,
+    this.divisions = 13,
   });
 
   final String label;
@@ -135,8 +173,8 @@ class _ParameterSlider extends StatelessWidget {
   final double min;
   final double max;
   final String unit;
-  final ValueChanged<double> onChanged;
-  static const int divisions = 13;
+  final ValueChanged<double>? onChanged;
+  final int divisions;
   static const int fractionDigits = 2;
 
   @override
@@ -162,7 +200,7 @@ class _ParameterSlider extends StatelessWidget {
           ],
         ),
         Slider(
-          value: value,
+          value: value.clamp(min, max).toDouble(),
           min: min,
           max: max,
           divisions: divisions,

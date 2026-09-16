@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
-import '../providers/mower_status_provider.dart';
 
 class TopStatusPill extends StatelessWidget {
   const TopStatusPill({super.key});
@@ -11,8 +10,7 @@ class TopStatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
-    final mowerStatus = context.watch<MowerStatusProvider>().status;
-    final battery = mowerStatus?.batteryPercent ?? 85;
+    final battery = mission.batteryPercent;
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -34,15 +32,17 @@ class TopStatusPill extends StatelessWidget {
           children: [
             _StatusItem(
               icon: Icons.hub_outlined,
-              label: mission.rosConnected
-                  ? 'ROS'
-                  : mission.mockDataEnabled
-                  ? 'Mock'
+              label: mission.mockDataEnabled
+                  ? 'Demo'
+                  : mission.robotOnline
+                  ? 'Online'
+                  : mission.rosConnected
+                  ? 'Offline'
                   : 'Wait',
-              color: mission.rosConnected
-                  ? const Color(0xFF19A763)
-                  : mission.mockDataEnabled
+              color: mission.mockDataEnabled
                   ? const Color(0xFFE08C1A)
+                  : mission.robotOnline
+                  ? const Color(0xFF19A763)
                   : const Color(0xFF607D8B),
             ),
             const SizedBox(width: 10),
@@ -54,10 +54,18 @@ class TopStatusPill extends StatelessWidget {
                   : const Color(0xFF607D8B),
             ),
             const SizedBox(width: 10),
-            const _StatusItem(
+            _StatusItem(
               icon: Icons.my_location,
-              label: 'RTK',
-              color: Color(0xFF19A763),
+              label: mission.mockDataEnabled
+                  ? 'Demo GPS'
+                  : mission.hasFreshGpsFix
+                  ? 'GPS'
+                  : 'No fix',
+              color: mission.mockDataEnabled
+                  ? const Color(0xFFE08C1A)
+                  : mission.hasFreshGpsFix
+                  ? const Color(0xFF19A763)
+                  : const Color(0xFF607D8B),
             ),
             const SizedBox(width: 10),
             _BatteryStatus(battery: battery),
@@ -103,20 +111,27 @@ class _StatusItem extends StatelessWidget {
 class _BatteryStatus extends StatelessWidget {
   const _BatteryStatus({required this.battery});
 
-  final double battery;
+  final double? battery;
 
   @override
   Widget build(BuildContext context) {
-    final color = battery < 35
+    final battery = this.battery;
+    final color = battery == null
+        ? const Color(0xFF607D8B)
+        : battery < 35
         ? const Color(0xFFE08C1A)
         : const Color(0xFF19A763);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(_batteryIcon(battery), size: 18, color: color),
+        Icon(
+          battery == null ? Icons.battery_unknown : _batteryIcon(battery),
+          size: 18,
+          color: color,
+        ),
         const SizedBox(width: 4),
         Text(
-          '${battery.toStringAsFixed(0)}%',
+          battery == null ? '--' : '${battery.toStringAsFixed(0)}%',
           style: TextStyle(
             color: color,
             fontSize: 12,

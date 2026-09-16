@@ -1,0 +1,165 @@
+# iOS release: build a signed App Store archive and upload it to TestFlight.
+#
+# Runs on every `v*` tag (v1.2.0 -> build name 1.2.0) and on demand. The
+# build number is the workflow run number, so it always increases.
+#
+# Signing uses App Store Connect API-key based automatic signing
+# (`xcodebuild -allowProvisioningUpdates`): Xcode manages the provisioning
+# profile and, if no Apple Distribution certificate is imported, uses a
+# cloud-managed one. Secrets (repo Settings -> Secrets and variables -> Actions):
+#
+#   APP_STORE_CONNECT_KEY_ID        key ID of an App Store Connect API key
+#   APP_STORE_CONNECT_ISSUER_ID     issuer ID (Users and Access -> Integrations)
+#   APP_STORE_CONNECT_PRIVATE_KEY   contents of the AuthKey_XXXX.p8 file
+#                                   (Admin role is required for cloud-managed
+#                                   distribution certificates)
+#   IOS_DIST_P12_BASE64             optional: base64 of an Apple Distribution
+#                                   certificate + private key (.p12)
+#   IOS_DIST_P12_PASSWORD           optional: its password
+#
+# See docs/RELEASE.md.
+name: iOS TestFlight
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_name:
+        description: 'Marketing version (default: from the tag, else pubspec.yaml)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+env:
+  TEAM_ID: 424PMQV2V7
+  BUNDLE_ID: com.edwards.mower
+  # secrets cannot be tested in `if:` directly
+  HAS_DIST_P12: ${{ secrets.IOS_DIST_P12_BASE64 != '' }}
+
+jobs:
+  testflight:
+    name: Archive and upload
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.2.app 2>/dev/null || true
+          xcodebuild -version
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze and test
+        run: |
+          flutter analyze
+          flutter test
+
+      - name: Version
+        id: version
+        run: |
+          name="${{ github.event.inputs.build_name }}"
+          if [ -z "$name" ] && [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            name="${GITHUB_REF#refs/tags/v}"
+          fi
+          if [ -z "$name" ]; then
+            name="$(sed -nE 's/^version:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' pubspec.yaml)"
+          fi
+          echo "build_name=${name}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "building ${name} (${GITHUB_RUN_NUMBER})"
+
+      - name: Install App Store Connect API key
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY_ID" ] || [ -z "$PRIVATE_KEY" ]; then
+            echo "::error::APP_STORE_CONNECT_KEY_ID / APP_STORE_CONNECT_PRIVATE_KEY secrets are not set"
+            exit 1
+          fi
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$PRIVATE_KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8"
+          echo "ASC_KEY_PATH=$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8" >> "$GITHUB_ENV"
+
+      - name: Import distribution certificate (optional)
+        if: env.HAS_DIST_P12 == 'true'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.IOS_DIST_P12_BASE64 }}
+          p12-password: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+
+      - name: Generate Xcode configuration
+        run: |
+          flutter build ios --release --config-only --no-codesign \
+            --build-name="${{ steps.version.outputs.build_name }}" \
+            --build-number="${{ steps.version.outputs.build_number }}"
+
+      - name: Archive
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/ios/Runner.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            archive | tail -n 60
+
+      - name: Export .ipa
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/ios/Runner.xcarchive \
+            -exportOptionsPlist ios/ExportOptions.plist \
+            -exportPath build/ios/ipa \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID"
+          ls -la build/ios/ipa
+
+      - name: Upload to TestFlight
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          ipa="$(ls build/ios/ipa/*.ipa | head -n 1)"
+          xcrun altool --upload-app -f "$ipa" -t ios \
+            --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
+
+      - name: Keep the .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-${{ steps.version.outputs.build_name }}-${{ steps.version.outputs.build_number }}
+          path: build/ios/ipa/*.ipa
+          if-no-files-found: error

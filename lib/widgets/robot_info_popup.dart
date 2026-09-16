@@ -3,21 +3,19 @@ import 'package:flutter/material.dart';
 import '../models/robot_fleet.dart';
 
 class RobotInfoPopup extends StatelessWidget {
-  const RobotInfoPopup({
-    super.key,
-    required this.robot,
-    required this.onClose,
-  });
+  const RobotInfoPopup({super.key, required this.robot, required this.onClose});
 
   final RobotAgent robot;
   final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
-    final battery = robot.batteryPercent;
+    final battery = robot.hasBattery ? robot.batteryPercent : null;
     final progress = robot.progress;
 
-    final batteryColor = battery > 50
+    final batteryColor = battery == null
+        ? const Color(0xFF78909C)
+        : battery > 50
         ? const Color(0xFF168848)
         : battery > 20
         ? const Color(0xFFE65100)
@@ -80,7 +78,11 @@ class RobotInfoPopup extends StatelessWidget {
                     behavior: HitTestBehavior.opaque,
                     child: const Padding(
                       padding: EdgeInsets.all(4),
-                      child: Icon(Icons.close, size: 18, color: Color(0xFF78909C)),
+                      child: Icon(
+                        Icons.close,
+                        size: 18,
+                        color: Color(0xFF78909C),
+                      ),
                     ),
                   ),
                 ],
@@ -88,10 +90,14 @@ class RobotInfoPopup extends StatelessWidget {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Icon(Icons.battery_charging_full, size: 15, color: batteryColor),
+                  Icon(
+                    Icons.battery_charging_full,
+                    size: 15,
+                    color: batteryColor,
+                  ),
                   const SizedBox(width: 4),
                   Text(
-                    '${battery.round()}%',
+                    battery == null ? '未提供' : '${battery.round()}%',
                     style: TextStyle(
                       color: batteryColor,
                       fontSize: 13,
@@ -103,7 +109,9 @@ class RobotInfoPopup extends StatelessWidget {
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(3),
                       child: LinearProgressIndicator(
-                        value: (battery / 100).clamp(0.0, 1.0),
+                        value: battery == null
+                            ? null
+                            : (battery / 100).clamp(0.0, 1.0),
                         minHeight: 6,
                         backgroundColor: const Color(0xFFE6ECE9),
                         color: batteryColor,

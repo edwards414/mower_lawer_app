@@ -7,6 +7,11 @@
 
 # Secrets (Mapbox token etc.) — loaded via --dart-define-from-file=.env
 .env
+# App Store Connect / TestFlight upload credentials
+.env.appstore
+*.p8
+private_keys/
+AuthKey_*.p8
 .atom/
 .build/
 .buildlog/
