@@ -45,6 +45,7 @@ dependencies:
   image_picker: ^1.2.2
   image: ^4.8.0
   flutter_webrtc: ^1.5.2
+  package_info_plus: ^10.2.1
 
 dev_dependencies:
   flutter_test:

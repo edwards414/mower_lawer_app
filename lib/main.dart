@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'providers/mission_mock_provider.dart';
 import 'providers/recorder_provider.dart';
 import 'providers/robot_fleet_provider.dart';
+import 'providers/robot_info_provider.dart';
 import 'providers/weather_provider.dart';
 import 'screens/home_screen.dart';
 import 'services/rosbridge_service.dart';
@@ -44,6 +45,10 @@ class MowerApp extends StatelessWidget {
         ChangeNotifierProvider<RecorderProvider>(
           create: (ctx) =>
               RecorderProvider(rosbridge: ctx.read<RosbridgeService>()),
+        ),
+        ChangeNotifierProvider<RobotInfoProvider>(
+          create: (ctx) =>
+              RobotInfoProvider(rosbridge: ctx.read<RosbridgeService>()),
         ),
         ChangeNotifierProxyProvider<MissionMockProvider, RobotFleetProvider>(
           create: (ctx) =>

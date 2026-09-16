@@ -9,6 +9,8 @@ import '../providers/mission_mock_provider.dart';
 import '../providers/weather_provider.dart';
 import '../services/rosbridge_service.dart';
 import '../providers/robot_fleet_provider.dart';
+import '../providers/robot_info_provider.dart';
+import '../models/robot_info.dart';
 import 'recorder_screen.dart';
 import '../widgets/add_object_sheet.dart';
 import '../widgets/execution_control_sheet.dart';
@@ -20,6 +22,7 @@ import '../widgets/satellite_map_view.dart';
 import '../widgets/operation_log_sheet.dart';
 import '../widgets/planning_control_sheet.dart';
 import '../widgets/robot_info_popup.dart';
+import '../widgets/robot_version_card.dart';
 import '../widgets/site_library_sheet.dart';
 import '../widgets/top_status_pill.dart';
 import 'self_check_screen.dart';
@@ -101,13 +104,25 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          const _DashboardHomePage(),
-          MissionMapScreen(onManual: () => setState(() => _selectedIndex = 2)),
-          _ManualControlTab(
-            onGoHome: () {
-              context.read<MissionMockProvider>().stopManualControl();
-              setState(() => _selectedIndex = 0);
-            },
+          _DashboardHomePage(
+            onShowVersions: () => setState(() => _selectedIndex = 4),
+          ),
+          // Operating pages are blocked while the robot's API version is
+          // outside what this app supports (see RobotInfoProvider).
+          CompatibilityGate(
+            onShowVersions: () => setState(() => _selectedIndex = 4),
+            child: MissionMapScreen(
+              onManual: () => setState(() => _selectedIndex = 2),
+            ),
+          ),
+          CompatibilityGate(
+            onShowVersions: () => setState(() => _selectedIndex = 4),
+            child: _ManualControlTab(
+              onGoHome: () {
+                context.read<MissionMockProvider>().stopManualControl();
+                setState(() => _selectedIndex = 0);
+              },
+            ),
           ),
           const _ScheduleTab(),
           const _MoreTab(),
@@ -173,30 +188,41 @@ class _ManualControlTabState extends State<_ManualControlTab> {
 }
 
 class _DashboardHomePage extends StatelessWidget {
-  const _DashboardHomePage();
+  const _DashboardHomePage({this.onShowVersions});
+
+  final VoidCallback? onShowVersions;
 
   @override
   Widget build(BuildContext context) {
+    final incompatible = context.select<RobotInfoProvider, bool>(
+      (p) =>
+          p.compatibility == RobotCompatibility.robotTooOld ||
+          p.compatibility == RobotCompatibility.appTooOld,
+    );
     return ColoredBox(
       color: const Color(0xFFF6F7F8),
       child: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
           physics: const BouncingScrollPhysics(),
-          children: const [
-            _DashboardHeader(),
-            SizedBox(height: 16),
-            _ConnectionCard(),
-            SizedBox(height: 10),
-            _WeatherCard(),
-            SizedBox(height: 10),
-            _BatteryCard(),
-            SizedBox(height: 10),
-            _MissionSummaryCard(),
-            SizedBox(height: 10),
-            _NextScheduleCard(),
-            SizedBox(height: 10),
-            _DockStatusCard(),
+          children: [
+            const _DashboardHeader(),
+            const SizedBox(height: 16),
+            if (incompatible) ...[
+              CompatibilityNotice(onShowVersions: onShowVersions),
+              const SizedBox(height: 10),
+            ],
+            const _ConnectionCard(),
+            const SizedBox(height: 10),
+            const _WeatherCard(),
+            const SizedBox(height: 10),
+            const _BatteryCard(),
+            const SizedBox(height: 10),
+            const _MissionSummaryCard(),
+            const SizedBox(height: 10),
+            const _NextScheduleCard(),
+            const SizedBox(height: 10),
+            const _DockStatusCard(),
           ],
         ),
       ),
@@ -1041,6 +1067,8 @@ class _MoreTab extends StatelessWidget {
                 ],
               ),
             ),
+            const SizedBox(height: 10),
+            const _DashboardCard(child: RobotVersionCard()),
             const SizedBox(height: 10),
             _DashboardCard(
               child: Column(
