@@ -7,7 +7,7 @@ import 'dart:convert';
 /// app adopts a new robot API; keep the lower bound as long as the app still
 /// works with older robots.
 const int kMinRobotApiVersion = 1;
-const int kMaxRobotApiVersion = 1;
+const int kMaxRobotApiVersion = 2;
 
 enum RobotCompatibility {
   /// No `/robot/info` received yet (old robot without it, or not connected).

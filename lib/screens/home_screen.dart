@@ -10,8 +10,10 @@ import '../providers/weather_provider.dart';
 import '../services/rosbridge_service.dart';
 import '../providers/robot_fleet_provider.dart';
 import '../providers/robot_info_provider.dart';
+import '../providers/robot_registry.dart';
 import '../models/robot_info.dart';
 import 'recorder_screen.dart';
+import 'robots_screen.dart';
 import '../widgets/add_object_sheet.dart';
 import '../widgets/execution_control_sheet.dart';
 import '../widgets/manual_control_overlay.dart';
@@ -199,6 +201,7 @@ class _DashboardHomePage extends StatelessWidget {
           p.compatibility == RobotCompatibility.robotTooOld ||
           p.compatibility == RobotCompatibility.appTooOld,
     );
+    final mismatch = context.select<RobotRegistry, bool>((r) => r.identityMismatch);
     return ColoredBox(
       color: const Color(0xFFF6F7F8),
       child: SafeArea(
@@ -208,6 +211,10 @@ class _DashboardHomePage extends StatelessWidget {
           children: [
             const _DashboardHeader(),
             const SizedBox(height: 16),
+            if (mismatch) ...[
+              const IdentityMismatchNotice(),
+              const SizedBox(height: 10),
+            ],
             if (incompatible) ...[
               CompatibilityNotice(onShowVersions: onShowVersions),
               const SizedBox(height: 10),
@@ -1041,8 +1048,21 @@ class _MoreTab extends StatelessWidget {
               child: Column(
                 children: [
                   _MoreActionRow(
+                    icon: Icons.smart_toy_outlined,
+                    title: '我的機器人',
+                    detail: () {
+                      final active = context.watch<RobotRegistry>().active;
+                      if (active == null) return '尚未配對 · 掃描 QR code';
+                      return '${active.displayName} · ${active.usesLan ? 'LAN ${active.lanAddress}' : '遠端'}';
+                    }(),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const RobotsScreen()),
+                    ),
+                  ),
+                  const Divider(height: 24),
+                  _MoreActionRow(
                     icon: Icons.settings_outlined,
-                    title: '機器人設定',
+                    title: '連線設定（進階）',
                     detail: mission.robotIp,
                     onTap: () =>
                         _showAppSheet(context, const _SettingsQuickSheet()),

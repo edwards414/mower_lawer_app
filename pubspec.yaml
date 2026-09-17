@@ -46,6 +46,9 @@ dependencies:
   image: ^4.8.0
   flutter_webrtc: ^1.5.2
   package_info_plus: ^10.2.1
+  crypto: ^3.0.7
+  flutter_secure_storage: ^11.2.0
+  mobile_scanner: ^7.4.2
 
 dev_dependencies:
   flutter_test:
