@@ -5,6 +5,7 @@ import 'providers/mission_mock_provider.dart';
 import 'providers/recorder_provider.dart';
 import 'providers/robot_fleet_provider.dart';
 import 'providers/robot_info_provider.dart';
+import 'providers/robot_registry.dart';
 import 'providers/weather_provider.dart';
 import 'screens/home_screen.dart';
 import 'services/rosbridge_service.dart';
@@ -49,6 +50,14 @@ class MowerApp extends StatelessWidget {
         ChangeNotifierProvider<RobotInfoProvider>(
           create: (ctx) =>
               RobotInfoProvider(rosbridge: ctx.read<RosbridgeService>()),
+        ),
+        // Paired robots (keychain) -> rosbridge endpoint + hand-shake; the
+        // reported robot_id from /robot/info is checked against the pairing.
+        ChangeNotifierProxyProvider<RobotInfoProvider, RobotRegistry>(
+          create: (ctx) =>
+              RobotRegistry(rosbridge: ctx.read<RosbridgeService>())..load(),
+          update: (_, info, registry) =>
+              registry!..noteReportedRobotId(info.stale ? null : info.info?.robotId),
         ),
         ChangeNotifierProxyProvider<MissionMockProvider, RobotFleetProvider>(
           create: (ctx) =>

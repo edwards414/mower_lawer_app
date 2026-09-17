@@ -12,6 +12,10 @@ enum RosbridgeConnectionState { disconnected, connecting, connected, retrying }
 typedef RosbridgeConnector =
     WebSocketChannel Function(Uri uri, {Map<String, dynamic> headers});
 
+/// Extra HTTP headers for the WebSocket upgrade, computed fresh for every
+/// connection attempt (the pairing hand-shake carries a time and a nonce).
+typedef RosbridgeHeaderProvider = Map<String, String> Function();
+
 class RosbridgeTopicMessage {
   const RosbridgeTopicMessage({required this.topic, required this.message});
 
@@ -58,6 +62,7 @@ class RosbridgeService {
        _connector = connector;
 
   String _url;
+  RosbridgeHeaderProvider? _authHeaders;
   final RosbridgeConnector _connector;
   final Map<String, _RosbridgeSubscription> _subscriptions = {};
   final Map<String, String> _advertisements = {};
@@ -140,6 +145,32 @@ class RosbridgeService {
   static String _urlForRobotIp(String ip) =>
       'ws://${ip.trim()}:$_rosbridgePort';
 
+  /// Point the service at a paired robot: its rosbridge URL plus the
+  /// per-connection pairing headers. Reconnects when the URL changes.
+  void configureEndpoint({
+    required String url,
+    RosbridgeHeaderProvider? authHeaders,
+  }) {
+    _authHeaders = authHeaders;
+    if (url.isEmpty) {
+      return;
+    }
+    if (_url == url) {
+      connect();
+      return;
+    }
+    _url = url;
+    reconnect();
+  }
+
+  Map<String, String> _upgradeHeaders() {
+    final provider = _authHeaders;
+    return {
+      ...RemoteAccessConfig.cloudflareAccessHeaders,
+      if (provider != null) ...provider(),
+    };
+  }
+
   void connect() {
     if (_disposed || _connected || _channel != null) {
       return;
@@ -148,7 +179,7 @@ class RosbridgeService {
     try {
       final channel = _connector(
         Uri.parse(_url),
-        headers: RemoteAccessConfig.cloudflareAccessHeaders,
+        headers: _upgradeHeaders(),
       );
       _channel = channel;
       _socketSubscription = channel.stream.listen(

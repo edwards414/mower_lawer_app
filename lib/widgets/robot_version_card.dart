@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 
 import '../models/robot_info.dart';
 import '../providers/robot_info_provider.dart';
+import '../providers/robot_registry.dart';
+import '../screens/robots_screen.dart';
 
 const _kGreen = Color(0xFF167A4A);
 const _kGrey = Color(0xFF78909C);
@@ -422,7 +424,10 @@ class CompatibilityGate extends StatelessWidget {
     final blocked = context.select<RobotInfoProvider, bool>(
       (p) => p.blocksOperation,
     );
-    if (!blocked) return child;
+    final mismatch = context.select<RobotRegistry, bool>(
+      (r) => r.identityMismatch,
+    );
+    if (!blocked && !mismatch) return child;
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -434,12 +439,75 @@ class CompatibilityGate extends StatelessWidget {
               alignment: Alignment.topCenter,
               child: Padding(
                 padding: const EdgeInsets.all(22),
-                child: CompatibilityNotice(onShowVersions: onShowVersions),
+                child: mismatch
+                    ? const IdentityMismatchNotice()
+                    : CompatibilityNotice(onShowVersions: onShowVersions),
               ),
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The robot we reached is not the one this phone paired with (relay or
+/// LAN address points at another machine). Operation stays blocked until
+/// the operator picks the right robot.
+class IdentityMismatchNotice extends StatelessWidget {
+  const IdentityMismatchNotice({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final registry = context.watch<RobotRegistry>();
+    final active = registry.active;
+    if (active == null || !registry.identityMismatch) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFEBEE),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFEF9A9A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.gpp_bad_outlined, color: _kBad),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '連到的不是配對的機器人',
+                  style: TextStyle(fontWeight: FontWeight.w900, color: _kBad),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '這個位址回報的是 ${registry.reportedRobotId}，但你配對的是 '
+            '${active.displayName}（${active.id}）。檢查 LAN 位址 / relay 設定，或改選正確的機器人。',
+            style: const TextStyle(
+              color: Color(0xFF7F1D1D),
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const RobotsScreen()),
+              ),
+              child: const Text('我的機器人'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
