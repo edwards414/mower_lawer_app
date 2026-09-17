@@ -47,7 +47,9 @@ env:
 jobs:
   testflight:
     name: Archive and upload
-    runs-on: macos-15
+    # macos-26: App Store Connect rejects anything not built with the iOS 26
+    # SDK (macos-15's default Xcode 16.4 ships iOS 18.5).
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -60,9 +62,9 @@ jobs:
           cache: true
 
       - name: Select Xcode
-        # The image's default Xcode: pinning an older one (16.2) failed with
-        # "iOS 18.2 is not installed" because only the default Xcode has its
-        # iOS platform downloaded.
+        # The image's default Xcode (26.x on macos-26): pinning another
+        # version fails with "iOS xx is not installed" because only the
+        # default Xcode has its iOS platform downloaded.
         run: |
           xcode-select -p
           xcodebuild -version
