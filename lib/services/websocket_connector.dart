@@ -7,6 +7,7 @@ import 'websocket_connector_stub.dart'
 WebSocketChannel connectWebSocket(
   Uri uri, {
   Map<String, dynamic> headers = const {},
+  List<String> protocols = const [],
 }) {
-  return platform.connectWebSocket(uri, headers: headers);
+  return platform.connectWebSocket(uri, headers: headers, protocols: protocols);
 }

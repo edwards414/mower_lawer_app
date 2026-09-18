@@ -47,7 +47,9 @@ env:
 jobs:
   testflight:
     name: Archive and upload
-    runs-on: macos-15
+    # macos-26: App Store Connect rejects anything not built with the iOS 26
+    # SDK (macos-15's default Xcode 16.4 ships iOS 18.5).
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -60,9 +62,13 @@ jobs:
           cache: true
 
       - name: Select Xcode
+        # The image's default Xcode (26.x on macos-26): pinning another
+        # version fails with "iOS xx is not installed" because only the
+        # default Xcode has its iOS platform downloaded.
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.2.app 2>/dev/null || true
+          xcode-select -p
           xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos
 
       - name: Install dependencies
         run: flutter pub get
@@ -83,8 +89,11 @@ jobs:
             name="$(sed -nE 's/^version:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' pubspec.yaml)"
           fi
           echo "build_name=${name}" >> "$GITHUB_OUTPUT"
-          echo "build_number=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "building ${name} (${GITHUB_RUN_NUMBER})"
+          # +100: TestFlight already has a build 1 (uploaded by hand in July),
+          # and the run number restarts at 1 for this workflow.
+          number=$((GITHUB_RUN_NUMBER + 100))
+          echo "build_number=${number}" >> "$GITHUB_OUTPUT"
+          echo "building ${name} (${number})"
 
       - name: Install App Store Connect API key
         env:

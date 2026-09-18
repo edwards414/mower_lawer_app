@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../services/ros_service.dart';
@@ -24,7 +25,7 @@ class SettingsScreen extends StatelessWidget {
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
               IconButton(
-                icon: const Icon(Icons.close),
+                icon: const Icon(AppIcons.x),
                 onPressed: () => Navigator.pop(context),
               ),
             ],

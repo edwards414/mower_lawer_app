@@ -25,7 +25,10 @@ class PairedRobot {
   final String secret;
   final String name;
 
-  /// `wss://control.example.com` — empty when the robot has no relay.
+  /// Relay entry from the QR: either the fleet backend's app relay base
+  /// (`wss://api.mower.example/v1/relay/app`, robot id appended per
+  /// connection) or a legacy fixed tunnel (`wss://control.example.com`).
+  /// Empty when the robot has no relay.
   final String relayUrl;
 
   /// LAN IP or host of the robot, editable (DHCP changes it).
@@ -44,10 +47,38 @@ class PairedRobot {
 
   String get lanUrl => hasLan ? 'ws://$lanAddress:$rosbridgePort' : '';
 
+  /// Path of the fleet backend's app relay (docs/BACKEND_ARCHITECTURE.md §7).
+  static const backendRelayPath = '/v1/relay/app';
+
+  /// The relay is the fleet backend (mrelay1 framing, status API) rather
+  /// than a plain tunnel in front of rosbridge.
+  bool get usesBackendRelay => relayUrl.contains(backendRelayPath);
+
+  /// The WebSocket URL to open for the relay: the backend form gets this
+  /// robot's id appended, a legacy tunnel is used as is.
+  String get relayWsUrl {
+    if (!hasRelay) return '';
+    if (!usesBackendRelay) return relayUrl;
+    final base = relayUrl.endsWith('/')
+        ? relayUrl.substring(0, relayUrl.length - 1)
+        : relayUrl;
+    return base.endsWith('/$id') ? base : '$base/$id';
+  }
+
+  /// `https://host[:port]` of the fleet backend, '' for a legacy relay.
+  String get backendBaseUrl {
+    if (!usesBackendRelay) return '';
+    final uri = Uri.tryParse(relayUrl);
+    if (uri == null || uri.host.isEmpty) return '';
+    final scheme = uri.scheme == 'ws' ? 'http' : 'https';
+    final port = uri.hasPort ? ':${uri.port}' : '';
+    return '$scheme://${uri.host}$port';
+  }
+
   /// The rosbridge URL to use right now, or empty if nothing is configured.
   String get preferredUrl {
     if (preferLan && hasLan) return lanUrl;
-    if (hasRelay) return relayUrl;
+    if (hasRelay) return relayWsUrl;
     return lanUrl;
   }
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 
 import '../screens/mower_config_screen.dart';
 import '../screens/settings_screen.dart';
@@ -25,14 +26,14 @@ class MenuDrawer extends StatelessWidget {
             ),
           ),
           ListTile(
-            leading: const Icon(Icons.home),
+            leading: const Icon(AppIcons.house),
             title: const Text('Home'),
             onTap: () {
               Navigator.pop(context);
             },
           ),
           ListTile(
-            leading: const Icon(Icons.settings_remote),
+            leading: const Icon(AppIcons.wrench),
             title: const Text('Mower Config'),
             onTap: () {
               Navigator.pop(context);
@@ -45,7 +46,7 @@ class MenuDrawer extends StatelessWidget {
             },
           ),
           ListTile(
-            leading: const Icon(Icons.settings),
+            leading: const Icon(AppIcons.settings),
             title: const Text('Settings'),
             onTap: () {
               Navigator.pop(context);

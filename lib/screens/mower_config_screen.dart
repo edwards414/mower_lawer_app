@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/mission_mock_provider.dart';
@@ -77,7 +78,7 @@ class _MowerConfigScreenState extends State<MowerConfigScreen> {
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     IconButton(
-                      icon: const Icon(Icons.close),
+                      icon: const Icon(AppIcons.x),
                       onPressed: () => Navigator.pop(context),
                     ),
                   ],
@@ -94,7 +95,7 @@ class _MowerConfigScreenState extends State<MowerConfigScreen> {
                           labelText: 'LAN Robot IP Address',
                           hintText: 'e.g.: 192.168.1.100',
                           border: OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.router),
+                          prefixIcon: Icon(AppIcons.router),
                         ),
                         keyboardType: TextInputType.text,
                         validator: (value) =>
@@ -105,7 +106,7 @@ class _MowerConfigScreenState extends State<MowerConfigScreen> {
                         width: double.infinity,
                         child: FilledButton.icon(
                           onPressed: _saveConfig,
-                          icon: const Icon(Icons.save),
+                          icon: const Icon(AppIcons.save),
                           label: const Text('Save Configuration'),
                         ),
                       ),

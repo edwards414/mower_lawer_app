@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 
 import '../models/robot_fleet.dart';
 
@@ -79,7 +80,7 @@ class RobotInfoPopup extends StatelessWidget {
                     child: const Padding(
                       padding: EdgeInsets.all(4),
                       child: Icon(
-                        Icons.close,
+                        AppIcons.x,
                         size: 18,
                         color: Color(0xFF78909C),
                       ),
@@ -91,7 +92,7 @@ class RobotInfoPopup extends StatelessWidget {
               Row(
                 children: [
                   Icon(
-                    Icons.battery_charging_full,
+                    AppIcons.batteryCharging,
                     size: 15,
                     color: batteryColor,
                   ),
@@ -123,7 +124,14 @@ class RobotInfoPopup extends StatelessWidget {
               const SizedBox(height: 7),
               Row(
                 children: [
-                  Icon(Icons.circle, size: 8, color: statusColor),
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: statusColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
                   const SizedBox(width: 6),
                   Text(
                     statusLabel,

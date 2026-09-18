@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../models/mission_mock.dart';
@@ -177,7 +178,7 @@ class _CameraPlaceholder extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(
-              Icons.videocam_off_outlined,
+              AppIcons.videoOff,
               color: Color(0xFFECEFF1),
               size: 48,
             ),

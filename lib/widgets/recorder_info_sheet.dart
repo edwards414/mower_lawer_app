@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 
 /// Explains *how the bag-recording system is designed* — surfaced from the
 /// recorder screen's ℹ️ button. Content mirrors the on-robot `mower_recorder`
@@ -19,7 +20,7 @@ class RecorderInfoSheet extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
             child: Row(
               children: [
-                Icon(Icons.fiber_smart_record, color: cs.primary),
+                Icon(AppIcons.disc, color: cs.primary),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -60,7 +61,7 @@ class RecorderInfoSheet extends StatelessWidget {
 
                 // ── 三個記錄層面 ──────────────────────────────────────────
                 _SectionCard(
-                  icon: Icons.layers_outlined,
+                  icon: AppIcons.layers,
                   title: '三個記錄層面 (planes)',
                   children: [
                     _Plane(
@@ -97,7 +98,7 @@ class RecorderInfoSheet extends StatelessWidget {
 
                 // ── 三個節點 ──────────────────────────────────────────────
                 _SectionCard(
-                  icon: Icons.hub_outlined,
+                  icon: AppIcons.network,
                   title: '三個節點',
                   children: [
                     _Bullet(
@@ -125,7 +126,7 @@ class RecorderInfoSheet extends StatelessWidget {
 
                 // ── 生命週期與容錯 ────────────────────────────────────────
                 _SectionCard(
-                  icon: Icons.autorenew,
+                  icon: AppIcons.refreshCw,
                   title: '生命週期與容錯',
                   children: [
                     _Bullet(
@@ -152,7 +153,7 @@ class RecorderInfoSheet extends StatelessWidget {
 
                 // ── App ↔ 機器人 ─────────────────────────────────────────
                 _SectionCard(
-                  icon: Icons.sync_alt,
+                  icon: AppIcons.arrowLeftRight,
                   title: 'App ↔ 機器人(rosbridge)',
                   subtitle: '全程用 std_msgs/String,不需自訂 srv、免重建介面',
                   children: const [
@@ -182,7 +183,7 @@ class RecorderInfoSheet extends StatelessWidget {
 
                 // ── 上傳 R2 ──────────────────────────────────────────────
                 _SectionCard(
-                  icon: Icons.cloud_upload_outlined,
+                  icon: AppIcons.cloudUpload,
                   title: '上傳 Cloudflare R2',
                   children: [
                     _Bullet(
@@ -198,7 +199,7 @@ class RecorderInfoSheet extends StatelessWidget {
 
                 // ── 不進 bag ─────────────────────────────────────────────
                 _SectionCard(
-                  icon: Icons.videocam_off_outlined,
+                  icon: AppIcons.videoOff,
                   title: '不放進 bag 的東西',
                   children: [
                     _Bullet(
@@ -213,7 +214,7 @@ class RecorderInfoSheet extends StatelessWidget {
 
                 // ── 磁碟結構 ─────────────────────────────────────────────
                 _SectionCard(
-                  icon: Icons.folder_outlined,
+                  icon: AppIcons.folder,
                   title: '一趟 run 的磁碟結構',
                   children: const [_RunTree()],
                 ),
@@ -251,7 +252,7 @@ class RecorderInfoSheet extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(Icons.lightbulb_outline, size: 18, color: cs.primary),
+        Icon(AppIcons.lightbulb, size: 18, color: cs.primary),
         const SizedBox(width: 10),
         Expanded(
           child: Text(text, style: const TextStyle(fontSize: 13, height: 1.5)),

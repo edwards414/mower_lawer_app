@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
+import '../utils/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../models/image_mission_draft.dart';
@@ -379,14 +380,14 @@ class _ImageAlignmentPageState extends State<ImageAlignmentPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _HelpRow(Icons.open_with, '拖曳圖片 = 移動位置'),
-            _HelpRow(Icons.crop_square, '拖四角方塊 = 等比例縮放'),
-            _HelpRow(Icons.rotate_right, '拖頂端圓點 = 旋轉'),
-            _HelpRow(Icons.place, '點一下圖片 = 設定起點（綠點）'),
-            _HelpRow(Icons.pan_tool, '拖空白處 = 平移地圖視角'),
-            _HelpRow(Icons.zoom_in, '＋／－ 或滾輪 = 縮放整張地圖'),
-            _HelpRow(Icons.restart_alt, '重設 = 還原圖片位置'),
-            _HelpRow(Icons.check_circle, '確認對齊 = 完成，回到送出'),
+            _HelpRow(AppIcons.move, '拖曳圖片 = 移動位置'),
+            _HelpRow(AppIcons.scaling, '拖四角方塊 = 等比例縮放'),
+            _HelpRow(AppIcons.rotateCw, '拖頂端圓點 = 旋轉'),
+            _HelpRow(AppIcons.mapPin, '點一下圖片 = 設定起點（綠點）'),
+            _HelpRow(AppIcons.hand, '拖空白處 = 平移地圖視角'),
+            _HelpRow(AppIcons.zoomIn, '＋／－ 或滾輪 = 縮放整張地圖'),
+            _HelpRow(AppIcons.rotateCcw, '重設 = 還原圖片位置'),
+            _HelpRow(AppIcons.circleCheck, '確認對齊 = 完成，回到送出'),
           ],
         ),
         actions: [
@@ -535,9 +536,9 @@ class _ZoomButtons extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _button(Icons.add, onZoomIn),
+        _button(AppIcons.plus, onZoomIn),
         const SizedBox(height: 10),
-        _button(Icons.remove, onZoomOut),
+        _button(AppIcons.minus, onZoomOut),
       ],
     );
   }
@@ -573,7 +574,7 @@ class _TopBar extends StatelessWidget {
         children: [
           IconButton(
             onPressed: onClose,
-            icon: const Icon(Icons.close, color: Colors.white),
+            icon: const Icon(AppIcons.x, color: Colors.white),
           ),
           const Text(
             '在地圖上對齊',
@@ -587,7 +588,7 @@ class _TopBar extends StatelessWidget {
           IconButton(
             onPressed: onInfo,
             tooltip: '操作說明',
-            icon: const Icon(Icons.info_outline, color: Colors.white),
+            icon: const Icon(AppIcons.info, color: Colors.white),
           ),
         ],
       ),
@@ -662,7 +663,7 @@ class _BottomBar extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: OutlinedButton.icon(
                 onPressed: onReset,
-                icon: const Icon(Icons.restart_alt, color: Colors.white),
+                icon: const Icon(AppIcons.rotateCcw, color: Colors.white),
                 label: const Text('重設', style: TextStyle(color: Colors.white)),
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: Colors.white54),
@@ -673,7 +674,7 @@ class _BottomBar extends StatelessWidget {
               alignment: Alignment.center,
               child: FilledButton.icon(
                 onPressed: onConfirm,
-                icon: const Icon(Icons.check),
+                icon: const Icon(AppIcons.check),
                 label: const Text('確認對齊'),
               ),
             ),

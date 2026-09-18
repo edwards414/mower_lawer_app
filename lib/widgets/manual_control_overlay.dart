@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
@@ -127,7 +128,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
           top: topInset,
           left: 12,
           child: _GlassIconButton(
-            icon: Icons.close,
+            icon: AppIcons.x,
             tooltip: '退出手動',
             onPressed: _exitManual,
           ),
@@ -175,7 +176,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
             top: topInset,
             left: 64,
             child: _GlassIconButton(
-              icon: _controlsExpanded ? Icons.expand_less : Icons.tune,
+              icon: _controlsExpanded ? AppIcons.chevronUp : AppIcons.slidersHorizontal,
               tooltip: '切換功能',
               onPressed: () =>
                   setState(() => _controlsExpanded = !_controlsExpanded),
@@ -326,7 +327,7 @@ class _RecordTypeBar extends StatelessWidget {
                 children: [
                   Expanded(
                     child: _RecordChip(
-                      icon: Icons.crop_square,
+                      icon: AppIcons.squareDashed,
                       label: '工作區',
                       color: const Color(0xFF35B861),
                       onTap: enabled
@@ -337,7 +338,7 @@ class _RecordTypeBar extends StatelessWidget {
                   const SizedBox(width: 6),
                   Expanded(
                     child: _RecordChip(
-                      icon: Icons.dangerous_outlined,
+                      icon: AppIcons.ban,
                       label: '禁入區',
                       color: const Color(0xFFE55353),
                       onTap: enabled
@@ -348,7 +349,7 @@ class _RecordTypeBar extends StatelessWidget {
                   const SizedBox(width: 6),
                   Expanded(
                     child: _RecordChip(
-                      icon: Icons.timeline,
+                      icon: AppIcons.spline,
                       label: '通道',
                       color: const Color(0xFF25AFC6),
                       onTap: enabled
@@ -431,7 +432,7 @@ class _PendingRecordSaveHud extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
           children: [
-            const Icon(Icons.save_outlined, color: Colors.white, size: 18),
+            const Icon(AppIcons.save, color: Colors.white, size: 18),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -447,7 +448,7 @@ class _PendingRecordSaveHud extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             _HudButton(
-              icon: Icons.refresh,
+              icon: AppIcons.refreshCw,
               label: mission.recordCommandPending ? '儲存中' : '重試',
               color: Colors.white,
               onTap: mission.recordCommandPending
@@ -486,7 +487,7 @@ class _RecordHud extends StatelessWidget {
         child: Row(
           children: [
             const Icon(
-              Icons.fiber_manual_record,
+              AppIcons.disc,
               color: Color(0xFFE55353),
               size: 16,
             ),
@@ -506,14 +507,14 @@ class _RecordHud extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             _HudButton(
-              icon: Icons.check,
+              icon: AppIcons.check,
               label: '存',
               color: const Color(0xFF35B861),
               onTap: mission.recordCommandPending ? null : onSave,
             ),
             const SizedBox(width: 6),
             _HudButton(
-              icon: Icons.close,
+              icon: AppIcons.x,
               label: '取消',
               color: const Color(0xFF90A4AE),
               onTap: mission.recordCommandPending ? null : onCancel,
@@ -756,8 +757,8 @@ class _ManualStatusPill extends StatelessWidget {
           children: [
             Icon(
               connected
-                  ? Icons.radio_button_checked
-                  : Icons.portable_wifi_off_outlined,
+                  ? AppIcons.circleDot
+                  : AppIcons.wifiOff,
               color: color,
               size: 18,
             ),

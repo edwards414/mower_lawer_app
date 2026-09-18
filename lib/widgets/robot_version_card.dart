@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
@@ -42,14 +43,14 @@ class RobotVersionCard extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             _VersionRow(
-              icon: Icons.phone_iphone,
+              icon: AppIcons.smartphone,
               title: 'App',
               detail:
                   '${_appVersionLabel(snapshot.data)} · 支援機器人 API '
                   '${kMinRobotApiVersion == kMaxRobotApiVersion ? kMinRobotApiVersion : '$kMinRobotApiVersion–$kMaxRobotApiVersion'}',
             ),
             _VersionRow(
-              icon: Icons.memory,
+              icon: AppIcons.cpu,
               title: '機器人軟體',
               detail: info == null
                   ? '尚未收到 /robot/info'
@@ -60,7 +61,7 @@ class RobotVersionCard extends StatelessWidget {
               muted: stale,
             ),
             _VersionRow(
-              icon: Icons.developer_board,
+              icon: AppIcons.circuitBoard,
               title: 'STM32 韌體',
               detail: info == null
                   ? '—'
@@ -73,10 +74,10 @@ class RobotVersionCard extends StatelessWidget {
             if (info != null && info.update.state.isNotEmpty)
               _VersionRow(
                 icon: info.update.failed
-                    ? Icons.error_outline
+                    ? AppIcons.circleAlert
                     : info.update.inProgress
-                    ? Icons.downloading
-                    : Icons.check_circle_outline,
+                    ? AppIcons.cloudDownload
+                    : AppIcons.circleCheck,
                 title: '更新狀態',
                 detail: '${_updateStateLabel(info.update.state)}'
                     '${info.update.message.isEmpty ? '' : ' · ${info.update.message}'}',
@@ -107,7 +108,7 @@ class RobotVersionCard extends StatelessWidget {
                             action: provider.requestUpdate,
                           )
                         : null,
-                    icon: const Icon(Icons.system_update_alt),
+                    icon: const Icon(AppIcons.download),
                     label: const Text('更新機器人'),
                   ),
                 ),
@@ -121,7 +122,7 @@ class RobotVersionCard extends StatelessWidget {
                             action: provider.requestRestart,
                           )
                         : null,
-                    icon: const Icon(Icons.restart_alt),
+                    icon: const Icon(AppIcons.rotateCcw),
                     label: const Text('重新啟動'),
                   ),
                 ),
@@ -358,7 +359,7 @@ class CompatibilityNotice extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.warning_amber_rounded, color: _kWarn),
+              const Icon(AppIcons.triangleAlert, color: _kWarn),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -476,7 +477,7 @@ class IdentityMismatchNotice extends StatelessWidget {
         children: [
           const Row(
             children: [
-              Icon(Icons.gpp_bad_outlined, color: _kBad),
+              Icon(AppIcons.shieldX, color: _kBad),
               SizedBox(width: 8),
               Expanded(
                 child: Text(

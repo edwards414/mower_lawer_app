@@ -24,21 +24,23 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>選擇場地圖片以建立割草任務。</string>
-	<key>NSCameraUsageDescription</key>
-	<string>顯示機器人的即時攝影機影像。</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>WebRTC 影像串流所需(本 App 不錄音)。</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>連線至區域網路內的機器人以取得影像與控制。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>顯示機器人的即時攝影機影像。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>連線至區域網路內的機器人以取得影像與控制。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>WebRTC 影像串流所需(本 App 不錄音)。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>選擇場地圖片以建立割草任務。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

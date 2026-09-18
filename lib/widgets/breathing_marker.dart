@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 
 class BreathingMarker extends StatefulWidget {
   const BreathingMarker({super.key});
@@ -54,7 +55,7 @@ class _BreathingMarkerState extends State<BreathingMarker>
               ),
             ],
           ),
-          child: const Icon(Icons.agriculture, color: Colors.orange, size: 28),
+          child: const Icon(AppIcons.tractor, color: Colors.orange, size: 28),
         );
       },
     );

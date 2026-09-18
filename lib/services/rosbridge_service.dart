@@ -4,13 +4,18 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'relay_framing.dart';
 import 'remote_access_config.dart';
 import 'websocket_connector.dart';
 
 enum RosbridgeConnectionState { disconnected, connecting, connected, retrying }
 
 typedef RosbridgeConnector =
-    WebSocketChannel Function(Uri uri, {Map<String, dynamic> headers});
+    WebSocketChannel Function(
+      Uri uri, {
+      Map<String, dynamic> headers,
+      List<String> protocols,
+    });
 
 /// Extra HTTP headers for the WebSocket upgrade, computed fresh for every
 /// connection attempt (the pairing hand-shake carries a time and a nonce).
@@ -63,6 +68,10 @@ class RosbridgeService {
 
   String _url;
   RosbridgeHeaderProvider? _authHeaders;
+
+  /// Connected through the fleet backend relay: mrelay1 framing on the wire.
+  bool _framed = false;
+  RelayReassembler? _reassembler;
   final RosbridgeConnector _connector;
   final Map<String, _RosbridgeSubscription> _subscriptions = {};
   final Map<String, String> _advertisements = {};
@@ -81,6 +90,7 @@ class RosbridgeService {
   int _callSequence = 0;
 
   String get url => _url;
+  bool get framed => _framed;
   String get robotIp {
     final uri = Uri.tryParse(_url);
     return uri?.host ?? '';
@@ -146,27 +156,33 @@ class RosbridgeService {
       'ws://${ip.trim()}:$_rosbridgePort';
 
   /// Point the service at a paired robot: its rosbridge URL plus the
-  /// per-connection pairing headers. Reconnects when the URL changes.
+  /// per-connection pairing headers. [framed] selects the fleet backend
+  /// relay (mrelay1 chunk framing, `Sec-WebSocket-Protocol: mrelay1`).
+  /// Reconnects when the URL or framing changes.
   void configureEndpoint({
     required String url,
     RosbridgeHeaderProvider? authHeaders,
+    bool framed = false,
   }) {
     _authHeaders = authHeaders;
     if (url.isEmpty) {
       return;
     }
-    if (_url == url) {
+    if (_url == url && _framed == framed) {
       connect();
       return;
     }
     _url = url;
+    _framed = framed;
     reconnect();
   }
 
   Map<String, String> _upgradeHeaders() {
     final provider = _authHeaders;
     return {
-      ...RemoteAccessConfig.cloudflareAccessHeaders,
+      // The legacy tunnel sits behind Cloudflare Access; the fleet backend
+      // authenticates with the pairing headers alone.
+      if (!_framed) ...RemoteAccessConfig.cloudflareAccessHeaders,
       if (provider != null) ...provider(),
     };
   }
@@ -180,8 +196,10 @@ class RosbridgeService {
       final channel = _connector(
         Uri.parse(_url),
         headers: _upgradeHeaders(),
+        protocols: _framed ? const [RelayFraming.subprotocol] : const [],
       );
       _channel = channel;
+      _reassembler = _framed ? RelayReassembler() : null;
       _socketSubscription = channel.stream.listen(
         _handleSocketData,
         onError: (_) => _scheduleReconnect(),
@@ -339,11 +357,29 @@ class RosbridgeService {
   }
 
   void _handleSocketData(dynamic raw) {
-    if (raw is! String) {
+    final String text;
+    if (raw is String) {
+      text = raw;
+    } else if (raw is List<int> && _framed) {
+      final reassembler = _reassembler;
+      if (reassembler == null) {
+        return;
+      }
+      final Object? message;
+      try {
+        message = reassembler.feed(raw);
+      } on FormatException {
+        return;
+      }
+      if (message is! String) {
+        return; // still collecting chunks, or a binary rosbridge message
+      }
+      text = message;
+    } else {
       return;
     }
     try {
-      final decoded = jsonDecode(raw);
+      final decoded = jsonDecode(text);
       if (decoded is! Map) {
         return;
       }
@@ -394,7 +430,14 @@ class RosbridgeService {
       return;
     }
     try {
-      channel.sink.add(jsonEncode(payload));
+      final text = jsonEncode(payload);
+      if (_framed) {
+        for (final frame in RelayFraming.encodeText(text)) {
+          channel.sink.add(frame);
+        }
+      } else {
+        channel.sink.add(text);
+      }
     } catch (_) {
       _scheduleReconnect();
     }

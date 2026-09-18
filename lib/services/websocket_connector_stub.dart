@@ -3,8 +3,9 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 WebSocketChannel connectWebSocket(
   Uri uri, {
   Map<String, dynamic> headers = const {},
+  List<String> protocols = const [],
 }) {
   // Browser WebSocket APIs do not allow arbitrary request headers. Web builds
   // must authenticate to Cloudflare Access with its browser session cookie.
-  return WebSocketChannel.connect(uri);
+  return WebSocketChannel.connect(uri, protocols: protocols.isEmpty ? null : protocols);
 }

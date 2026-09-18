@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/recorder_provider.dart';
@@ -29,12 +30,12 @@ class RecorderScreen extends StatelessWidget {
             title: const Text('錄製 / Bag'),
             actions: [
               IconButton(
-                icon: const Icon(Icons.info_outline),
+                icon: const Icon(AppIcons.info),
                 tooltip: '錄製設計邏輯',
                 onPressed: () => _showInfo(context),
               ),
               IconButton(
-                icon: const Icon(Icons.refresh),
+                icon: const Icon(AppIcons.refreshCw),
                 tooltip: '重新整理',
                 onPressed: rec.refresh,
               ),
@@ -60,7 +61,7 @@ class RecorderScreen extends StatelessWidget {
           floatingActionButton: rec.r2Configured
               ? FloatingActionButton.extended(
                   onPressed: rec.uploadNow,
-                  icon: const Icon(Icons.cloud_upload),
+                  icon: const Icon(AppIcons.cloudUpload),
                   label: const Text('上傳待傳'),
                 )
               : null,
@@ -100,7 +101,7 @@ class RecorderScreen extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       child: Row(
         children: [
-          const Icon(Icons.fiber_manual_record, color: Colors.red, size: 16),
+          const Icon(AppIcons.disc, color: Colors.red, size: 16),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -155,12 +156,12 @@ class RecorderScreen extends StatelessWidget {
     return ListTile(
       leading: Icon(
         bag.recording
-            ? Icons.fiber_manual_record
+            ? AppIcons.disc
             : bag.uploaded
-            ? Icons.cloud_done
+            ? AppIcons.cloudCheck
             : bag.uploading
-            ? Icons.cloud_sync
-            : Icons.sd_storage,
+            ? AppIcons.cloudUpload
+            : AppIcons.hardDrive,
         color: bag.recording
             ? Colors.red
             : (bag.uploaded ? Colors.blue : Colors.black45),

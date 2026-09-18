@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/mission_mock_provider.dart';
@@ -25,7 +26,7 @@ class MapObjectsSheet extends StatelessWidget {
         const SizedBox(height: 10),
         ...mission.zones.map(
           (zone) => _ObjectRow(
-            icon: Icons.crop_square,
+            icon: AppIcons.squareDashed,
             color: const Color(0xFF35B861),
             title: zone.name,
             detail: 'Zone ${zone.id} · ${zone.hasCoveragePath ? '已規劃' : '未規劃'}',
@@ -38,7 +39,7 @@ class MapObjectsSheet extends StatelessWidget {
         ),
         ...mission.riskZones.map(
           (risk) => _ObjectRow(
-            icon: Icons.dangerous_outlined,
+            icon: AppIcons.ban,
             color: const Color(0xFFE55353),
             title: risk.name,
             detail: '禁入區 · ${risk.points.length} points',
@@ -51,7 +52,7 @@ class MapObjectsSheet extends StatelessWidget {
         ),
         ...mission.channels.map(
           (channel) => _ObjectRow(
-            icon: Icons.timeline,
+            icon: AppIcons.spline,
             color: const Color(0xFF25AFC6),
             title: channel.name,
             detail: '通道 · ${channel.points.length} points',
@@ -68,13 +69,13 @@ class MapObjectsSheet extends StatelessWidget {
           ),
         ),
         _ObjectRow(
-          icon: Icons.route,
+          icon: AppIcons.route,
           color: const Color(0xFF147B58),
           title: '覆蓋路徑',
           detail: '${mission.coverageRows.length} segments · Zigzag',
         ),
         _ObjectRow(
-          icon: Icons.report_gmailerrorred_outlined,
+          icon: AppIcons.octagonAlert,
           color: const Color(0xFFE53935),
           title: '風險線段',
           detail: '${mission.invalidSegments.length} segments',
@@ -144,7 +145,7 @@ class _SheetHeader extends StatelessWidget {
             ],
           ),
         ),
-        const Icon(Icons.chevron_right, color: Color(0xFFB0BEC5)),
+        const Icon(AppIcons.chevronRight, color: Color(0xFFB0BEC5)),
       ],
     );
   }
@@ -229,7 +230,7 @@ class _ObjectRow extends StatelessWidget {
                 ),
                 if (onEdit != null)
                   IconButton(
-                    icon: const Icon(Icons.tune, color: Color(0xFF1384E8)),
+                    icon: const Icon(AppIcons.slidersHorizontal, color: Color(0xFF1384E8)),
                     onPressed: onEdit,
                     tooltip: '調整頂點',
                     visualDensity: VisualDensity.compact,
@@ -237,7 +238,7 @@ class _ObjectRow extends StatelessWidget {
                 if (onDelete != null)
                   IconButton(
                     icon: const Icon(
-                      Icons.delete_outline,
+                      AppIcons.trash2,
                       color: Color(0xFF90A4AE),
                     ),
                     onPressed: onDelete,

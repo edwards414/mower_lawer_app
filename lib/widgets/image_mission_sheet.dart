@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
@@ -151,7 +152,7 @@ class _ImageMissionSheetState extends State<ImageMissionSheet> {
                     if (draft != null)
                       TextButton.icon(
                         onPressed: mission.clearImageMissionDraft,
-                        icon: const Icon(Icons.delete_outline),
+                        icon: const Icon(AppIcons.trash2),
                         label: const Text('清除'),
                       ),
                   ],
@@ -276,7 +277,7 @@ class _PickStep extends StatelessWidget {
               border: Border.all(color: const Color(0xFFD8E3DC)),
             ),
             child: const Icon(
-              Icons.image_search_outlined,
+              AppIcons.imagePlus,
               size: 56,
               color: Color(0xFF167A4A),
             ),
@@ -291,7 +292,7 @@ class _PickStep extends StatelessWidget {
                   height: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Icon(Icons.photo_library_outlined),
+              : const Icon(AppIcons.images),
           label: Text(picking ? '讀取中' : '選擇圖片'),
         ),
       ],
@@ -342,7 +343,7 @@ class _ThresholdStep extends StatelessWidget {
         ),
         FilledButton.icon(
           onPressed: draft.freeCellCount == 0 ? null : onNext,
-          icon: const Icon(Icons.tune),
+          icon: const Icon(AppIcons.slidersHorizontal),
           label: const Text('下一步'),
         ),
       ],
@@ -461,7 +462,7 @@ class _AlignStep extends StatelessWidget {
           ),
           child: Row(
             children: [
-              const Icon(Icons.map_outlined, color: Color(0xFF167A4A)),
+              const Icon(AppIcons.map, color: Color(0xFF167A4A)),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
@@ -480,14 +481,14 @@ class _AlignStep extends StatelessWidget {
         const SizedBox(height: 12),
         FilledButton.icon(
           onPressed: onOpenAlign,
-          icon: const Icon(Icons.open_in_full),
+          icon: const Icon(AppIcons.maximize2),
           label: Text(aligned ? '重新在地圖上對齊' : '在地圖上對齊'),
         ),
         if (aligned) ...[
           const SizedBox(height: 6),
           Row(
             children: const [
-              Icon(Icons.check_circle, color: Color(0xFF167A4A), size: 18),
+              Icon(AppIcons.circleCheck, color: Color(0xFF167A4A), size: 18),
               SizedBox(width: 6),
               Text(
                 '已完成對齊',
@@ -553,7 +554,7 @@ class _RiskAndSubmitStep extends StatelessWidget {
             ),
             TextButton.icon(
               onPressed: draft.hasRiskMask ? onClearRisk : null,
-              icon: const Icon(Icons.cleaning_services_outlined),
+              icon: const Icon(AppIcons.eraser),
               label: const Text('清除禁區'),
             ),
           ],
@@ -575,7 +576,7 @@ class _RiskAndSubmitStep extends StatelessWidget {
           children: [
             OutlinedButton.icon(
               onPressed: onBack,
-              icon: const Icon(Icons.arrow_back),
+              icon: const Icon(AppIcons.arrowLeft),
               label: const Text('上一步'),
             ),
             const SizedBox(width: 10),
@@ -593,7 +594,7 @@ class _RiskAndSubmitStep extends StatelessWidget {
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Icon(Icons.route_outlined),
+                    : const Icon(AppIcons.route),
                 label: Text(
                   demoMode
                       ? 'Demo 建立路徑'
@@ -608,7 +609,7 @@ class _RiskAndSubmitStep extends StatelessWidget {
         const SizedBox(height: 8),
         FilledButton.tonalIcon(
           onPressed: onExecute,
-          icon: const Icon(Icons.play_arrow),
+          icon: const Icon(AppIcons.play),
           label: const Text('確認後執行'),
         ),
       ],
@@ -641,14 +642,14 @@ class _SheetActions extends StatelessWidget {
       children: [
         OutlinedButton.icon(
           onPressed: onBack,
-          icon: const Icon(Icons.arrow_back),
+          icon: const Icon(AppIcons.arrowLeft),
           label: const Text('上一步'),
         ),
         const SizedBox(width: 10),
         Expanded(
           child: FilledButton.icon(
             onPressed: onNext,
-            icon: const Icon(Icons.arrow_forward),
+            icon: const Icon(AppIcons.arrowRight),
             label: const Text('下一步'),
           ),
         ),

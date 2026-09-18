@@ -43,7 +43,7 @@ void main() {
     );
     final service = RosbridgeService(
       url: 'ws://robot.test:9090',
-      connector: (_, {headers = const <String, dynamic>{}}) => channel,
+      connector: (_, {headers = const <String, dynamic>{}, protocols = const <String>[]}) => channel,
     );
 
     final responseFuture = service.callService(
@@ -81,7 +81,7 @@ void main() {
     final channel = _FakeWebSocketChannel();
     final service = RosbridgeService(
       url: 'ws://robot.test:9090',
-      connector: (_, {headers = const <String, dynamic>{}}) => channel,
+      connector: (_, {headers = const <String, dynamic>{}, protocols = const <String>[]}) => channel,
     );
     final received = <RosbridgeTopicMessage>[];
     final messageSubscription = service.messages.listen(received.add);

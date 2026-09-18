@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
@@ -28,25 +29,25 @@ class SelfCheckScreen extends StatelessWidget {
     final checks = mission.mockDataEnabled
         ? [
             const _CheckItem(
-              Icons.science_outlined,
+              AppIcons.flaskConical,
               '資料模式',
               'Demo 已由使用者手動開啟',
               _CheckState.warning,
             ),
             const _CheckItem(
-              Icons.map_outlined,
+              AppIcons.map,
               '任務地圖資料',
               'Demo 資料，不會送出真機任務',
               _CheckState.warning,
             ),
             _CheckItem(
-              Icons.battery_full,
+              AppIcons.batteryFull,
               '電量',
               '${battery?.round() ?? 0}%（Demo）',
               _CheckState.warning,
             ),
             const _CheckItem(
-              Icons.health_and_safety_outlined,
+              AppIcons.shieldCheck,
               '安全狀態',
               'Demo 不代表真機安全狀態',
               _CheckState.warning,
@@ -54,19 +55,19 @@ class SelfCheckScreen extends StatelessWidget {
           ]
         : [
             _CheckItem(
-              Icons.hub_outlined,
+              AppIcons.network,
               'rosbridge',
               mission.rosConnected ? '已連線' : '尚未連線',
               mission.rosConnected ? _CheckState.ready : _CheckState.waiting,
             ),
             _CheckItem(
-              Icons.sensors_outlined,
+              AppIcons.radar,
               '機器人 heartbeat',
               mission.robotOnline ? '在線且資料新鮮' : '未收到新鮮 heartbeat',
               mission.robotOnline ? _CheckState.ready : _CheckState.waiting,
             ),
             _CheckItem(
-              Icons.route_outlined,
+              AppIcons.route,
               'Nav2 狀態',
               mission.hasFreshNavStatusSnapshot
                   ? mission.navStatusLabel()
@@ -74,7 +75,7 @@ class SelfCheckScreen extends StatelessWidget {
               navCheckState,
             ),
             _CheckItem(
-              Icons.location_searching,
+              AppIcons.locate,
               '機器人位置',
               mission.hasFreshRobotPose ? 'pose 資料新鮮' : '尚未收到新鮮 pose',
               mission.hasFreshRobotPose
@@ -82,7 +83,7 @@ class SelfCheckScreen extends StatelessWidget {
                   : _CheckState.waiting,
             ),
             _CheckItem(
-              Icons.my_location,
+              AppIcons.locateFixed,
               'GPS 定位',
               mission.hasFreshGpsFix
                   ? '定位有效 · 水平 σ ${mission.gpsHorizontalSigmaM!.toStringAsFixed(2)} m'
@@ -90,19 +91,19 @@ class SelfCheckScreen extends StatelessWidget {
               mission.hasFreshGpsFix ? _CheckState.ready : _CheckState.waiting,
             ),
             _CheckItem(
-              Icons.map_outlined,
+              AppIcons.map,
               '任務地圖資料',
               mapReady ? '已收到真實圖層' : '尚未收到真實圖層',
               mapReady ? _CheckState.ready : _CheckState.waiting,
             ),
             _CheckItem(
-              Icons.battery_full,
+              AppIcons.batteryFull,
               '電量',
               battery == null ? '尚未收到新鮮電量' : '${battery.round()}%',
               battery == null ? _CheckState.waiting : _CheckState.ready,
             ),
             const _CheckItem(
-              Icons.health_and_safety_outlined,
+              AppIcons.shieldCheck,
               '安全狀態',
               '後端尚未提供安全狀態 topic',
               _CheckState.warning,
@@ -127,7 +128,7 @@ class SelfCheckScreen extends StatelessWidget {
                     children: [
                       IconButton(
                         onPressed: () {},
-                        icon: const Icon(Icons.arrow_back_ios_new),
+                        icon: const Icon(AppIcons.chevronLeft),
                       ),
                       const Spacer(),
                       const Text(
@@ -244,9 +245,9 @@ class _CheckRow extends StatelessWidget {
         ),
         Icon(
           switch (item.state) {
-            _CheckState.ready => Icons.check_circle,
-            _CheckState.waiting => Icons.hourglass_top,
-            _CheckState.warning => Icons.info_outline,
+            _CheckState.ready => AppIcons.circleCheck,
+            _CheckState.waiting => AppIcons.hourglass,
+            _CheckState.warning => AppIcons.info,
           },
           color: switch (item.state) {
             _CheckState.ready => const Color(0xFF4ED59B),
