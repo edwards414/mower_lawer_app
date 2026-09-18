@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -55,10 +57,9 @@ class RosbridgeService {
     'USE_SAVED_ROBOT_IP',
     defaultValue: false,
   );
-  static const _defaultUrl = String.fromEnvironment(
-    'ROSBRIDGE_URL',
-    defaultValue: 'wss://control.fxrbindi.com',
-  );
+  // No endpoint until a paired robot configures one (RobotRegistry); a
+  // build-time ROSBRIDGE_URL is only for development against a fixed host.
+  static const _defaultUrl = String.fromEnvironment('ROSBRIDGE_URL');
 
   RosbridgeService({
     String url = _defaultUrl,
@@ -196,7 +197,7 @@ class RosbridgeService {
   }
 
   void connect() {
-    if (_disposed || _connected || _channel != null) {
+    if (_disposed || _connected || _channel != null || _url.isEmpty) {
       return;
     }
     _states.add(RosbridgeConnectionState.connecting);
@@ -210,7 +211,12 @@ class RosbridgeService {
       _reassembler = _framed ? RelayReassembler() : null;
       _socketSubscription = channel.stream.listen(
         _handleSocketData,
-        onError: (_) => _scheduleReconnect(),
+        onError: (Object error) {
+          if (kDebugMode) {
+            debugPrint('RosbridgeService: $_url error: $error');
+          }
+          _scheduleReconnect();
+        },
         onDone: _scheduleReconnect,
         cancelOnError: true,
       );
@@ -236,7 +242,10 @@ class RosbridgeService {
               });
             }
           })
-          .catchError((_) {
+          .catchError((Object error) {
+            if (kDebugMode) {
+              debugPrint('RosbridgeService: $_url upgrade failed: $error');
+            }
             if (_channel == channel) {
               _scheduleReconnect();
             }

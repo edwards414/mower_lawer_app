@@ -74,10 +74,18 @@ class RobotRegistry extends ChangeNotifier {
     PairingStore? store,
     BackendClient? backend,
     LanProbe? lanProbe,
+    String? devPairUrl,
   }) : _rosbridge = rosbridge,
        _store = store ?? SecurePairingStore(),
        _backend = backend ?? BackendClient(),
-       _lanProbe = lanProbe ?? defaultLanProbe;
+       _lanProbe = lanProbe ?? defaultLanProbe,
+       _devPairUrl = devPairUrl ?? _devPairUrlDefine;
+
+  /// Debug builds only: pair with this QR payload on first start, so the
+  /// simulator (no camera to scan) can talk to a real robot:
+  ///   flutter run --dart-define=DEV_PAIR_URL='https://mower.…/pair?id=…&s=…&l=…'
+  static const _devPairUrlDefine = String.fromEnvironment('DEV_PAIR_URL');
+  final String _devPairUrl;
 
   static const _robotsKey = 'paired_robots';
   static const _activeKey = 'active_robot';
@@ -131,8 +139,12 @@ class RobotRegistry extends ChangeNotifier {
   }
 
   Future<void> load() async {
+    // Nothing stored (or the store is unreadable, e.g. a simulator keychain
+    // without entitlements) counts as a first start.
+    var firstStart = true;
     try {
       final raw = await _store.read(_robotsKey);
+      firstStart = raw == null;
       if (raw != null && raw.isNotEmpty) {
         final list = (jsonDecode(raw) as List)
             .whereType<Map>()
@@ -149,6 +161,17 @@ class RobotRegistry extends ChangeNotifier {
     if (_clientId.isEmpty) {
       _clientId = PairingAuth.newClientId();
       await _store.write(_clientKey, _clientId);
+    }
+    if (firstStart && _robots.isEmpty && kDebugMode && _devPairUrl.isNotEmpty) {
+      try {
+        final robot = PairedRobot.fromPairUrl(_devPairUrl);
+        _robots = List.unmodifiable([robot]);
+        _activeId = robot.id;
+        await _persist();
+        debugPrint('RobotRegistry: paired ${robot.id} from DEV_PAIR_URL');
+      } on FormatException catch (e) {
+        debugPrint('RobotRegistry: DEV_PAIR_URL rejected: ${e.message}');
+      }
     }
     if (active == null && _robots.isNotEmpty) {
       _activeId = _robots.first.id;

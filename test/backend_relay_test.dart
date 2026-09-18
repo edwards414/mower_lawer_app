@@ -228,6 +228,37 @@ void main() {
     service.dispose();
   });
 
+  test('DEV_PAIR_URL pairs on first start only', () async {
+    final channel = _FakeWebSocketChannel();
+    final service = RosbridgeService(
+      url: 'ws://unused',
+      connector: (_, {headers = const <String, dynamic>{}, protocols = const <String>[]}) => channel,
+    );
+    final store = MemoryPairingStore();
+    final registry = RobotRegistry(
+      rosbridge: service,
+      store: store,
+      backend: BackendClient(client: MockClient((_) async => http.Response('{}', 404))),
+      lanProbe: (_, _) async => false,
+      devPairUrl: _legacyQr,
+    );
+    await registry.load();
+    expect(registry.robots.map((r) => r.id), ['MW-7K3Q9P']);
+    await registry.remove('MW-7K3Q9P');
+
+    // a second start keeps the user's choice: nothing is re-added
+    final again = RobotRegistry(
+      rosbridge: service,
+      store: store,
+      backend: BackendClient(client: MockClient((_) async => http.Response('{}', 404))),
+      lanProbe: (_, _) async => false,
+      devPairUrl: _legacyQr,
+    );
+    await again.load();
+    expect(again.robots, isEmpty);
+    service.dispose();
+  });
+
   test('backend errors are surfaced, not thrown', () async {
     final channel = _FakeWebSocketChannel();
     final service = RosbridgeService(

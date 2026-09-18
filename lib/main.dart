@@ -53,7 +53,10 @@ class MowerApp extends StatelessWidget {
         ),
         // Paired robots (keychain) -> rosbridge endpoint + hand-shake; the
         // reported robot_id from /robot/info is checked against the pairing.
+        // Not lazy: the endpoint must be configured at start-up, before any
+        // page (the self-check comes first) asks whether rosbridge is up.
         ChangeNotifierProxyProvider<RobotInfoProvider, RobotRegistry>(
+          lazy: false,
           create: (ctx) =>
               RobotRegistry(rosbridge: ctx.read<RosbridgeService>())..load(),
           update: (_, info, registry) =>
