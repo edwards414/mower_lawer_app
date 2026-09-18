@@ -9,7 +9,7 @@ import 'whep_http_client_factory.dart';
 
 enum WhepState { idle, connecting, connected, failed }
 
-const _defaultIceGatheringTimeout = Duration(seconds: 8);
+const _defaultIceGatheringTimeout = Duration(seconds: 3);
 const _defaultSignalingTimeout = Duration(seconds: 12);
 const _defaultTeardownTimeout = Duration(seconds: 4);
 
@@ -40,13 +40,22 @@ Future<void> waitForWhepIceGathering(
     // so a candidate-complete local description is required before POST.
     if (await peerConnection.getIceGatheringState() !=
         RTCIceGatheringState.RTCIceGatheringStateComplete) {
-      await completed.future.timeout(
-        timeout,
-        onTimeout: () => throw TimeoutException(
-          'WHEP ICE gathering did not complete',
-          timeout,
-        ),
-      );
+      // "Complete" can take long or never come when a STUN server is
+      // unreachable; after the timeout go ahead with whatever candidates were
+      // gathered. On a LAN the host candidate is all the media server needs.
+      var timedOut = false;
+      await completed.future.timeout(timeout, onTimeout: () => timedOut = true);
+      if (timedOut) {
+        final sdp = (await peerConnection.getLocalDescription())?.sdp ?? '';
+        if (!sdp.contains('a=candidate:')) {
+          throw TimeoutException(
+            'WHEP ICE gathering produced no candidate',
+            timeout,
+          );
+        }
+        debugPrint('WhepClient: ICE gathering incomplete after '
+            '${timeout.inMilliseconds} ms, posting the partial offer');
+      }
     }
   } finally {
     if (identical(peerConnection.onIceGatheringState, handler)) {
@@ -100,6 +109,38 @@ Future<http.Response> deleteWhepSession({
       );
 }
 
+const List<Map<String, dynamic>> _publicIceServers = <Map<String, dynamic>>[
+  {
+    'urls': <String>['stun:stun.cloudflare.com:3478'],
+  },
+];
+
+/// Private / link-local hosts (RFC 1918, .local, loopback): the robot is on
+/// the same network, host candidates suffice and STUN would only add delay.
+@visibleForTesting
+bool isLanHost(String host) {
+  final h = host.toLowerCase();
+  if (h == 'localhost' || h.endsWith('.local')) return true;
+  final parts = h.split('.');
+  if (parts.length != 4) return false;
+  final octets = parts.map(int.tryParse).toList();
+  if (octets.any((o) => o == null || o < 0 || o > 255)) return false;
+  final a = octets[0]!;
+  final b = octets[1]!;
+  if (a == 10 || a == 127) return true;
+  if (a == 192 && b == 168) return true;
+  if (a == 172 && b >= 16 && b <= 31) return true;
+  if (a == 169 && b == 254) return true;
+  return false;
+}
+
+/// ICE servers for a WHEP endpoint: nothing on the LAN, a public STUN
+/// server otherwise so mobile / Wi-Fi NATs can be traversed.
+List<Map<String, dynamic>> iceServersForWhepUrl(String whepUrl) {
+  final host = Uri.tryParse(whepUrl)?.host ?? '';
+  return isLanHost(host) ? const <Map<String, dynamic>>[] : _publicIceServers;
+}
+
 /// Minimal WHEP (WebRTC-HTTP Egress Protocol) client that pulls a single
 /// receive-only video stream from a media server such as MediaMTX.
 ///
@@ -113,12 +154,17 @@ class WhepClient {
     required this.whepUrl,
     http.Client? httpClient,
     this.onStateChanged,
+    List<Map<String, dynamic>>? iceServers,
     this.iceGatheringTimeout = _defaultIceGatheringTimeout,
     this.signalingTimeout = _defaultSignalingTimeout,
     this.teardownTimeout = _defaultTeardownTimeout,
-  }) : _httpClient = httpClient ?? createWhepHttpClient();
+  }) : _httpClient = httpClient ?? createWhepHttpClient(),
+       iceServers = iceServers ?? iceServersForWhepUrl(whepUrl);
 
   final String whepUrl;
+
+  /// ICE servers handed to the peer connection (see [iceServersForWhepUrl]).
+  final List<Map<String, dynamic>> iceServers;
   final ValueChanged<WhepState>? onStateChanged;
   final Duration iceGatheringTimeout;
   final Duration signalingTimeout;
@@ -157,11 +203,7 @@ class WhepClient {
         return;
       }
       final pc = await createPeerConnection({
-        'iceServers': <Map<String, dynamic>>[
-          {
-            'urls': <String>['stun:stun.cloudflare.com:3478'],
-          },
-        ],
+        'iceServers': iceServers,
         'sdpSemantics': 'unified-plan',
       });
       if (_disposed) {

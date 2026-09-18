@@ -28,16 +28,38 @@ void main() {
     expect(await latestWhepLocalDescriptionSdp(peer), contains('candidate'));
   });
 
-  test('ICE gathering timeout fails instead of posting a partial offer', () {
+  test('ICE gathering timeout proceeds once a host candidate exists', () async {
+    // On a LAN the host candidate is all MediaMTX needs; a STUN server that
+    // never answers must not block the camera.
+    final peer = _FakePeerConnection(
+      state: RTCIceGatheringState.RTCIceGatheringStateGathering,
+      localDescription: RTCSessionDescription(
+        'v=0\r\na=candidate:1 1 udp 2130706431 192.168.1.20 51000 typ host\r\n',
+        'offer',
+      ),
+    );
+    await waitForWhepIceGathering(peer, timeout: const Duration(milliseconds: 20));
+    expect(await latestWhepLocalDescriptionSdp(peer), contains('typ host'));
+  });
+
+  test('ICE gathering timeout without any candidate still fails', () {
     final peer = _FakePeerConnection(
       state: RTCIceGatheringState.RTCIceGatheringStateGathering,
       localDescription: RTCSessionDescription('v=0\r\n', 'offer'),
     );
-
     expect(
-      waitForWhepIceGathering(peer, timeout: const Duration(milliseconds: 5)),
+      waitForWhepIceGathering(peer, timeout: const Duration(milliseconds: 20)),
       throwsA(isA<TimeoutException>()),
     );
+  });
+
+  test('LAN hosts use no STUN server, public hosts keep it', () {
+    expect(iceServersForWhepUrl('http://192.168.0.109:8889/front/whep'), isEmpty);
+    expect(iceServersForWhepUrl('http://10.77.0.2:8889/front/whep'), isEmpty);
+    expect(iceServersForWhepUrl('http://172.20.1.9:8889/front/whep'), isEmpty);
+    expect(iceServersForWhepUrl('http://mower.local:8889/front/whep'), isEmpty);
+    expect(iceServersForWhepUrl('https://camera.example.com/front/whep'), isNotEmpty);
+    expect(iceServersForWhepUrl('http://100.67.138.19:8889/front/whep'), isNotEmpty);
   });
 
   test('WHEP POST sends SDP and enforces its timeout', () async {
