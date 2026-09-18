@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
@@ -31,7 +32,7 @@ class TopStatusPill extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             _StatusItem(
-              icon: Icons.hub_outlined,
+              icon: AppIcons.network,
               label: mission.mockDataEnabled
                   ? 'Demo'
                   : mission.robotOnline
@@ -47,7 +48,7 @@ class TopStatusPill extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             _StatusItem(
-              icon: Icons.route_outlined,
+              icon: AppIcons.route,
               label: mission.navStatusLabel(),
               color: mission.navStatus == NavMockStatus.executing
                   ? const Color(0xFF167A4A)
@@ -55,7 +56,7 @@ class TopStatusPill extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             _StatusItem(
-              icon: Icons.my_location,
+              icon: AppIcons.locateFixed,
               label: mission.mockDataEnabled
                   ? 'Demo GPS'
                   : mission.hasFreshGpsFix
@@ -125,7 +126,7 @@ class _BatteryStatus extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(
-          battery == null ? Icons.battery_unknown : _batteryIcon(battery),
+          battery == null ? AppIcons.battery : _batteryIcon(battery),
           size: 18,
           color: color,
         ),
@@ -144,11 +145,11 @@ class _BatteryStatus extends StatelessWidget {
 
   IconData _batteryIcon(double value) {
     if (value < 20) {
-      return Icons.battery_alert;
+      return AppIcons.batteryWarning;
     }
     if (value < 60) {
-      return Icons.battery_4_bar;
+      return AppIcons.batteryMedium;
     }
-    return Icons.battery_full;
+    return AppIcons.batteryFull;
   }
 }

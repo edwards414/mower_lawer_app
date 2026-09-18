@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
@@ -124,7 +125,7 @@ class ExecutionControlSheet extends StatelessWidget {
                 onPressed: mission.canStartMission
                     ? mission.startExecution
                     : null,
-                icon: const Icon(Icons.play_arrow),
+                icon: const Icon(AppIcons.play),
                 label: const Text('開始'),
               ),
             ),
@@ -132,7 +133,7 @@ class ExecutionControlSheet extends StatelessWidget {
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: canCancel ? mission.cancelExecution : null,
-                icon: const Icon(Icons.stop),
+                icon: const Icon(AppIcons.square),
                 label: const Text('取消'),
               ),
             ),

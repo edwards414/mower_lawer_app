@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
@@ -46,17 +47,17 @@ class PlanningControlSheet extends StatelessWidget {
               ButtonSegment(
                 value: CoveragePatternKind.zigzag,
                 label: Text('Zigzag'),
-                icon: Icon(Icons.swap_vert),
+                icon: Icon(AppIcons.arrowUpDown),
               ),
               ButtonSegment(
                 value: CoveragePatternKind.spiral,
                 label: Text('Spiral'),
-                icon: Icon(Icons.blur_circular),
+                icon: Icon(AppIcons.shell),
               ),
               ButtonSegment(
                 value: CoveragePatternKind.custom,
                 label: Text('Custom'),
-                icon: Icon(Icons.image_outlined),
+                icon: Icon(AppIcons.image),
               ),
             ],
           ),
@@ -110,7 +111,7 @@ class PlanningControlSheet extends StatelessWidget {
             onPressed: mission.canMutatePlanning
                 ? () => mission.runPlanningStep('coverage')
                 : null,
-            icon: const Icon(Icons.route),
+            icon: const Icon(AppIcons.route),
             label: const Text('生成覆蓋路徑'),
           ),
         ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 
 import '../models/mower_status.dart';
 import '../utils/constants.dart';
@@ -11,15 +12,15 @@ class StatusBar extends StatelessWidget {
 
   IconData _batteryIcon() {
     if (status.batteryPercent <= AppConstants.lowBatteryThreshold) {
-      return Icons.battery_alert;
+      return AppIcons.batteryWarning;
     }
     if (status.batteryPercent <= AppConstants.warningBatteryThreshold) {
-      return Icons.battery_2_bar;
+      return AppIcons.batteryLow;
     }
     if (status.workStatus == MowerWorkStatus.charging) {
-      return Icons.battery_charging_full;
+      return AppIcons.batteryCharging;
     }
-    return Icons.battery_full;
+    return AppIcons.batteryFull;
   }
 
   Color _batteryColor() {

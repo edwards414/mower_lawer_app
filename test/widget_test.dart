@@ -1,6 +1,7 @@
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:flutter/material.dart';
+import 'package:mower_stdio/utils/app_icons.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -31,7 +32,7 @@ void main() {
     expect(find.text('更多'), findsOneWidget);
     expect(find.text('等待新鮮 GPS 位置'), findsWidgets);
 
-    await tester.tap(find.byIcon(Icons.map_outlined));
+    await tester.tap(find.byIcon(AppIcons.map));
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('物件'), findsOneWidget);

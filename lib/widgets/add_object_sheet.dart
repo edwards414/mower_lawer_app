@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
@@ -36,7 +37,7 @@ class AddObjectSheet extends StatelessWidget {
                 ),
                 IconButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.close),
+                  icon: const Icon(AppIcons.x),
                 ),
               ],
             ),
@@ -45,7 +46,7 @@ class AddObjectSheet extends StatelessWidget {
               children: [
                 Expanded(
                   child: _AddObjectCard(
-                    icon: Icons.crop_square,
+                    icon: AppIcons.squareDashed,
                     label: '工作區',
                     color: const Color(0xFF35B861),
                     onTap: () {
@@ -57,7 +58,7 @@ class AddObjectSheet extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: _AddObjectCard(
-                    icon: Icons.dangerous_outlined,
+                    icon: AppIcons.ban,
                     label: '禁入區',
                     color: const Color(0xFFE55353),
                     onTap: () {
@@ -69,7 +70,7 @@ class AddObjectSheet extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: _AddObjectCard(
-                    icon: Icons.timeline,
+                    icon: AppIcons.spline,
                     label: '通道',
                     color: const Color(0xFF25AFC6),
                     onTap: () {
@@ -82,7 +83,7 @@ class AddObjectSheet extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             _AddObjectCard(
-              icon: Icons.edit_location_alt_outlined,
+              icon: AppIcons.mapPinPen,
               label: '地圖手繪危險區（點頂點）',
               color: const Color(0xFFE5852F),
               onTap: () {

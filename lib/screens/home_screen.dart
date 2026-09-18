@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
@@ -145,23 +146,23 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
               },
               destinations: const [
                 NavigationDestination(
-                  icon: Icon(Icons.home_outlined),
+                  icon: Icon(AppIcons.house),
                   label: '首頁',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.map_outlined),
+                  icon: Icon(AppIcons.map),
                   label: '地圖',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.sports_esports_outlined),
+                  icon: Icon(AppIcons.gamepad2),
                   label: '手動控制',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.calendar_month_outlined),
+                  icon: Icon(AppIcons.calendar),
                   label: '排程',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.more_horiz_outlined),
+                  icon: Icon(AppIcons.ellipsis),
                   label: '更多',
                 ),
               ],
@@ -270,7 +271,7 @@ class _DashboardHeader extends StatelessWidget {
                     ),
                   ),
                   SizedBox(width: 4),
-                  Icon(Icons.keyboard_arrow_down, size: 20),
+                  Icon(AppIcons.chevronDown, size: 20),
                 ],
               ),
             ],
@@ -280,7 +281,7 @@ class _DashboardHeader extends StatelessWidget {
           message: '通知',
           child: IconButton(
             onPressed: () {},
-            icon: const Icon(Icons.notifications_none_outlined),
+            icon: const Icon(AppIcons.bell),
             color: const Color(0xFF17211C),
           ),
         ),
@@ -379,7 +380,7 @@ class _WeatherCard extends StatelessWidget {
             children: [
               _IconBubble(
                 icon: snapshot == null
-                    ? Icons.cloud_queue_outlined
+                    ? AppIcons.cloud
                     : _weatherIcon(snapshot.weatherCode),
                 color: const Color(0xFF1E88A8),
                 background: const Color(0xFFE6F5F8),
@@ -479,14 +480,14 @@ class _WeatherCard extends StatelessWidget {
 
   static IconData _weatherIcon(int code) {
     return switch (code) {
-      0 || 1 => Icons.wb_sunny_outlined,
-      2 || 3 => Icons.cloud_outlined,
-      45 || 48 => Icons.foggy,
-      51 || 53 || 55 || 56 || 57 => Icons.grain_outlined,
-      61 || 63 || 65 || 66 || 67 || 80 || 81 || 82 => Icons.water_drop_outlined,
-      71 || 73 || 75 || 77 || 85 || 86 => Icons.ac_unit,
-      95 || 96 || 99 => Icons.thunderstorm_outlined,
-      _ => Icons.cloud_queue_outlined,
+      0 || 1 => AppIcons.sun,
+      2 || 3 => AppIcons.cloud,
+      45 || 48 => AppIcons.cloudFog,
+      51 || 53 || 55 || 56 || 57 => AppIcons.cloudDrizzle,
+      61 || 63 || 65 || 66 || 67 || 80 || 81 || 82 => AppIcons.droplet,
+      71 || 73 || 75 || 77 || 85 || 86 => AppIcons.snowflake,
+      95 || 96 || 99 => AppIcons.cloudLightning,
+      _ => AppIcons.cloud,
     };
   }
 }
@@ -637,7 +638,7 @@ class _MissionSummaryCard extends StatelessWidget {
           Row(
             children: [
               _IconBubble(
-                icon: Icons.yard_outlined,
+                icon: AppIcons.sprout,
                 color: const Color(0xFF168848),
                 background: const Color(0xFFE4F6EC),
               ),
@@ -783,7 +784,7 @@ class _NextScheduleCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const _InfoDashboardRow(
-      icon: Icons.calendar_month_outlined,
+      icon: AppIcons.calendar,
       title: '下次排程',
       value: '後院區域',
       trailing: '明天 08:00',
@@ -797,7 +798,7 @@ class _DockStatusCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const _InfoDashboardRow(
-      icon: Icons.ev_station_outlined,
+      icon: AppIcons.plugZap,
       title: '充電座狀態',
       value: '已就緒',
       trailing: '›',
@@ -955,7 +956,7 @@ class _RobotOnlineChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            online ? Icons.smart_toy : Icons.smart_toy_outlined,
+            online ? AppIcons.bot : AppIcons.bot,
             size: 14,
             color: color,
           ),
@@ -1006,14 +1007,14 @@ class _ScheduleTab extends StatelessWidget {
             ),
             SizedBox(height: 16),
             _InfoDashboardRow(
-              icon: Icons.calendar_month_outlined,
+              icon: AppIcons.calendar,
               title: '下一個任務',
               value: '後院區域',
               trailing: '明天 08:00',
             ),
             SizedBox(height: 10),
             _InfoDashboardRow(
-              icon: Icons.repeat_outlined,
+              icon: AppIcons.repeat,
               title: '重複週期',
               value: '每週一、三、五',
               trailing: '08:00',
@@ -1048,7 +1049,7 @@ class _MoreTab extends StatelessWidget {
               child: Column(
                 children: [
                   _MoreActionRow(
-                    icon: Icons.smart_toy_outlined,
+                    icon: AppIcons.bot,
                     title: '我的機器人',
                     detail: () {
                       final active = context.watch<RobotRegistry>().active;
@@ -1061,7 +1062,7 @@ class _MoreTab extends StatelessWidget {
                   ),
                   const Divider(height: 24),
                   _MoreActionRow(
-                    icon: Icons.settings_outlined,
+                    icon: AppIcons.settings,
                     title: '連線設定（進階）',
                     detail: mission.robotIp,
                     onTap: () =>
@@ -1069,7 +1070,7 @@ class _MoreTab extends StatelessWidget {
                   ),
                   const Divider(height: 24),
                   _MoreActionRow(
-                    icon: Icons.layers_outlined,
+                    icon: AppIcons.layers,
                     title: '地圖圖層',
                     detail: '工作區、禁入區、通道',
                     onTap: () =>
@@ -1077,7 +1078,7 @@ class _MoreTab extends StatelessWidget {
                   ),
                   const Divider(height: 24),
                   _MoreActionRow(
-                    icon: Icons.videocam_outlined,
+                    icon: AppIcons.video,
                     title: '錄製 / Bag',
                     detail: '錄製狀態、清單、上傳 R2',
                     onTap: () => Navigator.of(context).push(
@@ -1095,8 +1096,8 @@ class _MoreTab extends StatelessWidget {
                 children: [
                   _InfoRow(
                     icon: mission.rosConnected
-                        ? Icons.radio_button_checked
-                        : Icons.portable_wifi_off_outlined,
+                        ? AppIcons.circleDot
+                        : AppIcons.wifiOff,
                     title: '資料來源',
                     detail: mission.mockDataEnabled
                         ? 'Demo（與真機資料隔離）'
@@ -1105,7 +1106,7 @@ class _MoreTab extends StatelessWidget {
                         : '等待 ROS 真實資料',
                   ),
                   _InfoRow(
-                    icon: Icons.health_and_safety_outlined,
+                    icon: AppIcons.shieldCheck,
                     title: '安全狀態',
                     detail: mission.mockDataEnabled
                         ? 'Demo 不代表真機安全'
@@ -1165,7 +1166,7 @@ class _MoreActionRow extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: Color(0xFF78909C)),
+            const Icon(AppIcons.chevronRight, color: Color(0xFF78909C)),
           ],
         ),
       ),
@@ -1601,7 +1602,7 @@ class _SatelliteToggle extends StatelessWidget {
           width: 46,
           height: 46,
           child: Icon(
-            on ? Icons.satellite_alt : Icons.satellite_alt_outlined,
+            on ? AppIcons.satellite : AppIcons.satellite,
             color: enabled ? Colors.white : Colors.white38,
             size: 24,
           ),
@@ -1632,32 +1633,32 @@ class _MapActionRail extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         _RoundIconButton(
-          icon: Icons.add,
+          icon: AppIcons.plus,
           tooltip: '新增物件',
           color: const Color(0xFF1384E8),
           onTap: onAdd,
         ),
         const SizedBox(height: 10),
         _RoundIconButton(
-          icon: Icons.collections_bookmark_outlined,
+          icon: AppIcons.library,
           tooltip: '場地庫',
           onTap: onSites,
         ),
         const SizedBox(height: 10),
         _RoundIconButton(
-          icon: Icons.layers_outlined,
+          icon: AppIcons.layers,
           tooltip: '圖層',
           onTap: onLayers,
         ),
         const SizedBox(height: 10),
         _RoundIconButton(
-          icon: Icons.settings_outlined,
+          icon: AppIcons.settings,
           tooltip: '設定',
           onTap: onSettings,
         ),
         const SizedBox(height: 10),
         _RoundIconButton(
-          icon: Icons.sports_esports_outlined,
+          icon: AppIcons.gamepad2,
           tooltip: '手動控制',
           onTap: onManual,
         ),
@@ -1700,7 +1701,7 @@ class _DrawControlBar extends StatelessWidget {
           child: Row(
             children: [
               const Icon(
-                Icons.edit_location_alt_outlined,
+                AppIcons.mapPinPen,
                 color: Color(0xFFE5852F),
                 size: 18,
               ),
@@ -1774,7 +1775,7 @@ class _VertexEditBar extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
             children: [
-              const Icon(Icons.open_with, color: Color(0xFF1384E8), size: 18),
+              const Icon(AppIcons.move, color: Color(0xFF1384E8), size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -1907,7 +1908,7 @@ class _MissionBottomPanel extends StatelessWidget {
                         duration: const Duration(milliseconds: 280),
                         curve: Curves.easeInOut,
                         child: const Icon(
-                          Icons.keyboard_arrow_down,
+                          AppIcons.chevronDown,
                           size: 18,
                           color: Color(0xFFB0BEC5),
                         ),
@@ -2106,7 +2107,7 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
                 decoration: const InputDecoration(
                   labelText: '區網模式機器人 IP',
                   hintText: '192.168.1.100',
-                  prefixIcon: Icon(Icons.router_outlined),
+                  prefixIcon: Icon(AppIcons.router),
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -2124,18 +2125,18 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Icon(Icons.wifi_tethering),
+                    : const Icon(AppIcons.radioTower),
                 label: Text(_saving ? '儲存中' : '儲存並重連'),
               ),
             ),
             const SizedBox(height: 16),
             _InfoRow(
-              icon: Icons.link_outlined,
+              icon: AppIcons.link,
               title: 'rosbridge',
               detail: mission.rosbridgeUrl,
             ),
             _InfoRow(
-              icon: Icons.storage_outlined,
+              icon: AppIcons.database,
               title: '資料來源',
               detail: mission.mockDataEnabled
                   ? 'Demo（與真機資料隔離）'
@@ -2165,9 +2166,9 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
                       unawaited(mission.setMockDataEnabled(value));
                     },
             ),
-            _InfoRow(icon: Icons.map_outlined, title: '底圖模式', detail: '灰底任務地圖'),
+            _InfoRow(icon: AppIcons.map, title: '底圖模式', detail: '灰底任務地圖'),
             _InfoRow(
-              icon: Icons.satellite_alt_outlined,
+              icon: AppIcons.satellite,
               title: '衛星圖',
               detail: '等待 API 串接',
             ),

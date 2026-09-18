@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
@@ -11,10 +12,10 @@ class MissionModeBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
     final items = const [
-      _ModeItem(MissionMode.objects, Icons.layers_outlined, '物件'),
-      _ModeItem(MissionMode.plan, Icons.tune_outlined, '規劃'),
-      _ModeItem(MissionMode.run, Icons.play_circle_outline, '執行'),
-      _ModeItem(MissionMode.logs, Icons.receipt_long_outlined, '日誌'),
+      _ModeItem(MissionMode.objects, AppIcons.layers, '物件'),
+      _ModeItem(MissionMode.plan, AppIcons.slidersHorizontal, '規劃'),
+      _ModeItem(MissionMode.run, AppIcons.circlePlay, '執行'),
+      _ModeItem(MissionMode.logs, AppIcons.scrollText, '日誌'),
     ];
 
     return Row(

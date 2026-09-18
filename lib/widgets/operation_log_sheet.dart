@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/mission_mock_provider.dart';
@@ -24,7 +25,7 @@ class OperationLogSheet extends StatelessWidget {
             ),
             TextButton.icon(
               onPressed: () => mission.addMockAction('手動刷新日誌'),
-              icon: const Icon(Icons.refresh, size: 18),
+              icon: const Icon(AppIcons.refreshCw, size: 18),
               label: const Text('刷新'),
             ),
           ],

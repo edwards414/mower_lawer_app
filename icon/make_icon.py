@@ -1,6 +1,7 @@
 # Generates icon/icon.png (1024x1024): a single grass blade on graphite,
 # rendered with Pillow so the mark stays editable. Run from icon/:
 #   python3 make_icon.py && cd .. && dart run flutter_launcher_icons
+
 from PIL import Image, ImageDraw, ImageFilter, ImageChops
 S, SS = 1024, 4
 N = S * SS
