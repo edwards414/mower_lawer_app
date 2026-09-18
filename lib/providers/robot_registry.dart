@@ -299,7 +299,22 @@ class RobotRegistry extends ChangeNotifier {
       url: url,
       authHeaders: authHeaders,
       framed: route == 'relay' && a.usesBackendRelay,
+      cameraBaseUrl: cameraBaseUrlFor(a, route),
     );
+  }
+
+  /// Where the WHEP video of [robot] is served for a route: the QR's `c`
+  /// when given, else the robot's MediaMTX on the LAN. Through the fleet
+  /// relay there is no video path yet (phase 3), so '' hides the camera.
+  static String cameraBaseUrlFor(PairedRobot robot, String route) {
+    if (robot.cameraUrl.isNotEmpty) return robot.cameraUrl;
+    if (route == 'lan' && robot.hasLan) {
+      return 'http://${robot.lanAddress}:${PairedRobot.webrtcPort}';
+    }
+    if (route == 'relay' && !robot.usesBackendRelay) {
+      return ''; // legacy tunnel: MissionMockProvider derives from the host
+    }
+    return '';
   }
 
   Future<void> _persist() async {

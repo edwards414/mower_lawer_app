@@ -79,6 +79,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
     final cameraStage = WebrtcCameraView(
       feed: CameraFeed.front,
       whepUrl: mission.whepUrl(CameraFeed.front),
+      noUrlDetail: mission.cameraUnavailableReason,
     );
     final mapStage = MissionMapCanvas(
       mission: mission,

@@ -16,12 +16,16 @@ class WebrtcCameraView extends StatefulWidget {
     super.key,
     required this.feed,
     required this.whepUrl,
+    this.noUrlDetail = '尚未設定機器人 IP',
   });
 
   final CameraFeed feed;
 
-  /// WHEP endpoint for this feed, or empty when the robot IP is unknown.
+  /// WHEP endpoint for this feed, or empty when video is not reachable.
   final String whepUrl;
+
+  /// Shown in the placeholder while [whepUrl] is empty.
+  final String noUrlDetail;
 
   @override
   State<WebrtcCameraView> createState() => _WebrtcCameraViewState();
@@ -146,6 +150,7 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
       feed: widget.feed,
       state: _state,
       hasUrl: widget.whepUrl.isNotEmpty,
+      noUrlDetail: widget.noUrlDetail,
     );
   }
 }
@@ -155,17 +160,19 @@ class _CameraPlaceholder extends StatelessWidget {
     required this.feed,
     required this.state,
     required this.hasUrl,
+    required this.noUrlDetail,
   });
 
   final CameraFeed feed;
   final WhepState state;
   final bool hasUrl;
+  final String noUrlDetail;
 
   @override
   Widget build(BuildContext context) {
     final title = feed == CameraFeed.front ? '前鏡頭' : '後鏡頭';
     final detail = !hasUrl
-        ? '尚未設定機器人 IP'
+        ? noUrlDetail
         : switch (state) {
             WhepState.connecting => '影像連線中…',
             WhepState.failed => '影像連線失敗',

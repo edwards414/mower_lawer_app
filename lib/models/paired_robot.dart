@@ -19,6 +19,9 @@ class PairedRobot {
   static final RegExp idPattern = RegExp(r'^MW-[A-Z0-9]{6}$');
   static const int rosbridgePort = 9090;
 
+  /// On-robot MediaMTX WebRTC (WHEP) port.
+  static const int webrtcPort = 8889;
+
   final String id;
 
   /// base32 pairing secret from the QR (never shown in the UI).

@@ -140,6 +140,44 @@ void main() {
     service.dispose();
   });
 
+  test('camera base URL follows the route: LAN MediaMTX, QR override, none through the relay', () async {
+    final channel = _FakeWebSocketChannel();
+    final service = RosbridgeService(
+      url: 'ws://unused',
+      connector: (_, {headers = const <String, dynamic>{}, protocols = const <String>[]}) => channel,
+    );
+    var lanReachable = false;
+    final registry = RobotRegistry(
+      rosbridge: service,
+      store: MemoryPairingStore(),
+      backend: BackendClient(client: MockClient((_) async => http.Response('{}', 404))),
+      lanProbe: (_, _) async => lanReachable,
+    );
+    await registry.load();
+    await registry.pairFromText(_backendQr);
+    await _flush();
+    expect(registry.activeRoute, 'relay');
+    expect(service.cameraBaseUrl, '', reason: 'no video path through the fleet relay yet');
+
+    lanReachable = true;
+    await registry.update('MW-7K3Q9P', preferLan: true);
+    expect(registry.activeRoute, 'lan');
+    expect(service.cameraBaseUrl, 'http://192.168.1.5:8889');
+
+    // a QR with c= wins on every route
+    lanReachable = false;
+    await registry.pairFromText('$_backendQr&c=https://cam.example.com/');
+    await registry.update('MW-7K3Q9P', preferLan: false);
+    await _flush();
+    expect(registry.activeRoute, 'relay');
+    expect(service.cameraBaseUrl, 'https://cam.example.com');
+
+    final legacy = PairedRobot.fromPairUrl(_legacyQr);
+    expect(RobotRegistry.cameraBaseUrlFor(legacy, 'relay'), '');
+    expect(RobotRegistry.cameraBaseUrlFor(legacy.copyWith(lanAddress: '10.0.0.5'), 'lan'), 'http://10.0.0.5:8889');
+    service.dispose();
+  });
+
   test('registry reads backend status and adopts the reported LAN address', () async {
     final channel = _FakeWebSocketChannel();
     final service = RosbridgeService(

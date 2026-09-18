@@ -23,9 +23,12 @@ class MissionMockProvider extends ChangeNotifier {
 
   /// TCP port of the on-robot WebRTC (WHEP) media server (MediaMTX).
   static const _webrtcPort = 8889;
+
+  /// Build-time override of the WHEP base URL (special builds only). By
+  /// default the camera follows the paired robot's route, see [cameraBaseUrl].
   static const _configuredCameraBaseUrl = String.fromEnvironment(
     'CAMERA_BASE_URL',
-    defaultValue: 'https://camera.fxrbindi.com',
+    defaultValue: '',
   );
 
   MissionMockProvider({RosbridgeService? rosbridge})
@@ -325,12 +328,21 @@ class MissionMockProvider extends ChangeNotifier {
     };
   }
 
-  /// Public WHEP relay URL in production. Passing an empty CAMERA_BASE_URL at
-  /// build time restores the LAN fallback derived from the rosbridge host.
+  /// WHEP base URL for the current connection: a build-time override, else
+  /// what the robot registry set for the active route (QR `c` or the LAN
+  /// MediaMTX), else the rosbridge host (legacy tunnel / dev). Through the
+  /// fleet relay there is no video path yet, so this is '' there.
   String get cameraBaseUrl {
     final configured = _configuredCameraBaseUrl.trim();
     if (configured.isNotEmpty) {
       return configured.replaceFirst(RegExp(r'/+$'), '');
+    }
+    final fromRoute = _rosbridge.cameraBaseUrl;
+    if (fromRoute.isNotEmpty) {
+      return fromRoute;
+    }
+    if (_rosbridge.framed) {
+      return '';
     }
     final ip = robotIp;
     if (ip.isEmpty) {
@@ -338,6 +350,11 @@ class MissionMockProvider extends ChangeNotifier {
     }
     return 'http://$ip:$_webrtcPort';
   }
+
+  /// Why [whepUrl] is empty, for the camera placeholder.
+  String get cameraUnavailableReason => _rosbridge.framed
+      ? '遠端連線暫不支援影像，請在同一個 Wi-Fi 下使用'
+      : '尚未設定機器人 IP';
 
   /// WHEP endpoint for a camera feed, or empty when the robot IP is unknown.
   /// The path name (`front`/`rear`) must match the MediaMTX `paths` config.

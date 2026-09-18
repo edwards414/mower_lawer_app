@@ -72,6 +72,11 @@ class RosbridgeService {
   /// Connected through the fleet backend relay: mrelay1 framing on the wire.
   bool _framed = false;
   RelayReassembler? _reassembler;
+
+  /// WHEP base URL of the active robot for the current route
+  /// (`http://<lan ip>:8889`, or the QR's `c`); '' when video is not
+  /// reachable this way (fleet relay without a camera URL).
+  String _cameraBaseUrl = '';
   final RosbridgeConnector _connector;
   final Map<String, _RosbridgeSubscription> _subscriptions = {};
   final Map<String, String> _advertisements = {};
@@ -91,6 +96,7 @@ class RosbridgeService {
 
   String get url => _url;
   bool get framed => _framed;
+  String get cameraBaseUrl => _cameraBaseUrl;
   String get robotIp {
     final uri = Uri.tryParse(_url);
     return uri?.host ?? '';
@@ -163,8 +169,10 @@ class RosbridgeService {
     required String url,
     RosbridgeHeaderProvider? authHeaders,
     bool framed = false,
+    String cameraBaseUrl = '',
   }) {
     _authHeaders = authHeaders;
+    _cameraBaseUrl = cameraBaseUrl.replaceFirst(RegExp(r'/+$'), '');
     if (url.isEmpty) {
       return;
     }
