@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import '../utils/app_icons.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
@@ -6,6 +9,7 @@ import '../models/paired_robot.dart';
 import '../providers/mission_mock_provider.dart';
 import '../providers/robot_info_provider.dart';
 import '../providers/robot_registry.dart';
+import '../services/backend_client.dart';
 import '../services/rosbridge_service.dart';
 
 const _kGreen = Color(0xFF167A4A);
@@ -14,8 +18,34 @@ const _kBad = Color(0xFFC62828);
 
 /// "我的機器人": paired robots, which one is active, LAN/relay choice,
 /// pairing by QR code (or pasted code) and unpairing.
-class RobotsScreen extends StatelessWidget {
+class RobotsScreen extends StatefulWidget {
   const RobotsScreen({super.key});
+
+  @override
+  State<RobotsScreen> createState() => _RobotsScreenState();
+}
+
+class _RobotsScreenState extends State<RobotsScreen> {
+  Timer? _refresh;
+
+  @override
+  void initState() {
+    super.initState();
+    // Backend presence of every paired robot, while this page is open.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshNow());
+    _refresh = Timer.periodic(const Duration(seconds: 15), (_) => _refreshNow());
+  }
+
+  void _refreshNow() {
+    if (!mounted) return;
+    unawaited(context.read<RobotRegistry>().refreshAll());
+  }
+
+  @override
+  void dispose() {
+    _refresh?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,24 +71,27 @@ class RobotsScreen extends StatelessWidget {
               _RobotCard(
                 robot: r,
                 active: registry.active?.id == r.id,
+                route: registry.active?.id == r.id ? registry.activeRoute : '',
                 connected: mission.rosConnected,
                 online: mission.robotOnline,
                 reportedId: registry.reportedRobotId,
                 mismatch: registry.active?.id == r.id && registry.identityMismatch,
                 infoName: registry.active?.id == r.id ? info.info?.robotId : null,
+                backendStatus: registry.statusOf(r.id),
+                backendError: registry.statusErrorOf(r.id),
               ),
               const SizedBox(height: 10),
             ],
           const SizedBox(height: 6),
           FilledButton.icon(
             onPressed: () => _startPairing(context),
-            icon: const Icon(Icons.qr_code_scanner),
+            icon: const Icon(AppIcons.scanQrCode),
             label: const Text('掃描配對 QR code'),
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: () => _pasteCode(context),
-            icon: const Icon(Icons.content_paste),
+            icon: const Icon(AppIcons.clipboardPaste),
             label: const Text('手動輸入配對碼'),
           ),
           const SizedBox(height: 18),
@@ -134,7 +167,7 @@ class _EmptyHint extends StatelessWidget {
       ),
       child: const Column(
         children: [
-          Icon(Icons.smart_toy_outlined, size: 40, color: _kGrey),
+          Icon(AppIcons.bot, size: 40, color: _kGrey),
           SizedBox(height: 8),
           Text('還沒有配對的機器人', style: TextStyle(fontWeight: FontWeight.w900)),
           SizedBox(height: 4),
@@ -153,20 +186,57 @@ class _RobotCard extends StatelessWidget {
   const _RobotCard({
     required this.robot,
     required this.active,
+    required this.route,
     required this.connected,
     required this.online,
     required this.reportedId,
     required this.mismatch,
     required this.infoName,
+    required this.backendStatus,
+    required this.backendError,
   });
 
   final PairedRobot robot;
   final bool active;
+
+  /// 'lan' / 'relay' for the active robot, '' otherwise.
+  final String route;
   final bool connected;
   final bool online;
   final String? reportedId;
   final bool mismatch;
   final String? infoName;
+  final RobotStatus? backendStatus;
+  final String? backendError;
+
+  String get _routeLabel {
+    if (active && route == 'lan') return 'LAN ${robot.lanAddress}';
+    if (active && route == 'relay') return '遠端 relay';
+    if (active && robot.hasRelay && robot.hasLan) return '偵測 LAN 中…';
+    if (robot.usesLan) return 'LAN ${robot.lanAddress}';
+    if (robot.hasRelay) return '遠端 relay';
+    return '沒有位址';
+  }
+
+  String? get _backendLine {
+    final s = backendStatus;
+    if (s != null) {
+      final seen = s.lastSeen;
+      final ago = seen == null ? '' : ' · ${_ago(DateTime.now().difference(seen))}';
+      final lan = s.lan.isNotEmpty ? ' · LAN ${s.lan}' : '';
+      return s.online ? '後台：在線$ago$lan' : '後台：離線$ago';
+    }
+    final e = backendError;
+    if (e != null) return '後台：$e';
+    return null;
+  }
+
+  static String _ago(Duration d) {
+    if (d.inSeconds < 60) return '${d.inSeconds} 秒前';
+    if (d.inMinutes < 60) return '${d.inMinutes} 分鐘前';
+    if (d.inHours < 48) return '${d.inHours} 小時前';
+    return '${d.inDays} 天前';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -202,7 +272,7 @@ class _RobotCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.smart_toy_outlined, color: active ? _kGreen : _kGrey),
+              Icon(AppIcons.bot, color: active ? _kGreen : _kGrey),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -210,9 +280,18 @@ class _RobotCard extends StatelessWidget {
                   children: [
                     Text(robot.displayName, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                     Text(
-                      '${robot.id} · ${robot.usesLan ? 'LAN ${robot.lanAddress}' : robot.hasRelay ? '遠端 relay' : '沒有位址'}',
+                      '${robot.id} · $_routeLabel',
                       style: const TextStyle(color: _kGrey, fontWeight: FontWeight.w700, fontSize: 12),
                     ),
+                    if (_backendLine != null)
+                      Text(
+                        _backendLine!,
+                        style: TextStyle(
+                          color: backendStatus?.online == true ? _kGreen : _kGrey,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -227,7 +306,7 @@ class _RobotCard extends StatelessWidget {
               if (robot.hasRelay && robot.hasLan)
                 TextButton(
                   onPressed: () => registry.update(robot.id, preferLan: !robot.preferLan),
-                  child: Text(robot.usesLan ? '改走遠端' : '改走 LAN'),
+                  child: Text(robot.preferLan ? '自動選路' : '固定走 LAN'),
                 ),
               TextButton(onPressed: () => _editLan(context, robot), child: const Text('LAN 位址')),
               TextButton(onPressed: () => _rename(context, robot), child: const Text('改名')),
@@ -235,7 +314,7 @@ class _RobotCard extends StatelessWidget {
               IconButton(
                 tooltip: '解除配對',
                 onPressed: () => _unpair(context, robot),
-                icon: const Icon(Icons.link_off, color: _kBad),
+                icon: const Icon(AppIcons.unlink, color: _kBad),
               ),
             ],
           ),

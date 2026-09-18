@@ -91,7 +91,7 @@ void main() {
     );
     final service = RosbridgeService(
       url: 'ws://robot.test:9090',
-      connector: (_, {headers = const <String, dynamic>{}}) => channel,
+      connector: (_, {headers = const <String, dynamic>{}, protocols = const <String>[]}) => channel,
     );
     final provider = RobotInfoProvider(
       rosbridge: service,
@@ -157,7 +157,7 @@ void main() {
     );
     final service = RosbridgeService(
       url: 'ws://robot.test:9090',
-      connector: (_, {headers = const <String, dynamic>{}}) => channel,
+      connector: (_, {headers = const <String, dynamic>{}, protocols = const <String>[]}) => channel,
     );
     final provider = RobotInfoProvider(rosbridge: service);
     service.connect();

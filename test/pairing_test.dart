@@ -92,7 +92,7 @@ void main() {
     final headerSets = <Map<String, dynamic>>[];
     final service = RosbridgeService(
       url: 'ws://default.test:9090',
-      connector: (uri, {headers = const <String, dynamic>{}}) {
+      connector: (uri, {headers = const <String, dynamic>{}, protocols = const <String>[]}) {
         uris.add(uri);
         headerSets.add(headers);
         return channel;
