@@ -329,9 +329,9 @@ class MissionMockProvider extends ChangeNotifier {
   }
 
   /// WHEP base URL for the current connection: a build-time override, else
-  /// what the robot registry set for the active route (QR `c` or the LAN
-  /// MediaMTX), else the rosbridge host (legacy tunnel / dev). Through the
-  /// fleet relay there is no video path yet, so this is '' there.
+  /// what the robot registry set for the active route (QR `c`, the LAN
+  /// MediaMTX, or the backend's HTTP relay to it), else the rosbridge host
+  /// (legacy tunnel / dev).
   String get cameraBaseUrl {
     final configured = _configuredCameraBaseUrl.trim();
     if (configured.isNotEmpty) {
@@ -353,8 +353,21 @@ class MissionMockProvider extends ChangeNotifier {
 
   /// Why [whepUrl] is empty, for the camera placeholder.
   String get cameraUnavailableReason => _rosbridge.framed
-      ? '遠端連線暫不支援影像，請在同一個 Wi-Fi 下使用'
+      ? '遠端連線尚未就緒'
       : '尚未設定機器人 IP';
+
+  /// Headers the camera's WHEP / TURN requests must carry (pairing
+  /// signature through the backend, nothing on the LAN). A build-time
+  /// camera override is a plain media server: no headers.
+  Map<String, String> whepHeaders() =>
+      _configuredCameraBaseUrl.trim().isNotEmpty
+      ? const {}
+      : _rosbridge.cameraHeaders();
+
+  /// Where to fetch ICE (TURN) servers for the camera, '' = defaults.
+  String get whepIceServersUrl => _configuredCameraBaseUrl.trim().isNotEmpty
+      ? ''
+      : _rosbridge.cameraIceServersUrl;
 
   /// WHEP endpoint for a camera feed, or empty when the robot IP is unknown.
   /// The path name (`front`/`rear`) must match the MediaMTX `paths` config.

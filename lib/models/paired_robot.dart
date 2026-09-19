@@ -78,6 +78,20 @@ class PairedRobot {
     return '$scheme://${uri.host}$port';
   }
 
+  /// WHEP base URL through the fleet backend: the robot's own MediaMTX
+  /// reached over the relay (`/v1/robots/{id}/http/*`, phase 3), '' for a
+  /// legacy relay. Media then flows directly or via Cloudflare TURN.
+  String get relayCameraBaseUrl {
+    final base = backendBaseUrl;
+    return base.isEmpty ? '' : '$base/v1/robots/$id/http';
+  }
+
+  /// Where the backend hands out ICE (TURN) servers for this robot.
+  String get turnUrl {
+    final base = backendBaseUrl;
+    return base.isEmpty ? '' : '$base/v1/robots/$id/turn';
+  }
+
   /// The rosbridge URL to use right now, or empty if nothing is configured.
   String get preferredUrl {
     if (preferLan && hasLan) return lanUrl;

@@ -318,26 +318,31 @@ class RobotRegistry extends ChangeNotifier {
       return;
     }
     _activeRoute = route;
+    final viaBackend = route == 'relay' && a.usesBackendRelay;
     _rosbridge.configureEndpoint(
       url: url,
       authHeaders: authHeaders,
-      framed: route == 'relay' && a.usesBackendRelay,
+      framed: viaBackend,
       cameraBaseUrl: cameraBaseUrlFor(a, route),
+      // Through the backend the WHEP signaling is authenticated like every
+      // other backend call, and TURN credentials come from the same place.
+      cameraAuth: viaBackend && a.cameraUrl.isEmpty,
+      cameraIceServersUrl: viaBackend ? a.turnUrl : '',
     );
   }
 
   /// Where the WHEP video of [robot] is served for a route: the QR's `c`
-  /// when given, else the robot's MediaMTX on the LAN. Through the fleet
-  /// relay there is no video path yet (phase 3), so '' hides the camera.
+  /// when given, else the robot's MediaMTX on the LAN, else (fleet relay)
+  /// the same MediaMTX reached through the backend's HTTP relay.
   static String cameraBaseUrlFor(PairedRobot robot, String route) {
     if (robot.cameraUrl.isNotEmpty) return robot.cameraUrl;
     if (route == 'lan' && robot.hasLan) {
       return 'http://${robot.lanAddress}:${PairedRobot.webrtcPort}';
     }
-    if (route == 'relay' && !robot.usesBackendRelay) {
-      return ''; // legacy tunnel: MissionMockProvider derives from the host
+    if (route == 'relay' && robot.usesBackendRelay) {
+      return robot.relayCameraBaseUrl;
     }
-    return '';
+    return ''; // legacy tunnel: MissionMockProvider derives from the host
   }
 
   Future<void> _persist() async {

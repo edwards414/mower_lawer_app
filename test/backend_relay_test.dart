@@ -140,7 +140,7 @@ void main() {
     service.dispose();
   });
 
-  test('camera base URL follows the route: LAN MediaMTX, QR override, none through the relay', () async {
+  test('camera base URL follows the route: LAN MediaMTX, QR override, backend HTTP relay', () async {
     final channel = _FakeWebSocketChannel();
     final service = RosbridgeService(
       url: 'ws://unused',
@@ -157,12 +157,21 @@ void main() {
     await registry.pairFromText(_backendQr);
     await _flush();
     expect(registry.activeRoute, 'relay');
-    expect(service.cameraBaseUrl, '', reason: 'no video path through the fleet relay yet');
+    expect(
+      service.cameraBaseUrl,
+      'https://api.mower.fxrbindi.com/v1/robots/MW-7K3Q9P/http',
+      reason: 'phase 3: WHEP signaling relayed through the backend',
+    );
+    expect(service.cameraIceServersUrl, 'https://api.mower.fxrbindi.com/v1/robots/MW-7K3Q9P/turn');
+    expect(service.cameraHeaders()['X-Mower-Robot'], 'MW-7K3Q9P');
+    expect(service.cameraHeaders()['X-Mower-Mac'], isNotEmpty);
 
     lanReachable = true;
     await registry.update('MW-7K3Q9P', preferLan: true);
     expect(registry.activeRoute, 'lan');
     expect(service.cameraBaseUrl, 'http://192.168.1.5:8889');
+    expect(service.cameraIceServersUrl, '', reason: 'LAN: host candidates only');
+    expect(service.cameraHeaders(), isEmpty, reason: 'MediaMTX itself takes no pairing headers');
 
     // a QR with c= wins on every route
     lanReachable = false;
@@ -171,6 +180,7 @@ void main() {
     await _flush();
     expect(registry.activeRoute, 'relay');
     expect(service.cameraBaseUrl, 'https://cam.example.com');
+    expect(service.cameraHeaders(), isEmpty, reason: 'an explicit camera URL is a plain media server');
 
     final legacy = PairedRobot.fromPairUrl(_legacyQr);
     expect(RobotRegistry.cameraBaseUrlFor(legacy, 'relay'), '');

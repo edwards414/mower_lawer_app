@@ -16,6 +16,8 @@ class WebrtcCameraView extends StatefulWidget {
     super.key,
     required this.feed,
     required this.whepUrl,
+    this.authHeaders,
+    this.iceServersUrl = '',
     this.noUrlDetail = '尚未設定機器人 IP',
   });
 
@@ -23,6 +25,13 @@ class WebrtcCameraView extends StatefulWidget {
 
   /// WHEP endpoint for this feed, or empty when video is not reachable.
   final String whepUrl;
+
+  /// Per-request headers for [whepUrl] (pairing signature through the
+  /// fleet backend), null when the media server is reached directly.
+  final WhepHeaderProvider? authHeaders;
+
+  /// Backend URL that hands out ICE (TURN) servers, '' = defaults.
+  final String iceServersUrl;
 
   /// Shown in the placeholder while [whepUrl] is empty.
   final String noUrlDetail;
@@ -46,7 +55,8 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
   @override
   void didUpdateWidget(WebrtcCameraView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.whepUrl != widget.whepUrl) {
+    if (oldWidget.whepUrl != widget.whepUrl ||
+        oldWidget.iceServersUrl != widget.iceServersUrl) {
       unawaited(_restart(resetBackoff: true));
     }
   }
@@ -75,6 +85,8 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
     late final WhepClient client;
     client = WhepClient(
       whepUrl: url,
+      headers: widget.authHeaders,
+      iceServersUrl: widget.iceServersUrl,
       onStateChanged: (state) {
         if (!mounted || _client != client) {
           return;

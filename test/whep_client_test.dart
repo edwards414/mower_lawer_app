@@ -101,6 +101,35 @@ void main() {
     stalledClient.close();
   });
 
+  test('ICE servers come from the backend /turn endpoint', () async {
+    late http.Request captured;
+    final client = MockClient((request) async {
+      captured = request;
+      return http.Response(
+        '{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478"]},'
+        '{"urls":["turn:turn.cloudflare.com:3478?transport=udp","turns:turn.cloudflare.com:443?transport=tcp"],'
+        '"username":"u","credential":"p"}],"expires_at":1}',
+        200,
+      );
+    });
+    final servers = await fetchIceServers(
+      client: client,
+      uri: Uri.parse('https://api.test/v1/robots/MW-1/turn'),
+      headers: const {'X-Mower-Robot': 'MW-1'},
+    );
+    expect(captured.headers['X-Mower-Robot'], 'MW-1');
+    expect(servers, hasLength(2));
+    expect(servers[1]['username'], 'u');
+    expect(servers[1]['credential'], 'p');
+    expect(servers[1]['urls'], contains('turns:turn.cloudflare.com:443?transport=tcp'));
+
+    final failing = MockClient((_) async => http.Response('{"error":"not paired"}', 401));
+    await expectLater(
+      fetchIceServers(client: failing, uri: Uri.parse('https://api.test/turn')),
+      throwsA(isA<StateError>()),
+    );
+  });
+
   test('WHEP DELETE timeout is bounded for reconnect cleanup', () async {
     final pending = Completer<http.Response>();
     final client = MockClient((_) => pending.future);

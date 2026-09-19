@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -12,6 +13,11 @@ enum WhepState { idle, connecting, connected, failed }
 const _defaultIceGatheringTimeout = Duration(seconds: 3);
 const _defaultSignalingTimeout = Duration(seconds: 12);
 const _defaultTeardownTimeout = Duration(seconds: 4);
+const _defaultIceServersTimeout = Duration(seconds: 8);
+
+/// Extra request headers for the WHEP endpoint, computed per request (the
+/// backend's pairing signature carries a one-time nonce).
+typedef WhepHeaderProvider = Map<String, String> Function();
 
 @visibleForTesting
 Future<void> waitForWhepIceGathering(
@@ -141,6 +147,42 @@ List<Map<String, dynamic>> iceServersForWhepUrl(String whepUrl) {
   return isLanHost(host) ? const <Map<String, dynamic>>[] : _publicIceServers;
 }
 
+/// `GET` a backend `/turn` URL and return its `iceServers` (WebRTC shape).
+/// Throws on HTTP or shape errors; the caller falls back to public STUN.
+Future<List<Map<String, dynamic>>> fetchIceServers({
+  required http.Client client,
+  required Uri uri,
+  Map<String, String> headers = const {},
+  Duration timeout = _defaultIceServersTimeout,
+}) async {
+  final res = await client
+      .get(uri, headers: headers)
+      .timeout(
+        timeout,
+        onTimeout: () =>
+            throw TimeoutException('ICE servers GET timed out', timeout),
+      );
+  if (res.statusCode != 200) {
+    throw StateError('ICE servers: HTTP ${res.statusCode}');
+  }
+  final decoded = jsonDecode(res.body);
+  final list = decoded is Map ? decoded['iceServers'] : null;
+  if (list is! List) {
+    throw StateError('ICE servers: bad body');
+  }
+  return [
+    for (final item in list)
+      if (item is Map && item['urls'] != null)
+        {
+          'urls': item['urls'] is List
+              ? (item['urls'] as List).map((u) => u.toString()).toList()
+              : <String>[item['urls'].toString()],
+          if (item['username'] is String) 'username': item['username'],
+          if (item['credential'] is String) 'credential': item['credential'],
+        },
+  ];
+}
+
 /// Minimal WHEP (WebRTC-HTTP Egress Protocol) client that pulls a single
 /// receive-only video stream from a media server such as MediaMTX.
 ///
@@ -149,22 +191,38 @@ List<Map<String, dynamic>> iceServersForWhepUrl(String whepUrl) {
 /// session resource, which we DELETE on teardown. MediaMTX embeds its server
 /// candidates in the answer; Cloudflare STUN helps the client traverse mobile
 /// and Wi-Fi NATs when connecting over the Internet.
+///
+/// Through the fleet backend ([whepUrl] under `/v1/robots/{id}/http`) every
+/// request carries the pairing headers from [headers], and the peer
+/// connection uses the TURN servers from [iceServersUrl] so media can be
+/// relayed when phone and robot are on different networks.
 class WhepClient {
   WhepClient({
     required this.whepUrl,
     http.Client? httpClient,
     this.onStateChanged,
     List<Map<String, dynamic>>? iceServers,
+    this.headers,
+    this.iceServersUrl = '',
     this.iceGatheringTimeout = _defaultIceGatheringTimeout,
     this.signalingTimeout = _defaultSignalingTimeout,
     this.teardownTimeout = _defaultTeardownTimeout,
+    this.iceServersTimeout = _defaultIceServersTimeout,
   }) : _httpClient = httpClient ?? createWhepHttpClient(),
        iceServers = iceServers ?? iceServersForWhepUrl(whepUrl);
 
   final String whepUrl;
 
-  /// ICE servers handed to the peer connection (see [iceServersForWhepUrl]).
+  /// ICE servers handed to the peer connection when [iceServersUrl] is empty
+  /// or cannot be fetched (see [iceServersForWhepUrl]).
   final List<Map<String, dynamic>> iceServers;
+
+  /// Per-request headers for the WHEP endpoint and [iceServersUrl].
+  final WhepHeaderProvider? headers;
+
+  /// Backend URL answering `{"iceServers": [...]}` (TURN credentials).
+  final String iceServersUrl;
+  final Duration iceServersTimeout;
   final ValueChanged<WhepState>? onStateChanged;
   final Duration iceGatheringTimeout;
   final Duration signalingTimeout;
@@ -181,6 +239,28 @@ class WhepClient {
   WhepState _state = WhepState.idle;
 
   WhepState get state => _state;
+
+  Map<String, String> _requestHeaders() => {
+    ...RemoteAccessConfig.cloudflareAccessHeaders,
+    ...?headers?.call(),
+  };
+
+  Future<List<Map<String, dynamic>>> _resolveIceServers() async {
+    if (iceServersUrl.isEmpty) {
+      return iceServers;
+    }
+    try {
+      return await fetchIceServers(
+        client: _httpClient,
+        uri: Uri.parse(iceServersUrl),
+        headers: _requestHeaders(),
+        timeout: iceServersTimeout,
+      );
+    } catch (error) {
+      debugPrint('WhepClient: ICE servers unavailable ($error), using defaults');
+      return iceServers.isEmpty ? _publicIceServers : iceServers;
+    }
+  }
 
   void _setState(WhepState next) {
     if (_disposed || _state == next) {
@@ -202,8 +282,13 @@ class WhepClient {
         await _cleanupTransport(deleteRemoteSession: true);
         return;
       }
+      final resolvedIceServers = await _resolveIceServers();
+      if (_disposed) {
+        await _cleanupTransport(deleteRemoteSession: true);
+        return;
+      }
       final pc = await createPeerConnection({
-        'iceServers': iceServers,
+        'iceServers': resolvedIceServers,
         'sdpSemantics': 'unified-plan',
       });
       if (_disposed) {
@@ -255,10 +340,7 @@ class WhepClient {
       final response = await postWhepOffer(
         client: _httpClient,
         uri: Uri.parse(whepUrl),
-        headers: {
-          ...RemoteAccessConfig.cloudflareAccessHeaders,
-          'Content-Type': 'application/sdp',
-        },
+        headers: {..._requestHeaders(), 'Content-Type': 'application/sdp'},
         sdp: localSdp,
         timeout: signalingTimeout,
       );
@@ -307,7 +389,7 @@ class WhepClient {
         await deleteWhepSession(
           client: _httpClient,
           uri: Uri.parse(resource),
-          headers: RemoteAccessConfig.cloudflareAccessHeaders,
+          headers: _requestHeaders(),
           timeout: teardownTimeout,
         );
       } catch (_) {}

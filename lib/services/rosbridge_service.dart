@@ -75,9 +75,16 @@ class RosbridgeService {
   RelayReassembler? _reassembler;
 
   /// WHEP base URL of the active robot for the current route
-  /// (`http://<lan ip>:8889`, or the QR's `c`); '' when video is not
-  /// reachable this way (fleet relay without a camera URL).
+  /// (`http://<lan ip>:8889`, the QR's `c`, or the backend's
+  /// `/v1/robots/{id}/http`); '' when video is not reachable this way.
   String _cameraBaseUrl = '';
+
+  /// The camera endpoint wants the pairing headers on every request
+  /// (backend HTTP relay); false for MediaMTX reached directly.
+  bool _cameraAuth = false;
+
+  /// Backend URL that returns ICE (TURN) servers for the camera, '' = none.
+  String _cameraIceServersUrl = '';
   final RosbridgeConnector _connector;
   final Map<String, _RosbridgeSubscription> _subscriptions = {};
   final Map<String, String> _advertisements = {};
@@ -98,6 +105,15 @@ class RosbridgeService {
   String get url => _url;
   bool get framed => _framed;
   String get cameraBaseUrl => _cameraBaseUrl;
+  String get cameraIceServersUrl => _cameraIceServersUrl;
+
+  /// Headers for the camera's WHEP / TURN requests: a fresh pairing
+  /// signature when the endpoint is the backend, nothing otherwise.
+  Map<String, String> cameraHeaders() {
+    final provider = _authHeaders;
+    if (!_cameraAuth || provider == null) return const {};
+    return provider();
+  }
   String get robotIp {
     final uri = Uri.tryParse(_url);
     return uri?.host ?? '';
@@ -171,9 +187,13 @@ class RosbridgeService {
     RosbridgeHeaderProvider? authHeaders,
     bool framed = false,
     String cameraBaseUrl = '',
+    bool cameraAuth = false,
+    String cameraIceServersUrl = '',
   }) {
     _authHeaders = authHeaders;
     _cameraBaseUrl = cameraBaseUrl.replaceFirst(RegExp(r'/+$'), '');
+    _cameraAuth = cameraAuth;
+    _cameraIceServersUrl = cameraIceServersUrl;
     if (url.isEmpty) {
       return;
     }

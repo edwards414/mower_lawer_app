@@ -72,7 +72,7 @@ void main() {
     for (var i = 0; i < _watchSeconds; i++) {
       await tester.pump(const Duration(seconds: 1));
       final video = find.byType(RTCVideoView).evaluate().isNotEmpty;
-      final texts = ['影像連線中…', '影像連線失敗', '等待影像串流', '尚未設定機器人 IP', '遠端連線暫不支援影像，請在同一個 Wi-Fi 下使用']
+      final texts = ['影像連線中…', '影像連線失敗', '等待影像串流', '尚未設定機器人 IP', '遠端連線尚未就緒']
           .where((t) => find.text(t).evaluate().isNotEmpty)
           .toList();
       final now = 'video=$video placeholder=$texts';
