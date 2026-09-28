@@ -63,6 +63,25 @@ void main() {
     expect(firstRetries.length, greaterThan(15));
   });
 
+  test('a per-wait cap shortens only that wait, jittered', () {
+    final backoff = ReconnectBackoff(jitter: 0);
+    const cap = Duration(seconds: 2);
+    final seconds = [
+      for (var i = 0; i < 6; i++)
+        backoff.nextDelay(cap: cap).inMilliseconds / 1000,
+    ];
+    expect(seconds, [1, 2, 2, 2, 2, 2]);
+    expect(backoff.failures, 6);
+    // Without the cap the doubling is where six failures put it.
+    expect(backoff.nextDelay(), const Duration(seconds: 30));
+
+    final early = ReconnectBackoff(random: _FixedRandom(0));
+    for (var i = 0; i < 10; i++) {
+      early.nextDelay();
+    }
+    expect(early.nextDelay(cap: cap), const Duration(milliseconds: 1600));
+  });
+
   test('reset starts over at the first delay', () {
     final backoff = ReconnectBackoff(jitter: 0);
     for (var i = 0; i < 6; i++) {

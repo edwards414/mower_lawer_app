@@ -66,6 +66,13 @@ class RosbridgeService {
   /// every Nth (a fixed-rate retry once left ~50k lines over 3.5 days).
   static const _logEveryNthFailure = 20;
 
+  /// While [fastRetry] is on, retries wait about the old fixed 2 s instead of
+  /// backing off, but only for the first [_fastRetryLimit] failures of an
+  /// outage (a few minutes): a robot whose battery died mid-mission must not
+  /// be hammered for days.
+  static const _fastRetryDelay = Duration(seconds: 2);
+  static const _fastRetryLimit = 150;
+
   RosbridgeService({
     String url = _defaultUrl,
     RosbridgeConnector connector = connectWebSocket,
@@ -115,6 +122,7 @@ class RosbridgeService {
   /// robot's auth proxy can accept and then drop, and must not reset the
   /// backoff.
   bool _healthy = false;
+  bool _fastRetry = false;
 
   /// The previous failure with per-attempt noise stripped, so the log can
   /// report a new failure reason (relay 503 -> pairing 4401) right away.
@@ -142,6 +150,21 @@ class RosbridgeService {
   Stream<RosbridgeTopicMessage> get messages => _messages.stream;
   Stream<RosbridgeConnectionState> get states => _states.stream;
   bool get connected => _connected;
+
+  /// A mission may be running on the robot (or a stop is still owed to it).
+  /// While the link is down the operator has no stop button, so retry at
+  /// about 2 s instead of backing off towards 30 s (see [_fastRetryLimit]).
+  /// Turning it on also retries at once, like [retryNow].
+  bool get fastRetry => _fastRetry;
+  set fastRetry(bool value) {
+    if (value == _fastRetry) {
+      return;
+    }
+    _fastRetry = value;
+    if (value) {
+      retryNow();
+    }
+  }
 
   static String? validateRobotIp(String value) {
     final ip = value.trim();
@@ -570,7 +593,8 @@ class RosbridgeService {
       }
     }
     _pendingCalls.clear();
-    final delay = _backoff.nextDelay();
+    final fast = _fastRetry && _backoff.failures < _fastRetryLimit;
+    final delay = _backoff.nextDelay(cap: fast ? _fastRetryDelay : null);
     _logRetry(delay, failure);
     _reconnectTimer = Timer(delay, () {
       _reconnectTimer = null;

@@ -44,8 +44,14 @@ class ReconnectBackoff {
   }
 
   /// Count one more failure and return how long to wait before retrying.
-  Duration nextDelay() {
-    final nominal = nominalDelay;
+  /// [cap] lowers [maxDelay] for this one wait (still jittered); the failure
+  /// count grows as usual, so the next uncapped wait picks up where the
+  /// doubling would have been.
+  Duration nextDelay({Duration? cap}) {
+    var nominal = nominalDelay;
+    if (cap != null && cap < nominal) {
+      nominal = cap;
+    }
     _failures += 1;
     final factor = 1 + jitter * (2 * _random.nextDouble() - 1);
     return nominal * factor;

@@ -6,9 +6,12 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'package:mower_stdio/models/mission_mock.dart';
 import 'package:mower_stdio/models/paired_robot.dart';
+import 'package:mower_stdio/providers/mission_mock_provider.dart';
 import 'package:mower_stdio/providers/robot_registry.dart';
 import 'package:mower_stdio/services/reconnect_backoff.dart';
 import 'package:mower_stdio/services/rosbridge_service.dart';
@@ -437,6 +440,178 @@ void main() {
     });
   });
 
+  test('fast retry retries at once, then about every 2 s, and backs off '
+      'again after a bounded outage', () {
+    fakeAsync((async) {
+      final robot = _FakeRobot();
+      final backoff = ReconnectBackoff(jitter: 0);
+      final service = RosbridgeService(
+        url: _url,
+        connector: robot.connect,
+        backoff: backoff,
+      );
+      service.connect();
+      _failUntil(async, robot, backoff, failures: 8); // next wait 30 s
+      var attempts = robot.attempts;
+
+      service.fastRetry = true;
+      expect(robot.attempts, attempts + 1);
+      expect(async.pendingTimers, isEmpty);
+      service.fastRetry = true; // already on: no second socket
+      expect(robot.attempts, attempts + 1);
+
+      for (final seconds in [1, 2, 2, 2, 2, 2]) {
+        robot.last.refuse();
+        async.flushMicrotasks();
+        attempts = robot.attempts;
+        async.elapse(Duration(seconds: seconds) - _ms);
+        expect(robot.attempts, attempts, reason: 'retry before $seconds s');
+        async.elapse(_ms);
+        expect(robot.attempts, attempts + 1, reason: 'retry at $seconds s');
+      }
+
+      // A robot that stays gone (battery died mid-mission) is not hammered
+      // for days: after 150 fast failures the 30 s cap is back.
+      while (backoff.failures < 150) {
+        robot.last.refuse();
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 2));
+      }
+      robot.last.refuse();
+      async.flushMicrotasks();
+      attempts = robot.attempts;
+      async.elapse(const Duration(seconds: 29));
+      expect(robot.attempts, attempts);
+      async.elapse(const Duration(seconds: 1));
+      expect(robot.attempts, attempts + 1);
+
+      service.dispose();
+    });
+  });
+
+  test('turning fast retry off lets the backoff double from where it is', () {
+    fakeAsync((async) {
+      final robot = _FakeRobot();
+      final service = _service(robot);
+      service.connect();
+      service.fastRetry = true; // an attempt is in flight: no second socket
+      expect(robot.attempts, 1);
+      for (final seconds in [1, 2, 2]) {
+        robot.last.refuse();
+        async.flushMicrotasks();
+        async.elapse(Duration(seconds: seconds));
+      }
+      expect(robot.attempts, 4);
+
+      service.fastRetry = false;
+      robot.last.refuse(); // fourth failure: 1 s * 2^3
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 8) - _ms);
+      expect(robot.attempts, 4);
+      async.elapse(_ms);
+      expect(robot.attempts, 5);
+
+      service.dispose();
+    });
+  });
+
+  test('a stop pressed while the link is down tries the robot at once', () {
+    SharedPreferences.setMockInitialValues({'mock_data_enabled': false});
+    fakeAsync((async) {
+      final robot = _FakeRobot();
+      final backoff = ReconnectBackoff(jitter: 0);
+      final service = RosbridgeService(
+        url: _url,
+        connector: robot.connect,
+        backoff: backoff,
+      );
+      final provider = MissionMockProvider(rosbridge: service);
+      async.flushMicrotasks();
+      expect(robot.attempts, 1);
+      // The provider's 1 s tick is the other timer.
+      _failUntil(async, robot, backoff, failures: 8, otherTimers: 1);
+      final attempts = robot.attempts;
+
+      provider.cancelExecution();
+      expect(robot.attempts, attempts + 1);
+
+      // The link is back: the next press reaches the robot.
+      robot.last.accept();
+      async.flushMicrotasks();
+      expect(provider.rosConnected, isTrue);
+      provider.cancelExecution();
+      async.flushMicrotasks();
+      expect(
+        robot.last.sent.map((message) => message['service']),
+        contains('/cancel_nav2'),
+      );
+
+      provider.dispose();
+      service.dispose();
+    });
+  });
+
+  test('while a mission may be running a lost link is retried about every '
+      '2 s; once it is over the backoff resumes', () {
+    SharedPreferences.setMockInitialValues({'mock_data_enabled': false});
+    fakeAsync((async) {
+      final robot = _FakeRobot();
+      final backoff = ReconnectBackoff(jitter: 0);
+      final service = RosbridgeService(
+        url: _url,
+        connector: robot.connect,
+        backoff: backoff,
+      );
+      final provider = MissionMockProvider(rosbridge: service);
+      async.flushMicrotasks();
+      robot.last.accept();
+      async.flushMicrotasks();
+      robot.last.receive({
+        'op': 'publish',
+        'topic': '/robot/online',
+        'msg': {'data': true},
+      });
+      async.flushMicrotasks();
+      expect(provider.rosConnected, isTrue);
+      expect(service.fastRetry, isFalse);
+
+      provider.navStatus = NavMockStatus.executing;
+      async.elapse(const Duration(seconds: 1)); // the provider's tick
+      expect(service.fastRetry, isTrue);
+      expect(robot.attempts, 1, reason: 'an open link is left alone');
+
+      robot.last.drop(); // Wi-Fi gone mid-mission
+      async.flushMicrotasks();
+      expect(provider.rosConnected, isFalse);
+      for (final seconds in [1, 2, 2, 2, 2, 2, 2, 2]) {
+        final before = robot.attempts;
+        async.elapse(Duration(seconds: seconds));
+        expect(robot.attempts, before + 1, reason: 'retry within $seconds s');
+        robot.last.refuse();
+        async.flushMicrotasks();
+      }
+
+      // Mission over (set directly: the status poll needs a live link).
+      provider.navStatus = NavMockStatus.idle;
+      async.elapse(const Duration(seconds: 2)); // tick, then the armed retry
+      expect(service.fastRetry, isFalse);
+      robot.last.refuse();
+      async.flushMicrotasks();
+      final before = robot.attempts;
+      async.elapse(const Duration(seconds: 29));
+      expect(robot.attempts, before);
+      async.elapse(const Duration(seconds: 1));
+      expect(robot.attempts, before + 1);
+
+      provider.navStatus = NavMockStatus.executing;
+      async.elapse(const Duration(seconds: 1));
+      expect(service.fastRetry, isTrue);
+      provider.dispose();
+      expect(service.fastRetry, isFalse, reason: 'shared service');
+      service.dispose();
+    });
+  });
+
   testWidgets('coming back to the foreground retries the robot now', (
     tester,
   ) async {
@@ -479,16 +654,19 @@ RosbridgeService _service(_FakeRobot robot) => RosbridgeService(
 
 /// Let the current attempt and every retry fail until [backoff] has counted
 /// [failures] in a row; the next retry is then armed but not yet due.
+///
+/// [otherTimers] are armed by something else (a provider's 1 s tick).
 void _failUntil(
   FakeAsync async,
   _FakeRobot robot,
   ReconnectBackoff backoff, {
   required int failures,
+  int otherTimers = 0,
 }) {
   while (true) {
     robot.last.refuse();
     async.flushMicrotasks();
-    expect(async.pendingTimers, hasLength(1));
+    expect(async.pendingTimers, hasLength(1 + otherTimers));
     if (backoff.failures >= failures) {
       return;
     }
@@ -526,7 +704,13 @@ class _FakeWebSocketChannel implements WebSocketChannel {
   final StreamController<dynamic> _incoming = StreamController<dynamic>(
     sync: true,
   );
-  late final WebSocketSink _sink = _FakeWebSocketSink();
+  late final _FakeWebSocketSink _sink = _FakeWebSocketSink();
+
+  /// What the app sent on this socket, decoded.
+  List<Map<String, dynamic>> get sent => [
+    for (final text in _sink.sent)
+      (jsonDecode(text as String) as Map).cast<String, dynamic>(),
+  ];
 
   /// The upgrade succeeded.
   void accept() => _ready.complete();
@@ -571,8 +755,10 @@ class _FakeWebSocketChannel implements WebSocketChannel {
 }
 
 class _FakeWebSocketSink implements WebSocketSink {
+  final List<dynamic> sent = [];
+
   @override
-  void add(dynamic data) {}
+  void add(dynamic data) => sent.add(data);
 
   @override
   Future<void> close([int? closeCode, String? closeReason]) async {}
