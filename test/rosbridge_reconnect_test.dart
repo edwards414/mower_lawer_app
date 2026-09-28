@@ -376,6 +376,67 @@ void main() {
     });
   });
 
+  test('a new failure reason is logged at once, with the attempt count', () {
+    final lines = <String>[];
+    final originalDebugPrint = debugPrint;
+    debugPrint = (String? message, {int? wrapWidth}) => lines.add('$message');
+    addTearDown(() => debugPrint = originalDebugPrint);
+
+    fakeAsync((async) {
+      final robot = _FakeRobot();
+      final service = _service(robot);
+      service.connect();
+      for (var attempt = 1; attempt <= 25; attempt++) {
+        // Offline behind the relay for a while, then back with its pairing
+        // reset: the new reason must not wait for the 20th attempt.
+        robot.last.refuse(
+          attempt <= 5 ? 'HTTP 503 robot offline' : 'HTTP 401 unknown robot',
+        );
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 30));
+      }
+      expect(lines, hasLength(3));
+      expect(lines[0], allOf(contains('attempt 1,'), contains('503')));
+      expect(
+        lines[1],
+        allOf(contains('attempt 6, next in 30.0 s'), contains('401')),
+      );
+      expect(lines[2], allOf(contains('attempt 20,'), contains('401')));
+
+      service.dispose();
+    });
+  });
+
+  test('the same failure by another path or from another local port is '
+      'not a new reason', () {
+    final lines = <String>[];
+    final originalDebugPrint = debugPrint;
+    debugPrint = (String? message, {int? wrapWidth}) => lines.add('$message');
+    addTearDown(() => debugPrint = originalDebugPrint);
+
+    fakeAsync((async) {
+      final robot = _FakeRobot();
+      final service = _service(robot);
+      service.connect();
+      for (var attempt = 1; attempt <= 19; attempt++) {
+        final reason =
+            'SocketException: Connection refused (OS Error: Connection '
+            'refused, errno = 61), address = 192.168.0.114, '
+            'port = ${50000 + attempt}';
+        if (attempt.isEven) {
+          robot.last.failStream(reason);
+        } else {
+          robot.last.refuse(reason);
+        }
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 30));
+      }
+      expect(lines, hasLength(1));
+
+      service.dispose();
+    });
+  });
+
   testWidgets('coming back to the foreground retries the robot now', (
     tester,
   ) async {
@@ -471,13 +532,13 @@ class _FakeWebSocketChannel implements WebSocketChannel {
   void accept() => _ready.complete();
 
   /// The upgrade was refused (HTTP 503 from the relay, 401 from the proxy).
-  void refuse() {
-    _ready.completeError(WebSocketChannelException('HTTP 503 robot offline'));
+  void refuse([String reason = 'HTTP 503 robot offline']) {
+    _ready.completeError(WebSocketChannelException(reason));
   }
 
   /// The connection failed below the upgrade, reported on the stream.
-  void failStream() {
-    _incoming.addError(WebSocketChannelException('no route to host'));
+  void failStream([String reason = 'no route to host']) {
+    _incoming.addError(WebSocketChannelException(reason));
     unawaited(_incoming.close());
   }
 

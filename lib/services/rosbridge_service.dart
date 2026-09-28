@@ -115,6 +115,10 @@ class RosbridgeService {
   /// robot's auth proxy can accept and then drop, and must not reset the
   /// backoff.
   bool _healthy = false;
+
+  /// The previous failure with per-attempt noise stripped, so the log can
+  /// report a new failure reason (relay 503 -> pairing 4401) right away.
+  String? _lastFailure;
   Completer<void>? _connectionReady;
   int _callSequence = 0;
 
@@ -574,9 +578,20 @@ class RosbridgeService {
     });
   }
 
+  /// [failure] without what changes on every attempt: the "upgrade failed"
+  /// prefix (the same error can arrive via `ready` or via the stream) and
+  /// the local port of a refused socket.
+  static String _failureSignature(Object failure) => '$failure'
+      .replaceFirst('upgrade failed: ', '')
+      .replaceAll(RegExp(r'port = \d+'), 'port');
+
   void _logRetry(Duration delay, Object failure) {
     final failures = _backoff.failures;
-    if (!kDebugMode || (failures != 1 && failures % _logEveryNthFailure != 0)) {
+    final signature = _failureSignature(failure);
+    final changed = signature != _lastFailure;
+    _lastFailure = signature;
+    if (!kDebugMode ||
+        (failures != 1 && !changed && failures % _logEveryNthFailure != 0)) {
       return;
     }
     final seconds = (delay.inMilliseconds / 1000).toStringAsFixed(1);
