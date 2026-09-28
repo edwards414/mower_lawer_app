@@ -3,14 +3,16 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:fake_async/fake_async.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'package:mower_stdio/models/paired_robot.dart';
 import 'package:mower_stdio/providers/robot_registry.dart';
 import 'package:mower_stdio/services/reconnect_backoff.dart';
 import 'package:mower_stdio/services/rosbridge_service.dart';
+import 'package:mower_stdio/widgets/retry_rosbridge_on_resume.dart';
 
 const _url = 'ws://robot.test:9090';
 const _secret = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
@@ -373,6 +375,37 @@ void main() {
       service.dispose();
     });
   });
+
+  testWidgets('coming back to the foreground retries the robot now', (
+    tester,
+  ) async {
+    final service = _RetrySpy();
+    addTearDown(service.dispose);
+    await tester.pumpWidget(
+      Provider<RosbridgeService>.value(
+        value: service,
+        child: const RetryRosbridgeOnResume(child: SizedBox()),
+      ),
+    );
+
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    expect(service.retries, 0);
+
+    for (final state in [
+      AppLifecycleState.hidden,
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    expect(service.retries, 1);
+  });
 }
 
 const _ms = Duration(milliseconds: 1);
@@ -485,6 +518,15 @@ class _FakeWebSocketSink implements WebSocketSink {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _RetrySpy extends RosbridgeService {
+  _RetrySpy() : super(url: '');
+
+  int retries = 0;
+
+  @override
+  void retryNow() => retries += 1;
 }
 
 class _FixedRandom implements math.Random {

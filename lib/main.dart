@@ -12,6 +12,7 @@ import 'services/rosbridge_service.dart';
 import 'services/ros_service.dart';
 import 'services/weather_service.dart';
 import 'widgets/iphone_12_template.dart';
+import 'widgets/retry_rosbridge_on_resume.dart';
 
 void main() {
   runApp(const MowerApp());
@@ -83,7 +84,9 @@ class MowerApp extends StatelessWidget {
         title: '割草任務控制台',
         debugShowCheckedModeBanner: false,
         builder: (context, child) {
-          return IPhone12Template(child: child ?? const SizedBox.shrink());
+          return RetryRosbridgeOnResume(
+            child: IPhone12Template(child: child ?? const SizedBox.shrink()),
+          );
         },
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
