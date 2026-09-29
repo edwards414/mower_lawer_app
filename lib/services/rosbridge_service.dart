@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'reconnect_backoff.dart';
 import 'relay_framing.dart';
 import 'remote_access_config.dart';
 import 'websocket_connector.dart';
@@ -61,11 +62,24 @@ class RosbridgeService {
   // build-time ROSBRIDGE_URL is only for development against a fixed host.
   static const _defaultUrl = String.fromEnvironment('ROSBRIDGE_URL');
 
+  /// While the robot stays unreachable, log the first failure and then only
+  /// every Nth (a fixed-rate retry once left ~50k lines over 3.5 days).
+  static const _logEveryNthFailure = 20;
+
+  /// While [fastRetry] is on, retries wait about the old fixed 2 s instead of
+  /// backing off, but only for the first [_fastRetryLimit] failures of an
+  /// outage (a few minutes): a robot whose battery died mid-mission must not
+  /// be hammered for days.
+  static const _fastRetryDelay = Duration(seconds: 2);
+  static const _fastRetryLimit = 150;
+
   RosbridgeService({
     String url = _defaultUrl,
     RosbridgeConnector connector = connectWebSocket,
+    ReconnectBackoff? backoff,
   }) : _url = url,
-       _connector = connector;
+       _connector = connector,
+       _backoff = backoff ?? ReconnectBackoff();
 
   String _url;
   RosbridgeHeaderProvider? _authHeaders;
@@ -86,6 +100,9 @@ class RosbridgeService {
   /// Backend URL that returns ICE (TURN) servers for the camera, '' = none.
   String _cameraIceServersUrl = '';
   final RosbridgeConnector _connector;
+
+  /// Wait before each automatic retry: ~1 s doubling to ~30 s, jittered.
+  final ReconnectBackoff _backoff;
   final Map<String, _RosbridgeSubscription> _subscriptions = {};
   final Map<String, String> _advertisements = {};
   final Map<String, Completer<RosbridgeServiceResponse>> _pendingCalls = {};
@@ -99,6 +116,17 @@ class RosbridgeService {
   Timer? _reconnectTimer;
   bool _disposed = false;
   bool _connected = false;
+
+  /// The current socket delivered a rosbridge message. An accepted upgrade
+  /// alone proves nothing: the fleet relay (stale robot socket) or the
+  /// robot's auth proxy can accept and then drop, and must not reset the
+  /// backoff.
+  bool _healthy = false;
+  bool _fastRetry = false;
+
+  /// The previous failure with per-attempt noise stripped, so the log can
+  /// report a new failure reason (relay 503 -> pairing 4401) right away.
+  String? _lastFailure;
   Completer<void>? _connectionReady;
   int _callSequence = 0;
 
@@ -122,6 +150,21 @@ class RosbridgeService {
   Stream<RosbridgeTopicMessage> get messages => _messages.stream;
   Stream<RosbridgeConnectionState> get states => _states.stream;
   bool get connected => _connected;
+
+  /// A mission may be running on the robot (or a stop is still owed to it).
+  /// While the link is down the operator has no stop button, so retry at
+  /// about 2 s instead of backing off towards 30 s (see [_fastRetryLimit]).
+  /// Turning it on also retries at once, like [retryNow].
+  bool get fastRetry => _fastRetry;
+  set fastRetry(bool value) {
+    if (value == _fastRetry) {
+      return;
+    }
+    _fastRetry = value;
+    if (value) {
+      retryNow();
+    }
+  }
 
   static String? validateRobotIp(String value) {
     final ip = value.trim();
@@ -167,7 +210,7 @@ class RosbridgeService {
     await prefs.setString(_robotIpPreferenceKey, ip);
 
     if (_url == nextUrl) {
-      connect();
+      retryNow();
       return;
     }
 
@@ -181,7 +224,8 @@ class RosbridgeService {
   /// Point the service at a paired robot: its rosbridge URL plus the
   /// per-connection pairing headers. [framed] selects the fleet backend
   /// relay (mrelay1 chunk framing, `Sec-WebSocket-Protocol: mrelay1`).
-  /// Reconnects when the URL or framing changes.
+  /// Reconnects when the URL or framing changes; either way this is an
+  /// explicit choice of robot / route, so it skips any pending backoff.
   void configureEndpoint({
     required String url,
     RosbridgeHeaderProvider? authHeaders,
@@ -198,7 +242,7 @@ class RosbridgeService {
       return;
     }
     if (_url == url && _framed == framed) {
-      connect();
+      retryNow();
       return;
     }
     _url = url;
@@ -216,8 +260,16 @@ class RosbridgeService {
     };
   }
 
+  /// Opens the socket unless one is open or opening. While an automatic
+  /// retry is scheduled this leaves it to that timer: pollers reach here
+  /// through [callService] / [publish] every few seconds and must not undo
+  /// the backoff. Explicit user/app actions use [reconnect] or [retryNow].
   void connect() {
-    if (_disposed || _connected || _channel != null || _url.isEmpty) {
+    if (_disposed ||
+        _connected ||
+        _channel != null ||
+        _reconnectTimer != null ||
+        _url.isEmpty) {
       return;
     }
     _states.add(RosbridgeConnectionState.connecting);
@@ -231,13 +283,8 @@ class RosbridgeService {
       _reassembler = _framed ? RelayReassembler() : null;
       _socketSubscription = channel.stream.listen(
         _handleSocketData,
-        onError: (Object error) {
-          if (kDebugMode) {
-            debugPrint('RosbridgeService: $_url error: $error');
-          }
-          _scheduleReconnect();
-        },
-        onDone: _scheduleReconnect,
+        onError: (Object error) => _scheduleReconnect(error),
+        onDone: () => _scheduleReconnect(_closedReason(channel)),
         cancelOnError: true,
       );
       channel.ready
@@ -263,21 +310,41 @@ class RosbridgeService {
             }
           })
           .catchError((Object error) {
-            if (kDebugMode) {
-              debugPrint('RosbridgeService: $_url upgrade failed: $error');
-            }
             if (_channel == channel) {
-              _scheduleReconnect();
+              _scheduleReconnect('upgrade failed: $error');
             }
           });
-    } catch (_) {
-      _scheduleReconnect();
+    } catch (error) {
+      _scheduleReconnect(error);
     }
   }
 
+  /// Drop the current socket (if any) and connect again right away, with the
+  /// backoff started over: an explicit user/app action (new endpoint,
+  /// re-subscribe after demo mode).
   void reconnect() {
+    if (_disposed) {
+      return;
+    }
     _closeSocket();
+    _backoff.reset();
     _states.add(RosbridgeConnectionState.disconnected);
+    connect();
+  }
+
+  /// Skip the pending backoff wait and try now, starting the backoff over
+  /// (the app came back to the foreground, the user re-selected the robot).
+  /// A socket that is open or still opening is left alone.
+  void retryNow() {
+    if (_disposed) {
+      return;
+    }
+    _backoff.reset();
+    if (_connected || _channel != null) {
+      return;
+    }
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     connect();
   }
 
@@ -421,6 +488,7 @@ class RosbridgeService {
         return;
       }
       final data = decoded.cast<String, dynamic>();
+      _markHealthy();
       switch (data['op']) {
         case 'publish':
           final topic = data['topic']?.toString();
@@ -475,14 +543,38 @@ class RosbridgeService {
       } else {
         channel.sink.add(text);
       }
-    } catch (_) {
-      _scheduleReconnect();
+    } catch (error) {
+      _scheduleReconnect(error);
     }
   }
 
-  void _scheduleReconnect() {
+  void _markHealthy() {
+    if (_healthy) {
+      return;
+    }
+    _healthy = true;
+    final failures = _backoff.failures;
+    if (failures > 0 && kDebugMode) {
+      debugPrint('RosbridgeService: $_url back after $failures failures');
+    }
+    _backoff.reset();
+  }
+
+  static String _closedReason(WebSocketChannel channel) {
+    final code = channel.closeCode;
+    if (code == null) {
+      return 'closed';
+    }
+    final reason = channel.closeReason ?? '';
+    return reason.isEmpty ? 'closed ($code)' : 'closed ($code $reason)';
+  }
+
+  void _scheduleReconnect(Object failure) {
     if (_disposed) {
       return;
+    }
+    if (_channel == null && _reconnectTimer != null) {
+      return; // this failure already has its retry scheduled
     }
     _closeSocket();
     _states.add(RosbridgeConnectionState.retrying);
@@ -501,8 +593,36 @@ class RosbridgeService {
       }
     }
     _pendingCalls.clear();
-    _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 2), connect);
+    final fast = _fastRetry && _backoff.failures < _fastRetryLimit;
+    final delay = _backoff.nextDelay(cap: fast ? _fastRetryDelay : null);
+    _logRetry(delay, failure);
+    _reconnectTimer = Timer(delay, () {
+      _reconnectTimer = null;
+      connect();
+    });
+  }
+
+  /// [failure] without what changes on every attempt: the "upgrade failed"
+  /// prefix (the same error can arrive via `ready` or via the stream) and
+  /// the local port of a refused socket.
+  static String _failureSignature(Object failure) => '$failure'
+      .replaceFirst('upgrade failed: ', '')
+      .replaceAll(RegExp(r'port = \d+'), 'port');
+
+  void _logRetry(Duration delay, Object failure) {
+    final failures = _backoff.failures;
+    final signature = _failureSignature(failure);
+    final changed = signature != _lastFailure;
+    _lastFailure = signature;
+    if (!kDebugMode ||
+        (failures != 1 && !changed && failures % _logEveryNthFailure != 0)) {
+      return;
+    }
+    final seconds = (delay.inMilliseconds / 1000).toStringAsFixed(1);
+    debugPrint(
+      'RosbridgeService: $_url unreachable (attempt $failures, '
+      'next in $seconds s): $failure',
+    );
   }
 
   void dispose() {
@@ -533,6 +653,7 @@ class RosbridgeService {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _connected = false;
+    _healthy = false;
     final subscription = _socketSubscription;
     final channel = _channel;
     _socketSubscription = null;

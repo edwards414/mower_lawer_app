@@ -191,6 +191,15 @@ class MissionMockProvider extends ChangeNotifier {
       _cancelPending ||
       navStatus == NavMockStatus.executing ||
       navStatus == NavMockStatus.paused;
+
+  /// The robot may be mowing, or still owes us a confirmed stop: a lost link
+  /// must come back within seconds so the stop button does too.
+  void _syncFastRetry() {
+    _rosbridge.fastRetry =
+        !mockDataEnabled &&
+        (_navOperationActive || _ambiguousStartCancelRequired);
+  }
+
   bool get canDriveManually =>
       canControlRobot &&
       _hasFreshManualCommandClock &&
@@ -593,6 +602,7 @@ class MissionMockProvider extends ChangeNotifier {
   }
 
   void _handleRosState(RosbridgeConnectionState state) {
+    _syncFastRetry();
     final connected = state == RosbridgeConnectionState.connected;
     if (rosConnected == connected) {
       if (!connected && !_hasLoggedRosFailure) {
@@ -1369,6 +1379,7 @@ class MissionMockProvider extends ChangeNotifier {
 
     if (!rosConnected) {
       _addLog('ERROR', 'rosbridge 已斷線，後端尚未確認記錄結束');
+      _rosbridge.retryNow();
       return false;
     }
 
@@ -1424,6 +1435,7 @@ class MissionMockProvider extends ChangeNotifier {
     if (type == null || _recordCommandPending || !rosConnected) {
       if (type != null && !rosConnected) {
         _addLog('ERROR', 'rosbridge 已斷線，無法重試儲存${_recordTypeName(type)}');
+        _rosbridge.retryNow();
       }
       return false;
     }
@@ -2449,6 +2461,7 @@ class MissionMockProvider extends ChangeNotifier {
       return _mockSiteOp(op, name, newName);
     }
     if (!rosConnected) {
+      _rosbridge.retryNow();
       return _siteOpFail('請先連上 rosbridge');
     }
     _addLog('INFO', '呼叫 /site_op $op「$name」');
@@ -3060,6 +3073,9 @@ class MissionMockProvider extends ChangeNotifier {
     if (!rosConnected) {
       navStatus = NavMockStatus.paused;
       _addLog('ERROR', '無法取消導航：rosbridge 未連線');
+      // A stop must not wait out the reconnect backoff: try the link now so
+      // the next press can reach the robot.
+      _rosbridge.retryNow();
       notifyListeners();
       return;
     }
@@ -3510,6 +3526,7 @@ class MissionMockProvider extends ChangeNotifier {
   void _tick() {
     _tickCount += 1;
     _updateRobotOnline();
+    _syncFastRetry();
     if (!mockDataEnabled && rosConnected) {
       unawaited(_pollNavStatus());
     }
@@ -3684,6 +3701,8 @@ class MissionMockProvider extends ChangeNotifier {
     _rosStates?.cancel();
     if (_ownsRosbridge) {
       _rosbridge.dispose();
+    } else {
+      _rosbridge.fastRetry = false;
     }
     freeSpaceLayer?.dispose();
     riskMapLayer?.dispose();
