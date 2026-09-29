@@ -106,6 +106,115 @@ void main() {
     service.dispose();
     await messageSubscription.cancel();
   });
+
+  test('relay raises the throttle to its floor; LAN keeps the request', () async {
+    final channels = <_FakeWebSocketChannel>[];
+    final service = _serviceWith(channels);
+    service.subscribe('/adapter/robot_pose', throttleRateMs: 100);
+    service.subscribe('/manual_command_clock');
+    service.subscribe('/robot/online', throttleRateMs: 200);
+    service.subscribe('/battery_state', throttleRateMs: 10000);
+
+    service.configureEndpoint(url: 'ws://robot.test:9090');
+    final lan = await _subscribeRequests(channels.last);
+    expect(lan['/adapter/robot_pose'], 100);
+    expect(lan['/manual_command_clock'], isNull);
+
+    service.configureEndpoint(url: _relayUrl, framed: true);
+    final relay = await _subscribeRequests(channels.last, framed: true);
+    expect(relay['/adapter/robot_pose'], 1000);
+    // Safety-gated streams keep the rate the app asked for.
+    expect(relay['/manual_command_clock'], isNull);
+    expect(relay['/robot/online'], 200);
+    // A request slower than the floor is kept.
+    expect(relay['/battery_state'], 10000);
+
+    service.dispose();
+  });
+
+  test('suspendRelay closes the relay session until resume re-subscribes', () async {
+    final channels = <_FakeWebSocketChannel>[];
+    final service = _serviceWith(channels);
+    final states = <RosbridgeConnectionState>[];
+    final stateSubscription = service.states.listen(states.add);
+    service.subscribe('/robot/online', throttleRateMs: 200);
+    service.configureEndpoint(url: _relayUrl, framed: true);
+    await _subscribeRequests(channels.last, framed: true);
+    expect(service.connected, isTrue);
+
+    final pending = service.callService('/test_service');
+    await _flushEvents(); // the call is registered once the socket is ready
+    expect(service.suspendRelay(), isTrue);
+    await _flushEvents();
+    expect(service.connected, isFalse);
+    expect(service.suspended, isTrue);
+    expect(states.last, RosbridgeConnectionState.disconnected);
+    expect((await pending).success, isFalse);
+
+    service.connect();
+    expect(channels, hasLength(1), reason: 'connect is held while suspended');
+
+    service.resume();
+    expect(channels, hasLength(2));
+    final again = await _subscribeRequests(channels.last, framed: true);
+    expect(again.keys, contains('/robot/online'));
+    expect(service.connected, isTrue);
+
+    service.dispose();
+    await stateSubscription.cancel();
+  });
+
+  test('suspendRelay leaves a LAN session alone', () async {
+    final channels = <_FakeWebSocketChannel>[];
+    final service = _serviceWith(channels);
+    service.configureEndpoint(url: 'ws://robot.test:9090');
+    await _subscribeRequests(channels.last);
+
+    expect(service.suspendRelay(), isFalse);
+    expect(service.suspended, isFalse);
+    expect(service.connected, isTrue);
+
+    service.dispose();
+  });
+}
+
+const _relayUrl = 'wss://api.robot.test/v1/relay/app/MW-TEST01';
+
+RosbridgeService _serviceWith(List<_FakeWebSocketChannel> channels) =>
+    RosbridgeService(
+      url: '',
+      connector:
+          (
+            _, {
+            headers = const <String, dynamic>{},
+            protocols = const <String>[],
+          }) {
+            final channel = _FakeWebSocketChannel();
+            channels.add(channel);
+            return channel;
+          },
+    );
+
+/// Mark [channel] ready and collect `topic -> throttle_rate` of the
+/// subscribe requests the service sends on connect.
+Future<Map<String, int?>> _subscribeRequests(
+  _FakeWebSocketChannel channel, {
+  bool framed = false,
+}) async {
+  final requests = <String, int?>{};
+  final subscription = channel.sent.stream.listen((data) {
+    final text = framed
+        ? utf8.decode((data as List<int>).sublist(1))
+        : data as String;
+    final message = jsonDecode(text) as Map<String, dynamic>;
+    if (message['op'] == 'subscribe') {
+      requests[message['topic'] as String] = message['throttle_rate'] as int?;
+    }
+  });
+  channel.markReady();
+  await _flushEvents();
+  await subscription.cancel();
+  return requests;
 }
 
 Future<void> _flushEvents() async {

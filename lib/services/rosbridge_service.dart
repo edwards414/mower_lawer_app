@@ -61,6 +61,21 @@ class RosbridgeService {
   // build-time ROSBRIDGE_URL is only for development against a fixed host.
   static const _defaultUrl = String.fromEnvironment('ROSBRIDGE_URL');
 
+  /// Minimum `throttle_rate` (ms) per topic while connected through the fleet
+  /// relay, where every relayed rosbridge message is billed as a Durable
+  /// Object request. Each floor stays well inside the staleness window the
+  /// app applies to that topic (pose 3 s, battery 10 s). Safety-gated streams
+  /// keep their full rate and are deliberately not listed: the heartbeat
+  /// `/robot/online` (3 s), `/manual_command_clock` (200 ms) and the GPS fix
+  /// (300 ms, checked against that clock).
+  static const Map<String, int> relayMinThrottleMs = {
+    '/adapter/robot_pose': 1000,
+    '/battery_state': 5000,
+    '/adapter/zone_summaries': 2000,
+    '/adapter/coverage_settings': 2000,
+    '/adapter/map_datum': 5000,
+  };
+
   RosbridgeService({
     String url = _defaultUrl,
     RosbridgeConnector connector = connectWebSocket,
@@ -99,11 +114,16 @@ class RosbridgeService {
   Timer? _reconnectTimer;
   bool _disposed = false;
   bool _connected = false;
+
+  /// Relay session closed on purpose while the app is in the background;
+  /// [connect] and reconnects are held until [resume].
+  bool _suspended = false;
   Completer<void>? _connectionReady;
   int _callSequence = 0;
 
   String get url => _url;
   bool get framed => _framed;
+  bool get suspended => _suspended;
   String get cameraBaseUrl => _cameraBaseUrl;
   String get cameraIceServersUrl => _cameraIceServersUrl;
 
@@ -217,7 +237,11 @@ class RosbridgeService {
   }
 
   void connect() {
-    if (_disposed || _connected || _channel != null || _url.isEmpty) {
+    if (_disposed ||
+        _suspended ||
+        _connected ||
+        _channel != null ||
+        _url.isEmpty) {
       return;
     }
     _states.add(RosbridgeConnectionState.connecting);
@@ -252,7 +276,7 @@ class RosbridgeService {
             }
             _states.add(RosbridgeConnectionState.connected);
             for (final subscription in _subscriptions.values) {
-              _send(subscription.toMessage());
+              _send(subscription.toMessage(relay: _framed));
             }
             for (final entry in _advertisements.entries) {
               _send({
@@ -281,6 +305,30 @@ class RosbridgeService {
     connect();
   }
 
+  /// Close the relay session while the app is in the background, so the robot
+  /// stops streaming through the backend. Subscriptions and advertisements
+  /// are kept and re-sent by [resume]. No-op on a LAN route (not billed) or
+  /// when already suspended; returns whether the session was suspended.
+  bool suspendRelay() {
+    if (_disposed || _suspended || !_framed) {
+      return false;
+    }
+    _suspended = true;
+    _closeSocket();
+    _failPendingCalls('rosbridge suspended');
+    _states.add(RosbridgeConnectionState.disconnected);
+    return true;
+  }
+
+  /// Undo [suspendRelay] and connect to the current endpoint.
+  void resume() {
+    if (!_suspended) {
+      return;
+    }
+    _suspended = false;
+    connect();
+  }
+
   void subscribe(
     String topic, {
     String? type,
@@ -294,7 +342,7 @@ class RosbridgeService {
       qos: qos,
     );
     if (_connected) {
-      _send(_subscriptions[topic]!.toMessage());
+      _send(_subscriptions[topic]!.toMessage(relay: _framed));
     }
   }
 
@@ -481,28 +529,29 @@ class RosbridgeService {
   }
 
   void _scheduleReconnect() {
-    if (_disposed) {
+    if (_disposed || _suspended) {
       return;
     }
     _closeSocket();
     _states.add(RosbridgeConnectionState.retrying);
+    _failPendingCalls('rosbridge disconnected');
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(seconds: 2), connect);
+  }
+
+  void _failPendingCalls(String message) {
     for (final entry in _pendingCalls.entries) {
       if (!entry.value.isCompleted) {
         entry.value.complete(
           RosbridgeServiceResponse(
             service: '',
             result: false,
-            values: const {
-              'success': false,
-              'message': 'rosbridge disconnected',
-            },
+            values: {'success': false, 'message': message},
           ),
         );
       }
     }
     _pendingCalls.clear();
-    _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 2), connect);
   }
 
   void dispose() {
@@ -561,11 +610,18 @@ class _RosbridgeSubscription {
   final int throttleRateMs;
   final Map<String, dynamic>? qos;
 
-  Map<String, dynamic> toMessage() => {
-    'op': 'subscribe',
-    'topic': topic,
-    if (type != null) 'type': type,
-    if (throttleRateMs > 0) 'throttle_rate': throttleRateMs,
-    if (qos != null) 'qos': qos,
-  };
+  /// [relay] raises the throttle to [RosbridgeService.relayMinThrottleMs].
+  Map<String, dynamic> toMessage({bool relay = false}) {
+    final floor = relay
+        ? RosbridgeService.relayMinThrottleMs[topic] ?? 0
+        : 0;
+    final throttle = throttleRateMs > floor ? throttleRateMs : floor;
+    return {
+      'op': 'subscribe',
+      'topic': topic,
+      if (type != null) 'type': type,
+      if (throttle > 0) 'throttle_rate': throttle,
+      if (qos != null) 'qos': qos,
+    };
+  }
 }
