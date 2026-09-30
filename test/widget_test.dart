@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mower_stdio/main.dart';
 import 'package:mower_stdio/models/weather_snapshot.dart';
 import 'package:mower_stdio/services/weather_service.dart';
+import 'package:mower_stdio/widgets/execution_control_sheet.dart';
 
 void main() {
   testWidgets('shows self check then dashboard shell and map tab', (
@@ -54,7 +55,21 @@ void main() {
     await tester.ensureVisible(find.text('前往地圖執行任務'));
     await tester.tap(find.text('前往地圖執行任務'));
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('物件'), findsOneWidget);
+    // It lands on the run panel itself, not just any map panel.
+    expect(find.byType(ExecutionControlSheet), findsOneWidget);
+
+    // Even if the operator collapsed the panel earlier, the button reveals it.
+    await tester.tap(find.byType(AnimatedRotation));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(ExecutionControlSheet), findsNothing);
+    await tester.tap(find.byIcon(AppIcons.house));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.ensureVisible(find.text('前往地圖執行任務'));
+    await tester.tap(find.text('前往地圖執行任務'));
+    await tester.pump();
+    // The panel animates open; wait for it to be tall enough for its content.
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(ExecutionControlSheet), findsOneWidget);
 
     expect(find.text('物件'), findsOneWidget);
     expect(find.text('規劃'), findsOneWidget);

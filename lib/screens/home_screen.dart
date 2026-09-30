@@ -81,6 +81,7 @@ class _MowerDashboardShell extends StatefulWidget {
 
 class _MowerDashboardShellState extends State<_MowerDashboardShell> {
   int _selectedIndex = 0;
+  final _mapKey = GlobalKey<_MissionMapScreenState>();
   MissionMockProvider? _mission;
 
   @override
@@ -113,6 +114,9 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
             onShowVersions: () => setState(() => _selectedIndex = 3),
             onOpenRun: () {
               context.read<MissionMockProvider>().selectMode(MissionMode.run);
+              // A panel the operator collapsed earlier would hide the run
+              // controls this button promises.
+              _mapKey.currentState?.revealPanel();
               setState(() => _selectedIndex = 1);
             },
           ),
@@ -121,6 +125,7 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
           CompatibilityGate(
             onShowVersions: () => setState(() => _selectedIndex = 3),
             child: MissionMapScreen(
+              key: _mapKey,
               onOpenManual: () => setState(() => _selectedIndex = 2),
             ),
           ),
@@ -593,7 +598,7 @@ class _WeatherStrip extends StatelessWidget {
                 ),
                 if (detail != null)
                   Text(
-                    '$detail · ${_formatUpdateTime(snapshot!.fetchedAt)}更新',
+                    detail,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -602,6 +607,20 @@ class _WeatherStrip extends StatelessWidget {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
+                // Own line so a stale snapshot is never hidden by an
+                // ellipsis; also carries the Open-Meteo credit.
+                Text(
+                  snapshot == null
+                      ? 'Open-Meteo · 讀取目前作業位置'
+                      : 'Open-Meteo · ${_formatUpdateTime(snapshot.fetchedAt)}更新',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF8A9691),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ],
             ),
           ),
@@ -961,6 +980,13 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
   bool _panelCollapsed = false;
   int? _dragVertexIndex;
 
+  /// Expands the bottom panel (used when another tab sends the user to it).
+  void revealPanel() {
+    if (_panelCollapsed) {
+      setState(() => _panelCollapsed = false);
+    }
+  }
+
   /// Index of the edit-polygon vertex nearest to a screen point, within a
   /// grab radius; null if none.
   int? _vertexAt(Offset local, {double radius = 30.0}) {
@@ -1048,7 +1074,13 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     // Collapse the panel during draw / vertex-edit so more map is reachable.
     final collapsed =
         _panelCollapsed || mission.drawMode || mission.editVertexMode;
-    final effectivePanelH = collapsed ? collapsedH : panelHeight;
+    // The next-step banner adds its own height, so it never squeezes the
+    // panel content (and is left out on landscape, where there is no room).
+    final bannerExtra =
+        (!collapsed && !isLandscape && MissionNextStep.of(mission) != null)
+        ? kNextStepBannerExtent
+        : 0.0;
+    final effectivePanelH = collapsed ? collapsedH : panelHeight + bannerExtra;
 
     final selectedRobot = fleet.selectedRobot;
     final popupOrigin = (_popupOffset != null && selectedRobot != null)
@@ -1646,59 +1678,63 @@ class _MissionBottomPanel extends StatelessWidget {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Tappable handle row
-              GestureDetector(
-                onTap: onToggle,
-                behavior: HitTestBehavior.opaque,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFD0D7DA),
-                          borderRadius: BorderRadius.circular(2),
+          // While the panel animates open it is briefly too short for the tab
+          // bar and banner; show only the handle until there is room.
+          child: LayoutBuilder(
+            builder: (context, constraints) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Tappable handle row
+                GestureDetector(
+                  onTap: onToggle,
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFD0D7DA),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      AnimatedRotation(
-                        turns: isCollapsed ? 0.5 : 0,
-                        duration: const Duration(milliseconds: 280),
-                        curve: Curves.easeInOut,
-                        child: const Icon(
-                          AppIcons.chevronDown,
-                          size: 18,
-                          color: Color(0xFFB0BEC5),
+                        const SizedBox(width: 6),
+                        AnimatedRotation(
+                          turns: isCollapsed ? 0.5 : 0,
+                          duration: const Duration(milliseconds: 280),
+                          curve: Curves.easeInOut,
+                          child: const Icon(
+                            AppIcons.chevronDown,
+                            size: 18,
+                            color: Color(0xFFB0BEC5),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              if (!isCollapsed) ...[
-                const MissionModeBar(),
-                MissionNextStepBanner(onAddObject: onAddObject),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 180),
-                      child: _ModePanel(
-                        key: ValueKey(mission.selectedMode),
-                        mode: mission.selectedMode,
-                      ),
+                      ],
                     ),
                   ),
                 ),
+                if (!isCollapsed && constraints.maxHeight >= 160) ...[
+                  const MissionModeBar(),
+                  MissionNextStepBanner(onAddObject: onAddObject),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        child: _ModePanel(
+                          key: ValueKey(mission.selectedMode),
+                          mode: mission.selectedMode,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

@@ -5,6 +5,10 @@ import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 import '../utils/app_icons.dart';
 
+/// Height the banner occupies in the map panel (8 top gap + 48 bar); the panel
+/// is made this much taller when the banner shows.
+const double kNextStepBannerExtent = 56;
+
 /// What the operator should do next on the map, derived from the mission
 /// state, so the four panels are not something they have to work out alone.
 class MissionNextStep {
@@ -49,9 +53,25 @@ class MissionNextStep {
         addObject: true,
       );
     }
-    if (!mission.zones.any((zone) => zone.hasCoveragePath)) {
+    // "Planned" follows what starting a mission actually requires: the
+    // selected zone's path (live), or the planner's ready flag (demo, which
+    // never sets per-zone flags). With no zone selected, any path will do.
+    MissionZone? selected;
+    for (final zone in mission.zones) {
+      if (zone.id == mission.selectedZoneId) {
+        selected = zone;
+      }
+    }
+    final planned = mission.mockDataEnabled
+        ? mission.coverageReady
+        : selected != null
+        ? selected.hasCoveragePath
+        : mission.zones.any((zone) => zone.hasCoveragePath);
+    if (!planned) {
       return MissionNextStep(
-        text: '第二步：為工作區生成覆蓋路徑',
+        text: selected == null
+            ? '第二步：為工作區生成覆蓋路徑'
+            : '第二步：為「${selected.name}」生成覆蓋路徑',
         actionLabel: mode == MissionMode.plan ? null : '前往規劃',
         targetMode: MissionMode.plan,
       );
@@ -71,8 +91,10 @@ class MissionNextStepBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // A short (landscape) panel has no room for a banner.
-    if (MediaQuery.sizeOf(context).height < 420) {
+    // Landscape panels have no room for a banner (the map screen leaves it
+    // out of its height budget too).
+    final screen = MediaQuery.sizeOf(context);
+    if (screen.width > screen.height) {
       return const SizedBox.shrink();
     }
     final mission = context.watch<MissionMockProvider>();
@@ -83,53 +105,60 @@ class MissionNextStepBanner extends StatelessWidget {
     final label = step.actionLabel;
     return Padding(
       padding: const EdgeInsets.only(top: 8),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xFFE4F6EC),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
-          child: Row(
-            children: [
-              const Icon(
-                AppIcons.circlePlay,
-                size: 18,
-                color: Color(0xFF167A4A),
+      child: MediaQuery.withClampedTextScaling(
+        maxScaleFactor: 1.15,
+        child: SizedBox(
+          height: kNextStepBannerExtent - 8,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xFFE4F6EC),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 6, 0),
+              child: Row(
+                children: [
+                  const Icon(
+                    AppIcons.circlePlay,
+                    size: 18,
+                    color: Color(0xFF167A4A),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      step.text,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF0F5A36),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  if (label != null)
+                    TextButton(
+                      onPressed: () {
+                        if (step.addObject) {
+                          onAddObject();
+                        } else if (step.targetMode != null) {
+                          mission.selectMode(step.targetMode!);
+                        }
+                      },
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFF167A4A),
+                        minimumSize: const Size(0, 36),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                      ),
+                      child: Text(
+                        label,
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                ],
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  step.text,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF0F5A36),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              if (label != null)
-                TextButton(
-                  onPressed: () {
-                    if (step.addObject) {
-                      onAddObject();
-                    } else if (step.targetMode != null) {
-                      mission.selectMode(step.targetMode!);
-                    }
-                  },
-                  style: TextButton.styleFrom(
-                    foregroundColor: const Color(0xFF167A4A),
-                    minimumSize: const Size(0, 36),
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                  ),
-                  child: Text(
-                    label,
-                    style: const TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                ),
-            ],
+            ),
           ),
         ),
       ),
