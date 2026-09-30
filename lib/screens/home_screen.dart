@@ -19,6 +19,7 @@ import '../widgets/add_object_sheet.dart';
 import '../widgets/execution_control_sheet.dart';
 import '../widgets/manual_control_overlay.dart';
 import '../widgets/map_objects_sheet.dart';
+import '../widgets/map_record_bar.dart';
 import '../widgets/mission_map_canvas.dart';
 import '../widgets/mission_mode_bar.dart';
 import '../widgets/satellite_map_view.dart';
@@ -114,7 +115,9 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
           // outside what this app supports (see RobotInfoProvider).
           CompatibilityGate(
             onShowVersions: () => setState(() => _selectedIndex = 3),
-            child: const MissionMapScreen(),
+            child: MissionMapScreen(
+              onOpenManual: () => setState(() => _selectedIndex = 2),
+            ),
           ),
           CompatibilityGate(
             onShowVersions: () => setState(() => _selectedIndex = 3),
@@ -1033,7 +1036,10 @@ class _MoreActionRow extends StatelessWidget {
 }
 
 class MissionMapScreen extends StatefulWidget {
-  const MissionMapScreen({super.key});
+  const MissionMapScreen({super.key, required this.onOpenManual});
+
+  /// Switches to the manual-control page, where a recording is driven.
+  final VoidCallback onOpenManual;
 
   @override
   State<MissionMapScreen> createState() => _MissionMapScreenState();
@@ -1245,7 +1251,10 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
               top: media.padding.top + 78,
               right: 12,
               child: _MapActionRail(
-                onAdd: () => _showAppSheet(context, const AddObjectSheet()),
+                onAdd: () => _showAppSheet(
+                  context,
+                  AddObjectSheet(onRecordingStarted: widget.onOpenManual),
+                ),
                 onSites: () => _showAppSheet(context, const SiteLibrarySheet()),
                 onLayers: () =>
                     _showAppSheet(context, const _LayerToggleSheet()),
@@ -1273,6 +1282,13 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                   onCancel: mission.cancelVertexEdit,
                   onCommit: mission.commitVertexEdit,
                 ),
+              ),
+            if (mission.recordingType != null || mission.hasPendingRecordSave)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: effectivePanelH + 12,
+                child: MapRecordBar(onOpenManual: widget.onOpenManual),
               ),
             Positioned(
               left: 0,

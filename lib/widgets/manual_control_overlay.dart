@@ -118,7 +118,13 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
     );
     final typeBar = _RecordTypeBar(
       enabled: canDrive && !mission.recordCommandPending,
-      onPick: mission.startRecording,
+      onPick: (type) async {
+        final messenger = ScaffoldMessenger.of(context);
+        final error = await mission.startRecording(type);
+        if (error != null) {
+          messenger.showSnackBar(SnackBar(content: Text(error)));
+        }
+      },
     );
     final pendingSaveHud = _PendingRecordSaveHud(mission: mission);
 

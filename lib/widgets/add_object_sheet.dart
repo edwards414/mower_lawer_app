@@ -5,15 +5,57 @@ import 'package:provider/provider.dart';
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 
-class AddObjectSheet extends StatelessWidget {
-  const AddObjectSheet({super.key});
+class AddObjectSheet extends StatefulWidget {
+  const AddObjectSheet({super.key, this.onRecordingStarted});
+
+  /// Called once the robot has accepted a zone / risk / channel recording, so
+  /// the caller can take the user to where the robot is driven.
+  final VoidCallback? onRecordingStarted;
+
+  @override
+  State<AddObjectSheet> createState() => _AddObjectSheetState();
+}
+
+class _AddObjectSheetState extends State<AddObjectSheet> {
+  bool _starting = false;
+  String? _error;
+
+  Future<void> _startRecording(RecordObjectType type) async {
+    if (_starting) {
+      return;
+    }
+    final mission = context.read<MissionMockProvider>();
+    final navigator = Navigator.of(context);
+    setState(() {
+      _starting = true;
+      _error = null;
+    });
+    final error = await mission.startRecording(type);
+    // Dismissed while waiting: recording (if it started) is still visible and
+    // controllable from the map, so do not yank the user to another tab.
+    if (!mounted) {
+      return;
+    }
+    if (error != null) {
+      setState(() {
+        _starting = false;
+        _error = error;
+      });
+      return;
+    }
+    navigator.pop();
+    widget.onRecordingStarted?.call();
+  }
 
   @override
   Widget build(BuildContext context) {
     final mission = context.read<MissionMockProvider>();
+    final idle = !_starting;
 
     return SafeArea(
-      child: Padding(
+      // Scrolls so the extra progress / error rows never overflow a landscape
+      // phone.
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -41,6 +83,18 @@ class AddObjectSheet extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 4),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '選擇後會切到手動控制，開車繞一圈記錄邊界。',
+                style: TextStyle(
+                  color: Color(0xFF78909C),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -49,10 +103,9 @@ class AddObjectSheet extends StatelessWidget {
                     icon: AppIcons.squareDashed,
                     label: '工作區',
                     color: const Color(0xFF35B861),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      mission.startRecording(RecordObjectType.zone);
-                    },
+                    onTap: idle
+                        ? () => _startRecording(RecordObjectType.zone)
+                        : null,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -61,10 +114,9 @@ class AddObjectSheet extends StatelessWidget {
                     icon: AppIcons.ban,
                     label: '禁入區',
                     color: const Color(0xFFE55353),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      mission.startRecording(RecordObjectType.risk);
-                    },
+                    onTap: idle
+                        ? () => _startRecording(RecordObjectType.risk)
+                        : null,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -73,10 +125,9 @@ class AddObjectSheet extends StatelessWidget {
                     icon: AppIcons.spline,
                     label: '通道',
                     color: const Color(0xFF25AFC6),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      mission.startRecording(RecordObjectType.channel);
-                    },
+                    onTap: idle
+                        ? () => _startRecording(RecordObjectType.channel)
+                        : null,
                   ),
                 ),
               ],
@@ -86,11 +137,46 @@ class AddObjectSheet extends StatelessWidget {
               icon: AppIcons.mapPinPen,
               label: '地圖手繪危險區（點頂點）',
               color: const Color(0xFFE5852F),
-              onTap: () {
-                Navigator.of(context).pop();
-                mission.startDrawRisk();
-              },
+              onTap: idle
+                  ? () {
+                      Navigator.of(context).pop();
+                      mission.startDrawRisk();
+                    }
+                  : null,
             ),
+            if (_starting) ...[
+              const SizedBox(height: 14),
+              const LinearProgressIndicator(minHeight: 3),
+              const SizedBox(height: 6),
+              const Text(
+                '正在通知機器人開始記錄…',
+                style: TextStyle(
+                  color: Color(0xFF78909C),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 14),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(AppIcons.x, size: 16, color: Color(0xFFC62828)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(
+                        color: Color(0xFFC62828),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -109,50 +195,53 @@ class _AddObjectCard extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(18),
-      onTap: onTap,
-      child: Container(
-        height: 112,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFE1E7EA)),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x12000000),
-              blurRadius: 12,
-              offset: Offset(0, 5),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(14),
+    return Opacity(
+      opacity: onTap == null ? 0.5 : 1,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          height: 112,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFE1E7EA)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x12000000),
+                blurRadius: 12,
+                offset: Offset(0, 5),
               ),
-              child: Icon(icon, color: color, size: 28),
-            ),
-            const SizedBox(height: 10),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                label,
-                maxLines: 1,
-                style: const TextStyle(fontWeight: FontWeight.w900),
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: color, size: 28),
               ),
-            ),
-          ],
+              const SizedBox(height: 10),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

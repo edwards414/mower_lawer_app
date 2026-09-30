@@ -180,6 +180,57 @@ void main() {
     await ros.close();
   });
 
+  test('startRecording says why it did not start', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+
+    // Robot not connected yet: nothing is sent, the reason is returned.
+    final offline = await provider.startRecording(RecordObjectType.zone);
+    expect(offline, contains('無法開始記錄'));
+    expect(ros.callCount['/record_zone_start'], isNull);
+    expect(provider.recordingType, isNull);
+
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+
+    // The robot refuses: recording UI stays off and the caller is told.
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: false, message: 'busy');
+    expect(
+      await provider.startRecording(RecordObjectType.zone),
+      '機器人沒有接受開始記錄，詳見日誌',
+    );
+    expect(provider.recordingType, isNull);
+
+    // Accepted: null means started; a second start explains it is running.
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+    expect(provider.recordingType, RecordObjectType.zone);
+    expect(
+      await provider.startRecording(RecordObjectType.risk),
+      contains('請先儲存或取消'),
+    );
+    expect(ros.callCount['/risk_zone_start'], isNull);
+
+    // A stopped-but-unsaved recording blocks the next one with its reason.
+    ros.handlers['/record_zone_end'] = () =>
+        _response('/record_zone_end', success: true);
+    ros.handlers['/save_zone_list'] = () =>
+        _response('/save_zone_list', success: false, message: 'disk');
+    expect(await provider.stopRecording(save: true), isFalse);
+    expect(provider.hasPendingRecordSave, isTrue);
+    expect(
+      await provider.startRecording(RecordObjectType.channel),
+      contains('尚未持久化'),
+    );
+    expect(ros.callCount['/channel_record_start'], isNull);
+
+    provider.dispose();
+    await ros.close();
+  });
+
   test('external navigation stops active manual velocity', () async {
     final ros = _FakeRosbridgeService();
     final provider = MissionMockProvider(rosbridge: ros);
