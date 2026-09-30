@@ -21,6 +21,7 @@ import '../widgets/manual_control_overlay.dart';
 import '../widgets/map_objects_sheet.dart';
 import '../widgets/map_record_bar.dart';
 import '../widgets/mission_map_canvas.dart';
+import '../widgets/mission_next_step.dart';
 import '../widgets/mission_mode_bar.dart';
 import '../widgets/satellite_map_view.dart';
 import '../widgets/operation_log_sheet.dart';
@@ -1003,6 +1004,11 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     }
   }
 
+  void _openAddObject() => _showAppSheet(
+    context,
+    AddObjectSheet(onRecordingStarted: widget.onOpenManual),
+  );
+
   void _dismissPopup() {
     context.read<RobotFleetProvider>().selectRobot(null);
     setState(() => _popupOffset = null);
@@ -1160,10 +1166,7 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
               top: media.padding.top + 78,
               right: 12,
               child: _MapActionRail(
-                onAdd: () => _showAppSheet(
-                  context,
-                  AddObjectSheet(onRecordingStarted: widget.onOpenManual),
-                ),
+                onAdd: _openAddObject,
                 onSites: () => _showAppSheet(context, const SiteLibrarySheet()),
                 onLayers: () =>
                     _showAppSheet(context, const _LayerToggleSheet()),
@@ -1211,6 +1214,7 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                   isCollapsed: collapsed,
                   onToggle: () =>
                       setState(() => _panelCollapsed = !_panelCollapsed),
+                  onAddObject: _openAddObject,
                 ),
               ),
             ),
@@ -1615,10 +1619,12 @@ class _MissionBottomPanel extends StatelessWidget {
   const _MissionBottomPanel({
     required this.isCollapsed,
     required this.onToggle,
+    required this.onAddObject,
   });
 
   final bool isCollapsed;
   final VoidCallback onToggle;
+  final VoidCallback onAddObject;
 
   @override
   Widget build(BuildContext context) {
@@ -1677,6 +1683,7 @@ class _MissionBottomPanel extends StatelessWidget {
               ),
               if (!isCollapsed) ...[
                 const MissionModeBar(),
+                MissionNextStepBanner(onAddObject: onAddObject),
                 const SizedBox(height: 10),
                 Expanded(
                   child: SingleChildScrollView(
