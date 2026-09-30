@@ -110,6 +110,10 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
         children: [
           _DashboardHomePage(
             onShowVersions: () => setState(() => _selectedIndex = 3),
+            onOpenRun: () {
+              context.read<MissionMockProvider>().selectMode(MissionMode.run);
+              setState(() => _selectedIndex = 1);
+            },
           ),
           // Operating pages are blocked while the robot's API version is
           // outside what this app supports (see RobotInfoProvider).
@@ -181,9 +185,12 @@ class _ManualControlTabState extends State<_ManualControlTab> {
 }
 
 class _DashboardHomePage extends StatelessWidget {
-  const _DashboardHomePage({this.onShowVersions});
+  const _DashboardHomePage({this.onShowVersions, this.onOpenRun});
 
   final VoidCallback? onShowVersions;
+
+  /// Opens the map on its run panel (navigation only; never sends a command).
+  final VoidCallback? onOpenRun;
 
   @override
   Widget build(BuildContext context) {
@@ -212,13 +219,9 @@ class _DashboardHomePage extends StatelessWidget {
               CompatibilityNotice(onShowVersions: onShowVersions),
               const SizedBox(height: 10),
             ],
-            const _ConnectionCard(),
+            _MainStatusCard(onOpenRun: onOpenRun),
             const SizedBox(height: 10),
-            const _WeatherCard(),
-            const SizedBox(height: 10),
-            const _BatteryCard(),
-            const SizedBox(height: 10),
-            const _MissionSummaryCard(),
+            const _WeatherStrip(),
           ],
         ),
       ),
@@ -283,8 +286,12 @@ class _DashboardHeader extends StatelessWidget {
   }
 }
 
-class _ConnectionCard extends StatelessWidget {
-  const _ConnectionCard();
+/// The one card the home page is about: is the robot up, how much battery,
+/// what it is doing, and the way into the map to act on it.
+class _MainStatusCard extends StatelessWidget {
+  const _MainStatusCard({this.onOpenRun});
+
+  final VoidCallback? onOpenRun;
 
   @override
   Widget build(BuildContext context) {
@@ -305,298 +312,7 @@ class _ConnectionCard extends StatelessWidget {
         ? 'rosbridge 已連線 · heartbeat 不新鮮'
         : '等待 rosbridge 與真實資料';
 
-    return _DashboardCard(
-      child: Row(
-        children: [
-          const SizedBox(
-            width: 96,
-            height: 62,
-            child: CustomPaint(painter: _MowerMiniPainter()),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      statusLabel,
-                      style: TextStyle(
-                        color: online
-                            ? const Color(0xFF168848)
-                            : const Color(0xFF607D8B),
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(width: 7),
-                    _StatusDot(active: online),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  detail,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF8A9691),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _WeatherCard extends StatelessWidget {
-  const _WeatherCard();
-
-  @override
-  Widget build(BuildContext context) {
-    final weather = context.watch<WeatherProvider>();
-    final snapshot = weather.snapshot;
-    final loadingWithoutData = weather.isLoading && snapshot == null;
-
-    return _DashboardCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              _IconBubble(
-                icon: snapshot == null
-                    ? AppIcons.cloud
-                    : _weatherIcon(snapshot.weatherCode),
-                color: const Color(0xFF1E88A8),
-                background: const Color(0xFFE6F5F8),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '天氣概況',
-                      style: TextStyle(
-                        color: Color(0xFF50605A),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      loadingWithoutData
-                          ? '天氣載入中'
-                          : snapshot?.conditionLabel ??
-                                weather.errorMessage ??
-                                '等待天氣資料',
-                      style: const TextStyle(
-                        color: Color(0xFF17211C),
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (weather.isLoading)
-                const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2.4),
-                )
-              else
-                Text(
-                  snapshot == null
-                      ? '--°'
-                      : '${snapshot.temperatureC.round()}°',
-                  style: const TextStyle(
-                    color: Color(0xFF17211C),
-                    fontSize: 34,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _WeatherMetric(
-                  label: '體感',
-                  value: snapshot == null
-                      ? '--'
-                      : '${snapshot.apparentTemperatureC.round()}°C',
-                ),
-              ),
-              Expanded(
-                child: _WeatherMetric(
-                  label: '濕度',
-                  value: snapshot == null
-                      ? '--'
-                      : '${snapshot.relativeHumidity}%',
-                ),
-              ),
-              Expanded(
-                child: _WeatherMetric(
-                  label: '風速',
-                  value: snapshot == null
-                      ? '--'
-                      : '${snapshot.windSpeedKmh.toStringAsFixed(1)} km/h',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            snapshot == null
-                ? weather.errorMessage ?? 'Open-Meteo · 讀取目前作業位置'
-                : 'Open-Meteo · ${_formatUpdateTime(snapshot.fetchedAt)} 更新',
-            style: const TextStyle(
-              color: Color(0xFF8A9691),
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  static IconData _weatherIcon(int code) {
-    return switch (code) {
-      0 || 1 => AppIcons.sun,
-      2 || 3 => AppIcons.cloud,
-      45 || 48 => AppIcons.cloudFog,
-      51 || 53 || 55 || 56 || 57 => AppIcons.cloudDrizzle,
-      61 || 63 || 65 || 66 || 67 || 80 || 81 || 82 => AppIcons.droplet,
-      71 || 73 || 75 || 77 || 85 || 86 => AppIcons.snowflake,
-      95 || 96 || 99 => AppIcons.cloudLightning,
-      _ => AppIcons.cloud,
-    };
-  }
-}
-
-class _WeatherMetric extends StatelessWidget {
-  const _WeatherMetric({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            color: Color(0xFF8A9691),
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: Color(0xFF17211C),
-            fontSize: 13,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _BatteryCard extends StatelessWidget {
-  const _BatteryCard();
-
-  @override
-  Widget build(BuildContext context) {
-    final mission = context.watch<MissionMockProvider>();
     final battery = mission.batteryPercent;
-
-    return _DashboardCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            '電量',
-            style: TextStyle(
-              color: Color(0xFF50605A),
-              fontSize: 14,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              SizedBox(
-                width: 90,
-                child: Text(
-                  battery == null ? '--' : '${battery.round()}%',
-                  style: const TextStyle(
-                    color: Color(0xFF17211C),
-                    fontSize: 34,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: battery == null
-                            ? null
-                            : (battery / 100).clamp(0.0, 1.0),
-                        minHeight: 10,
-                        backgroundColor: const Color(0xFFE6ECE9),
-                        color: const Color(0xFF168848),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      mission.mockDataEnabled
-                          ? 'Demo 模擬電量'
-                          : battery == null
-                          ? '尚未收到新鮮的 /battery_state'
-                          : 'ROS 即時電量',
-                      style: TextStyle(
-                        color: Color(0xFF8A9691),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MissionSummaryCard extends StatelessWidget {
-  const _MissionSummaryCard();
-
-  @override
-  Widget build(BuildContext context) {
-    final mission = context.watch<MissionMockProvider>();
     final zone = _selectedZone(mission);
     final progress = mission.coverageProgress.clamp(0.0, 1.0).toDouble();
     final active =
@@ -617,15 +333,105 @@ class _MissionSummaryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '目前任務',
-            style: TextStyle(
-              color: Color(0xFF50605A),
-              fontSize: 15,
-              fontWeight: FontWeight.w900,
-            ),
+          Row(
+            children: [
+              const SizedBox(
+                width: 84,
+                height: 54,
+                child: CustomPaint(painter: _MowerMiniPainter()),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            statusLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: online
+                                  ? const Color(0xFF168848)
+                                  : const Color(0xFF607D8B),
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 7),
+                        _StatusDot(active: online),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      detail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF8A9691),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 14),
+          Row(
+            children: [
+              SizedBox(
+                width: 74,
+                child: Text(
+                  battery == null ? '--' : '${battery.round()}%',
+                  style: const TextStyle(
+                    color: Color(0xFF17211C),
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: battery == null
+                            ? null
+                            : (battery / 100).clamp(0.0, 1.0),
+                        minHeight: 10,
+                        backgroundColor: const Color(0xFFE6ECE9),
+                        color: const Color(0xFF168848),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      mission.mockDataEnabled
+                          ? 'Demo 模擬電量'
+                          : battery == null
+                          ? '尚未收到新鮮的 /battery_state'
+                          : '電量 · ROS 即時',
+                      style: const TextStyle(
+                        color: Color(0xFF8A9691),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Divider(height: 1, color: Color(0xFFE6ECE9)),
+          ),
           Row(
             children: [
               _IconBubble(
@@ -644,11 +450,11 @@ class _MissionSummaryCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Color(0xFF17211C),
-                        fontSize: 20,
+                        fontSize: 18,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 2),
                     Text(
                       executing ? '自動割草中' : mission.navStatusLabel(),
                       style: TextStyle(
@@ -663,8 +469,8 @@ class _MissionSummaryCard extends StatelessWidget {
                 ),
               ),
               SizedBox(
-                width: 72,
-                height: 72,
+                width: 64,
+                height: 64,
                 child: CustomPaint(
                   painter: _ProgressRingPainter(
                     progress: progressKnown ? progress : 0,
@@ -674,7 +480,7 @@ class _MissionSummaryCard extends StatelessWidget {
                       progressKnown ? '${(progress * 100).round()}%' : '—',
                       style: const TextStyle(
                         color: Color(0xFF17211C),
-                        fontSize: 16,
+                        fontSize: 15,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -683,7 +489,7 @@ class _MissionSummaryCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           Row(
             children: [
               _MissionMetric(
@@ -702,12 +508,24 @@ class _MissionSummaryCard extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: onOpenRun,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
+              icon: Icon(active ? AppIcons.circlePlay : AppIcons.map),
+              label: Text(active ? '查看執行進度' : '前往地圖執行任務'),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  MissionZone? _selectedZone(MissionMockProvider mission) {
+  static MissionZone? _selectedZone(MissionMockProvider mission) {
     for (final zone in mission.zones) {
       if (zone.id == mission.selectedZoneId) {
         return zone;
@@ -716,7 +534,7 @@ class _MissionSummaryCard extends StatelessWidget {
     return null;
   }
 
-  double _polygonAreaM2(List<MapPoint> points) {
+  static double _polygonAreaM2(List<MapPoint> points) {
     if (points.length < 3) {
       return 0;
     }
@@ -727,6 +545,97 @@ class _MissionSummaryCard extends StatelessWidget {
       twiceArea += current.x * next.y - next.x * current.y;
     }
     return twiceArea.abs() / 2;
+  }
+}
+
+/// Weather as one quiet line: it informs the decision, it is not the page.
+class _WeatherStrip extends StatelessWidget {
+  const _WeatherStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    final weather = context.watch<WeatherProvider>();
+    final snapshot = weather.snapshot;
+    final loadingWithoutData = weather.isLoading && snapshot == null;
+    final title = loadingWithoutData
+        ? '天氣載入中'
+        : snapshot?.conditionLabel ?? weather.errorMessage ?? '等待天氣資料';
+    final detail = snapshot == null
+        ? null
+        : '體感 ${snapshot.apparentTemperatureC.round()}° · '
+              '濕度 ${snapshot.relativeHumidity}% · '
+              '風 ${snapshot.windSpeedKmh.toStringAsFixed(1)} km/h';
+
+    return _DashboardCard(
+      child: Row(
+        children: [
+          Icon(
+            snapshot == null
+                ? AppIcons.cloud
+                : _weatherIcon(snapshot.weatherCode),
+            color: const Color(0xFF1E88A8),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF17211C),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                if (detail != null)
+                  Text(
+                    '$detail · ${_formatUpdateTime(snapshot!.fetchedAt)}更新',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF8A9691),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (weather.isLoading)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2.2),
+            )
+          else
+            Text(
+              snapshot == null ? '--°' : '${snapshot.temperatureC.round()}°',
+              style: const TextStyle(
+                color: Color(0xFF17211C),
+                fontSize: 24,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static IconData _weatherIcon(int code) {
+    return switch (code) {
+      0 || 1 => AppIcons.sun,
+      2 || 3 => AppIcons.cloud,
+      45 || 48 => AppIcons.cloudFog,
+      51 || 53 || 55 || 56 || 57 => AppIcons.cloudDrizzle,
+      61 || 63 || 65 || 66 || 67 || 80 || 81 || 82 => AppIcons.droplet,
+      71 || 73 || 75 || 77 || 85 || 86 => AppIcons.snowflake,
+      95 || 96 || 99 => AppIcons.cloudLightning,
+      _ => AppIcons.cloud,
+    };
   }
 }
 

@@ -46,8 +46,15 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     expect(find.text('等待新鮮 GPS 位置'), findsWidgets);
 
-    await tester.tap(find.byIcon(AppIcons.map));
+    // One main card: status, battery, mission and the way into the map.
+    expect(find.text('前往地圖執行任務'), findsOneWidget);
+    expect(find.text('電量'), findsNothing);
+
+    // The main button opens the map on its run panel.
+    await tester.ensureVisible(find.text('前往地圖執行任務'));
+    await tester.tap(find.text('前往地圖執行任務'));
     await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('物件'), findsOneWidget);
 
     expect(find.text('物件'), findsOneWidget);
     expect(find.text('規劃'), findsOneWidget);
