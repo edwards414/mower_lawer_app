@@ -26,14 +26,18 @@ class _AddObjectSheetState extends State<AddObjectSheet> {
     }
     final mission = context.read<MissionMockProvider>();
     final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
     setState(() {
       _starting = true;
       _error = null;
     });
     final error = await mission.startRecording(type);
-    // Dismissed while waiting: recording (if it started) is still visible and
-    // controllable from the map, so do not yank the user to another tab.
-    if (!mounted) {
+    // Dismissed while waiting: the user is already back on the map. `mounted`
+    // is still true during the sheet's exit animation, so ask the route: only
+    // pop (and hand off) while this sheet is still the top route, otherwise
+    // pop() would remove the page underneath. Recording, if it started, stays
+    // visible and controllable from the map.
+    if (!mounted || !(route?.isCurrent ?? false)) {
       return;
     }
     if (error != null) {
@@ -44,17 +48,28 @@ class _AddObjectSheetState extends State<AddObjectSheet> {
       return;
     }
     navigator.pop();
-    widget.onRecordingStarted?.call();
+    // Demo recordings need no driving, so keep the user on the map there.
+    if (!mission.mockDataEnabled) {
+      widget.onRecordingStarted?.call();
+    }
+  }
+
+  void _startDraw() {
+    final mission = context.read<MissionMockProvider>();
+    final error = mission.startDrawRisk();
+    if (error != null) {
+      setState(() => _error = error);
+      return;
+    }
+    Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    final mission = context.read<MissionMockProvider>();
     final idle = !_starting;
 
     return SafeArea(
-      // Scrolls so the extra progress / error rows never overflow a landscape
-      // phone.
+      // Scrolls so the extra rows never overflow a landscape phone.
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
         child: Column(
@@ -87,7 +102,7 @@ class _AddObjectSheetState extends State<AddObjectSheet> {
             const Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                '選擇後會切到手動控制，開車繞一圈記錄邊界。',
+                '工作區、禁入區、通道：選擇後切到手動控制，開車沿邊界或路徑記錄。',
                 style: TextStyle(
                   color: Color(0xFF78909C),
                   fontSize: 12,
@@ -95,6 +110,44 @@ class _AddObjectSheetState extends State<AddObjectSheet> {
                 ),
               ),
             ),
+            // Status sits above the cards so it stays in view on a short
+            // (landscape) screen instead of falling below the fold.
+            if (_starting) ...[
+              const SizedBox(height: 12),
+              const LinearProgressIndicator(minHeight: 3),
+              const SizedBox(height: 6),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '正在通知機器人開始記錄…',
+                  style: TextStyle(
+                    color: Color(0xFF78909C),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(AppIcons.x, size: 16, color: Color(0xFFC62828)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(
+                        color: Color(0xFFC62828),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [
@@ -137,46 +190,8 @@ class _AddObjectSheetState extends State<AddObjectSheet> {
               icon: AppIcons.mapPinPen,
               label: '地圖手繪危險區（點頂點）',
               color: const Color(0xFFE5852F),
-              onTap: idle
-                  ? () {
-                      Navigator.of(context).pop();
-                      mission.startDrawRisk();
-                    }
-                  : null,
+              onTap: idle ? _startDraw : null,
             ),
-            if (_starting) ...[
-              const SizedBox(height: 14),
-              const LinearProgressIndicator(minHeight: 3),
-              const SizedBox(height: 6),
-              const Text(
-                '正在通知機器人開始記錄…',
-                style: TextStyle(
-                  color: Color(0xFF78909C),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-            if (_error != null) ...[
-              const SizedBox(height: 14),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(AppIcons.x, size: 16, color: Color(0xFFC62828)),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      _error!,
-                      style: const TextStyle(
-                        color: Color(0xFFC62828),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
           ],
         ),
       ),

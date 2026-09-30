@@ -6,6 +6,63 @@ import 'package:provider/provider.dart';
 import '../providers/mission_mock_provider.dart';
 import '../utils/app_icons.dart';
 
+void _showRecordSnack(
+  ScaffoldMessengerState messenger,
+  String text, {
+  double? clearBottom,
+}) {
+  messenger.showSnackBar(
+    SnackBar(
+      content: Text(text),
+      // Floats above [clearBottom] so it never covers the manual joysticks.
+      behavior: clearBottom == null ? null : SnackBarBehavior.floating,
+      margin: clearBottom == null
+          ? null
+          : EdgeInsets.fromLTRB(16, 0, 16, clearBottom),
+    ),
+  );
+}
+
+/// Saves or cancels the active recording and, when the robot did not accept,
+/// tells the user what state they are in (still recording vs stopped-unsaved).
+Future<void> finishRecordingWithFeedback(
+  BuildContext context,
+  MissionMockProvider mission, {
+  required bool save,
+  double? clearBottom,
+}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final done = await mission.stopRecording(save: save);
+  if (done) {
+    return;
+  }
+  // stopRecording(save: true) also returns false when the recorder already
+  // stopped and only persisting failed; the retry bar takes over from there.
+  final text = mission.hasPendingRecordSave
+      ? '記錄已停止，但儲存失敗，請按「重試」（詳見日誌）'
+      : save
+      ? '儲存沒有成功，記錄仍在進行，請重試（詳見日誌）'
+      : '取消沒有成功，請重試（詳見日誌）';
+  _showRecordSnack(messenger, text, clearBottom: clearBottom);
+}
+
+/// Retries persisting a stopped recording and reports a failed attempt.
+Future<void> retrySaveWithFeedback(
+  BuildContext context,
+  MissionMockProvider mission, {
+  double? clearBottom,
+}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final saved = await mission.retryPendingRecordSave();
+  if (!saved) {
+    _showRecordSnack(
+      messenger,
+      '重試儲存沒有成功，請確認連線後再試（詳見日誌）',
+      clearBottom: clearBottom,
+    );
+  }
+}
+
 /// Map-side controls for an object recording, so the way to finish (save or
 /// cancel) or retry a failed save is visible where the trail is drawn and not
 /// only on the manual-control page.
@@ -43,18 +100,6 @@ class _RecordingBar extends StatelessWidget {
 
   final MissionMockProvider mission;
   final VoidCallback onOpenManual;
-
-  Future<void> _finish(BuildContext context, {required bool save}) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final done = await mission.stopRecording(save: save);
-    if (!done) {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(save ? '儲存沒有成功，記錄仍在進行，請重試（詳見日誌）' : '取消沒有成功，請重試（詳見日誌）'),
-        ),
-      );
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -100,7 +145,13 @@ class _RecordingBar extends StatelessWidget {
             TextButton(
               onPressed: busy
                   ? null
-                  : () => unawaited(_finish(context, save: false)),
+                  : () => unawaited(
+                      finishRecordingWithFeedback(
+                        context,
+                        mission,
+                        save: false,
+                      ),
+                    ),
               style: compact.copyWith(
                 foregroundColor: WidgetStateProperty.resolveWith(
                   (states) => states.contains(WidgetState.disabled)
@@ -114,7 +165,9 @@ class _RecordingBar extends StatelessWidget {
             FilledButton(
               onPressed: busy
                   ? null
-                  : () => unawaited(_finish(context, save: true)),
+                  : () => unawaited(
+                      finishRecordingWithFeedback(context, mission, save: true),
+                    ),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 minimumSize: Size.zero,
@@ -162,7 +215,7 @@ class _PendingSaveBar extends StatelessWidget {
             FilledButton.icon(
               onPressed: busy
                   ? null
-                  : () => unawaited(mission.retryPendingRecordSave()),
+                  : () => unawaited(retrySaveWithFeedback(context, mission)),
               style: FilledButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: const Color(0xFFE65100),

@@ -1315,6 +1315,9 @@ class MissionMockProvider extends ChangeNotifier {
       _addLog('WARN', '自動導航進行中，不能開始手動記錄');
       return Future.value('自動導航進行中，不能開始手動記錄');
     }
+    if (drawMode || editVertexMode) {
+      return Future.value('請先完成或取消地圖上的繪製／編輯，再開始記錄');
+    }
     return _startRecording(type);
   }
 
@@ -1332,6 +1335,10 @@ class MissionMockProvider extends ChangeNotifier {
     if (!canDriveManually) {
       final reason = !canControlRobot
           ? '無法開始記錄：需要 rosbridge 與新鮮的機器人 heartbeat'
+          : !_hasFreshManualCommandClock
+          ? '無法開始記錄：尚未收到機器人的手動命令時鐘，請稍後再試'
+          : _manualSessionNeedsNeutral
+          ? '無法開始記錄：手動控制剛重新連線，請先放開搖桿再試'
           : '無法開始記錄：需要可確認的導航待命狀態';
       _addLog('WARN', reason);
       return reason;
@@ -2651,13 +2658,24 @@ class MissionMockProvider extends ChangeNotifier {
   String drawKind = 'risk';
   List<MapPoint> draftPolygon = const [];
 
-  void startDrawRisk() {
+  /// Enters hand-draw mode for a risk zone. Returns `null` when it started, or
+  /// the reason it did not (drawing and object recording share the bottom of
+  /// the map and cannot run together).
+  String? startDrawRisk() {
+    if (recordingType != null ||
+        _recordCommandPending ||
+        _pendingRecordSaveType != null) {
+      const reason = '記錄進行中或尚未儲存，請先儲存／取消記錄，再手繪危險區';
+      _addLog('WARN', reason);
+      return reason;
+    }
     drawMode = true;
     drawKind = 'risk';
     draftPolygon = const [];
     clearObjectSelection();
     _addLog('INFO', '開始繪製危險區：點地圖加頂點,至少 3 點後閉合儲存');
     notifyListeners();
+    return null;
   }
 
   void addDraftVertex(MapPoint p) {
@@ -2756,6 +2774,12 @@ class MissionMockProvider extends ChangeNotifier {
   List<MapPoint> editPolygon = const [];
 
   void startVertexEdit(String kind, int id) {
+    if (recordingType != null ||
+        _recordCommandPending ||
+        _pendingRecordSaveType != null) {
+      _addLog('WARN', '記錄進行中或尚未儲存，不能編輯頂點');
+      return;
+    }
     final pts = _objectPoints(kind, id);
     if (pts == null || pts.isEmpty) {
       return;

@@ -83,7 +83,7 @@ void main() {
     await _finish(tester, provider);
   });
 
-  testWidgets('add-object sheet hands off to manual control once started', (
+  testWidgets('demo recording stays on the map (nothing to drive)', (
     tester,
   ) async {
     final provider = await _provider(tester, demo: true);
@@ -107,15 +107,13 @@ void main() {
 
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    expect(find.text('新增地圖物件'), findsOneWidget);
-
     await tester.tap(find.text('工作區'));
     await tester.pumpAndSettle();
 
     expect(provider.recordingType, RecordObjectType.zone);
-    expect(started, 1);
-    // The sheet closes itself after a successful start.
+    // The sheet closes itself, but there is no robot to drive in demo mode.
     expect(find.text('新增地圖物件'), findsNothing);
+    expect(started, 0);
     await _finish(tester, provider);
   });
 
