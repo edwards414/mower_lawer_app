@@ -108,18 +108,16 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
         index: _selectedIndex,
         children: [
           _DashboardHomePage(
-            onShowVersions: () => setState(() => _selectedIndex = 4),
+            onShowVersions: () => setState(() => _selectedIndex = 3),
           ),
           // Operating pages are blocked while the robot's API version is
           // outside what this app supports (see RobotInfoProvider).
           CompatibilityGate(
-            onShowVersions: () => setState(() => _selectedIndex = 4),
-            child: MissionMapScreen(
-              onManual: () => setState(() => _selectedIndex = 2),
-            ),
+            onShowVersions: () => setState(() => _selectedIndex = 3),
+            child: const MissionMapScreen(),
           ),
           CompatibilityGate(
-            onShowVersions: () => setState(() => _selectedIndex = 4),
+            onShowVersions: () => setState(() => _selectedIndex = 3),
             child: _ManualControlTab(
               onGoHome: () {
                 context.read<MissionMockProvider>().stopManualControl();
@@ -127,7 +125,6 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
               },
             ),
           ),
-          const _ScheduleTab(),
           const _MoreTab(),
         ],
       ),
@@ -145,21 +142,11 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
                 setState(() => _selectedIndex = index);
               },
               destinations: const [
-                NavigationDestination(
-                  icon: Icon(AppIcons.house),
-                  label: '首頁',
-                ),
-                NavigationDestination(
-                  icon: Icon(AppIcons.map),
-                  label: '地圖',
-                ),
+                NavigationDestination(icon: Icon(AppIcons.house), label: '首頁'),
+                NavigationDestination(icon: Icon(AppIcons.map), label: '地圖'),
                 NavigationDestination(
                   icon: Icon(AppIcons.gamepad2),
                   label: '手動控制',
-                ),
-                NavigationDestination(
-                  icon: Icon(AppIcons.calendar),
-                  label: '排程',
                 ),
                 NavigationDestination(
                   icon: Icon(AppIcons.ellipsis),
@@ -202,7 +189,9 @@ class _DashboardHomePage extends StatelessWidget {
           p.compatibility == RobotCompatibility.robotTooOld ||
           p.compatibility == RobotCompatibility.appTooOld,
     );
-    final mismatch = context.select<RobotRegistry, bool>((r) => r.identityMismatch);
+    final mismatch = context.select<RobotRegistry, bool>(
+      (r) => r.identityMismatch,
+    );
     return ColoredBox(
       color: const Color(0xFFF6F7F8),
       child: SafeArea(
@@ -227,10 +216,6 @@ class _DashboardHomePage extends StatelessWidget {
             const _BatteryCard(),
             const SizedBox(height: 10),
             const _MissionSummaryCard(),
-            const SizedBox(height: 10),
-            const _NextScheduleCard(),
-            const SizedBox(height: 10),
-            const _DockStatusCard(),
           ],
         ),
       ),
@@ -243,46 +228,47 @@ class _DashboardHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final robotName = context.select<RobotRegistry, String?>(
+      (r) => r.active?.displayName,
+    );
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '我的割草機',
-                style: TextStyle(
-                  color: Color(0xFF17211C),
-                  fontSize: 24,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: const [
-                  Text(
-                    'GM-3000',
-                    style: TextStyle(
+        const Text(
+          '我的割草機',
+          style: TextStyle(
+            color: Color(0xFF17211C),
+            fontSize: 24,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 4),
+        InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const RobotsScreen())),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    robotName ?? '尚未配對機器人',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
                       color: Color(0xFF50605A),
                       fontSize: 16,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
-                  SizedBox(width: 4),
-                  Icon(AppIcons.chevronDown, size: 20),
-                ],
-              ),
-            ],
-          ),
-        ),
-        Tooltip(
-          message: '通知',
-          child: IconButton(
-            onPressed: () {},
-            icon: const Icon(AppIcons.bell),
-            color: const Color(0xFF17211C),
+                ),
+                const SizedBox(width: 4),
+                const Icon(AppIcons.chevronDown, size: 20),
+              ],
+            ),
           ),
         ),
       ],
@@ -339,8 +325,6 @@ class _ConnectionCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 7),
                     _StatusDot(active: online),
-                    const Spacer(),
-                    _RobotOnlineChip(online: mission.robotOnline),
                   ],
                 ),
                 const SizedBox(height: 6),
@@ -778,96 +762,6 @@ class _MissionMetric extends StatelessWidget {
   }
 }
 
-class _NextScheduleCard extends StatelessWidget {
-  const _NextScheduleCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return const _InfoDashboardRow(
-      icon: AppIcons.calendar,
-      title: '下次排程',
-      value: '後院區域',
-      trailing: '明天 08:00',
-    );
-  }
-}
-
-class _DockStatusCard extends StatelessWidget {
-  const _DockStatusCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return const _InfoDashboardRow(
-      icon: AppIcons.plugZap,
-      title: '充電座狀態',
-      value: '已就緒',
-      trailing: '›',
-    );
-  }
-}
-
-class _InfoDashboardRow extends StatelessWidget {
-  const _InfoDashboardRow({
-    required this.icon,
-    required this.title,
-    required this.value,
-    required this.trailing,
-  });
-
-  final IconData icon;
-  final String title;
-  final String value;
-  final String trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    return _DashboardCard(
-      child: Row(
-        children: [
-          _IconBubble(
-            icon: icon,
-            color: const Color(0xFF263238),
-            background: const Color(0xFFEFF3F1),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Color(0xFF50605A),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    color: Color(0xFF168848),
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            trailing,
-            style: const TextStyle(
-              color: Color(0xFF607D8B),
-              fontSize: 14,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _DashboardCard extends StatelessWidget {
   const _DashboardCard({required this.child});
 
@@ -936,45 +830,6 @@ class _StatusDot extends StatelessWidget {
   }
 }
 
-/// Robot liveness chip driven by the `/robot/online` heartbeat (distinct from
-/// the app<->rosbridge link). Green = robot alive, grey = offline/unknown.
-class _RobotOnlineChip extends StatelessWidget {
-  const _RobotOnlineChip({required this.online});
-
-  final bool online;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = online ? const Color(0xFF167A4A) : const Color(0xFF90A4AE);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: online ? const Color(0xFFE4F6EC) : const Color(0xFFF0F2F3),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            online ? AppIcons.bot : AppIcons.bot,
-            size: 14,
-            color: color,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            online ? '機器人在線' : '機器人離線',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w900,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _VerticalDivider extends StatelessWidget {
   const _VerticalDivider();
 
@@ -985,43 +840,6 @@ class _VerticalDivider extends StatelessWidget {
       height: 42,
       margin: const EdgeInsets.symmetric(horizontal: 10),
       color: const Color(0xFFE6ECE9),
-    );
-  }
-}
-
-class _ScheduleTab extends StatelessWidget {
-  const _ScheduleTab();
-
-  @override
-  Widget build(BuildContext context) {
-    return ColoredBox(
-      color: const Color(0xFFF6F7F8),
-      child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
-          physics: const BouncingScrollPhysics(),
-          children: const [
-            Text(
-              '排程',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
-            ),
-            SizedBox(height: 16),
-            _InfoDashboardRow(
-              icon: AppIcons.calendar,
-              title: '下一個任務',
-              value: '後院區域',
-              trailing: '明天 08:00',
-            ),
-            SizedBox(height: 10),
-            _InfoDashboardRow(
-              icon: AppIcons.repeat,
-              title: '重複週期',
-              value: '每週一、三、五',
-              trailing: '08:00',
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -1062,22 +880,6 @@ class _MoreTab extends StatelessWidget {
                   ),
                   const Divider(height: 24),
                   _MoreActionRow(
-                    icon: AppIcons.settings,
-                    title: '連線設定（進階）',
-                    detail: mission.robotIp,
-                    onTap: () =>
-                        _showAppSheet(context, const _SettingsQuickSheet()),
-                  ),
-                  const Divider(height: 24),
-                  _MoreActionRow(
-                    icon: AppIcons.layers,
-                    title: '地圖圖層',
-                    detail: '工作區、禁入區、通道',
-                    onTap: () =>
-                        _showAppSheet(context, const _LayerToggleSheet()),
-                  ),
-                  const Divider(height: 24),
-                  _MoreActionRow(
                     icon: AppIcons.video,
                     title: '錄製 / Bag',
                     detail: '錄製狀態、清單、上傳 R2',
@@ -1091,29 +893,74 @@ class _MoreTab extends StatelessWidget {
             const SizedBox(height: 10),
             const _DashboardCard(child: RobotVersionCard()),
             const SizedBox(height: 10),
-            _DashboardCard(
-              child: Column(
-                children: [
-                  _InfoRow(
-                    icon: mission.rosConnected
-                        ? AppIcons.circleDot
-                        : AppIcons.wifiOff,
-                    title: '資料來源',
-                    detail: mission.mockDataEnabled
-                        ? 'Demo（與真機資料隔離）'
-                        : mission.rosConnected
-                        ? 'ROS 已連線 · ${mission.robotOnline ? '機器人在線' : 'heartbeat 不新鮮'}'
-                        : '等待 ROS 真實資料',
-                  ),
-                  _InfoRow(
-                    icon: AppIcons.shieldCheck,
-                    title: '安全狀態',
-                    detail: mission.mockDataEnabled
-                        ? 'Demo 不代表真機安全'
-                        : '尚未提供安全狀態 topic',
-                  ),
-                ],
-              ),
+            _DashboardCard(child: _AdvancedSection(mission: mission)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Connection / data-source tools that ordinary use never needs, folded away
+/// so they stop competing with the everyday rows above.
+class _AdvancedSection extends StatelessWidget {
+  const _AdvancedSection({required this.mission});
+
+  final MissionMockProvider mission;
+
+  @override
+  Widget build(BuildContext context) {
+    // ListTile-based children paint ink on the nearest Material; the card is a
+    // plain DecoratedBox, so give them a transparent one to draw on.
+    return Material(
+      type: MaterialType.transparency,
+      child: Theme(
+        // The card already has its own frame; drop ExpansionTile's dividers.
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(top: 4),
+          expandedCrossAxisAlignment: CrossAxisAlignment.start,
+          leading: const Icon(AppIcons.settings, color: Color(0xFF167A4A)),
+          title: const Text(
+            '進階',
+            style: TextStyle(fontWeight: FontWeight.w900),
+          ),
+          subtitle: const Text(
+            '連線設定、Demo 模式、資料來源',
+            style: TextStyle(
+              color: Color(0xFF78909C),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          children: [
+            _MoreActionRow(
+              icon: AppIcons.router,
+              title: '手動區網 IP',
+              detail: mission.robotIp.isEmpty ? '未設定' : mission.robotIp,
+              onTap: () =>
+                  _showAppSheet(context, const _ConnectionSettingsSheet()),
+            ),
+            const SizedBox(height: 4),
+            const _DemoModeTile(),
+            const SizedBox(height: 8),
+            _InfoRow(
+              icon: mission.rosConnected
+                  ? AppIcons.circleDot
+                  : AppIcons.wifiOff,
+              title: '資料來源',
+              detail: mission.mockDataEnabled
+                  ? 'Demo（與真機資料隔離）'
+                  : mission.rosConnected
+                  ? 'ROS 已連線 · ${mission.robotOnline ? '機器人在線' : 'heartbeat 不新鮮'}'
+                  : '等待 ROS 真實資料',
+            ),
+            _InfoRow(
+              icon: AppIcons.shieldCheck,
+              title: '安全狀態',
+              detail: mission.mockDataEnabled
+                  ? 'Demo 不代表真機安全'
+                  : '尚未提供安全狀態 topic',
             ),
           ],
         ),
@@ -1175,9 +1022,7 @@ class _MoreActionRow extends StatelessWidget {
 }
 
 class MissionMapScreen extends StatefulWidget {
-  const MissionMapScreen({super.key, required this.onManual});
-
-  final VoidCallback onManual;
+  const MissionMapScreen({super.key});
 
   @override
   State<MissionMapScreen> createState() => _MissionMapScreenState();
@@ -1393,9 +1238,6 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                 onSites: () => _showAppSheet(context, const SiteLibrarySheet()),
                 onLayers: () =>
                     _showAppSheet(context, const _LayerToggleSheet()),
-                onSettings: () =>
-                    _showAppSheet(context, const _SettingsQuickSheet()),
-                onManual: widget.onManual,
               ),
             ),
             if (mission.drawMode)
@@ -1617,15 +1459,11 @@ class _MapActionRail extends StatelessWidget {
     required this.onAdd,
     required this.onSites,
     required this.onLayers,
-    required this.onSettings,
-    required this.onManual,
   });
 
   final VoidCallback onAdd;
   final VoidCallback onSites;
   final VoidCallback onLayers;
-  final VoidCallback onSettings;
-  final VoidCallback onManual;
 
   @override
   Widget build(BuildContext context) {
@@ -1645,23 +1483,7 @@ class _MapActionRail extends StatelessWidget {
           onTap: onSites,
         ),
         const SizedBox(height: 10),
-        _RoundIconButton(
-          icon: AppIcons.layers,
-          tooltip: '圖層',
-          onTap: onLayers,
-        ),
-        const SizedBox(height: 10),
-        _RoundIconButton(
-          icon: AppIcons.settings,
-          tooltip: '設定',
-          onTap: onSettings,
-        ),
-        const SizedBox(height: 10),
-        _RoundIconButton(
-          icon: AppIcons.gamepad2,
-          tooltip: '手動控制',
-          onTap: onManual,
-        ),
+        _RoundIconButton(icon: AppIcons.layers, tooltip: '圖層', onTap: onLayers),
       ],
     );
   }
@@ -2036,14 +1858,61 @@ class _LayerSwitch extends StatelessWidget {
   }
 }
 
-class _SettingsQuickSheet extends StatefulWidget {
-  const _SettingsQuickSheet();
-
-  @override
-  State<_SettingsQuickSheet> createState() => _SettingsQuickSheetState();
+/// True while changing the connection or data source would disturb a live
+/// operation (mission, recording, manual drive, pending save).
+bool _connectionSettingsLocked(MissionMockProvider mission) {
+  return mission.connectionSettingsPending ||
+      mission.planningMutationPending ||
+      mission.navCommandPending ||
+      mission.cancelPending ||
+      mission.navStatus == NavMockStatus.executing ||
+      mission.navStatus == NavMockStatus.paused ||
+      mission.recordingType != null ||
+      mission.recordCommandPending ||
+      mission.manualControlActive ||
+      mission.hasPendingRecordSave;
 }
 
-class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
+class _DemoModeTile extends StatelessWidget {
+  const _DemoModeTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final mission = context.watch<MissionMockProvider>();
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      title: const Text(
+        'Demo 模式',
+        style: TextStyle(fontWeight: FontWeight.w900),
+      ),
+      subtitle: Text(
+        mission.mockDataEnabled
+            ? '已明確隔離為 demo，不會送出真機任務'
+            : '關閉 demo，畫面只顯示 ROS 真實資料',
+        style: const TextStyle(
+          color: Color(0xFF78909C),
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      value: mission.mockDataEnabled,
+      onChanged: _connectionSettingsLocked(mission)
+          ? null
+          : (value) {
+              unawaited(mission.setMockDataEnabled(value));
+            },
+    );
+  }
+}
+
+class _ConnectionSettingsSheet extends StatefulWidget {
+  const _ConnectionSettingsSheet();
+
+  @override
+  State<_ConnectionSettingsSheet> createState() =>
+      _ConnectionSettingsSheetState();
+}
+
+class _ConnectionSettingsSheetState extends State<_ConnectionSettingsSheet> {
   final _formKey = GlobalKey<FormState>();
   final _ipController = TextEditingController();
   bool _initialized = false;
@@ -2071,17 +1940,7 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
   @override
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
-    final settingsLocked =
-        mission.connectionSettingsPending ||
-        mission.planningMutationPending ||
-        mission.navCommandPending ||
-        mission.cancelPending ||
-        mission.navStatus == NavMockStatus.executing ||
-        mission.navStatus == NavMockStatus.paused ||
-        mission.recordingType != null ||
-        mission.recordCommandPending ||
-        mission.manualControlActive ||
-        mission.hasPendingRecordSave;
+    final settingsLocked = _connectionSettingsLocked(mission);
 
     return SafeArea(
       child: Padding(
@@ -2093,8 +1952,17 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
             const _SheetHandle(),
             const SizedBox(height: 18),
             const Text(
-              '設定',
+              '手動區網 IP',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              '已配對的機器人請到「我的機器人」設定 LAN 位址；這裡僅供未配對的本機開發連線使用。',
+              style: TextStyle(
+                color: Color(0xFF78909C),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 14),
             Form(
@@ -2134,43 +2002,6 @@ class _SettingsQuickSheetState extends State<_SettingsQuickSheet> {
               icon: AppIcons.link,
               title: 'rosbridge',
               detail: mission.rosbridgeUrl,
-            ),
-            _InfoRow(
-              icon: AppIcons.database,
-              title: '資料來源',
-              detail: mission.mockDataEnabled
-                  ? 'Demo（與真機資料隔離）'
-                  : mission.rosConnected
-                  ? 'ROS 已連線 · ${mission.robotOnline ? '機器人在線' : 'heartbeat 不新鮮'}'
-                  : '等待 ROS 真實資料',
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text(
-                'Mock 資料',
-                style: TextStyle(fontWeight: FontWeight.w900),
-              ),
-              subtitle: Text(
-                mission.mockDataEnabled
-                    ? '已明確隔離為 demo，不會送出真機任務'
-                    : '關閉 demo，畫面只顯示 ROS 真實資料',
-                style: const TextStyle(
-                  color: Color(0xFF78909C),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              value: mission.mockDataEnabled,
-              onChanged: settingsLocked
-                  ? null
-                  : (value) {
-                      unawaited(mission.setMockDataEnabled(value));
-                    },
-            ),
-            _InfoRow(icon: AppIcons.map, title: '底圖模式', detail: '灰底任務地圖'),
-            _InfoRow(
-              icon: AppIcons.satellite,
-              title: '衛星圖',
-              detail: '等待 API 串接',
             ),
           ],
         ),

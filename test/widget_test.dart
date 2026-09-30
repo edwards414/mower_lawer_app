@@ -28,8 +28,11 @@ void main() {
     expect(find.text('首頁'), findsOneWidget);
     expect(find.text('地圖'), findsOneWidget);
     expect(find.text('手動控制'), findsOneWidget);
-    expect(find.text('排程'), findsOneWidget);
     expect(find.text('更多'), findsOneWidget);
+    // The schedule tab was placeholder data only; it must not come back
+    // until scheduling is real.
+    expect(find.text('排程'), findsNothing);
+    expect(find.text('尚未配對機器人'), findsOneWidget);
     expect(find.text('等待新鮮 GPS 位置'), findsWidgets);
 
     await tester.tap(find.byIcon(AppIcons.map));
@@ -39,6 +42,15 @@ void main() {
     expect(find.text('規劃'), findsOneWidget);
     expect(find.text('執行'), findsOneWidget);
     expect(find.text('日誌'), findsOneWidget);
+
+    await tester.tap(find.byIcon(AppIcons.ellipsis));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // Layers live on the map only; connection tools are folded under 進階.
+    expect(find.text('我的機器人'), findsOneWidget);
+    expect(find.text('進階'), findsOneWidget);
+    expect(find.text('地圖圖層'), findsNothing);
+    expect(find.text('連線設定（進階）'), findsNothing);
 
     await tester.tap(find.text('手動控制').last);
     await tester.pump(const Duration(milliseconds: 100));
