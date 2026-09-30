@@ -33,6 +33,17 @@ void main() {
     // until scheduling is real.
     expect(find.text('排程'), findsNothing);
     expect(find.text('尚未配對機器人'), findsOneWidget);
+
+    // The robot name in the header opens 我的機器人.
+    await tester.tap(find.text('尚未配對機器人'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('還沒有配對的機器人'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pump();
+    // The default Android page transition is longer than 400 ms; wait it out
+    // so the popped route stops covering the bottom navigation.
+    await tester.pump(const Duration(seconds: 1));
     expect(find.text('等待新鮮 GPS 位置'), findsWidgets);
 
     await tester.tap(find.byIcon(AppIcons.map));
@@ -51,6 +62,16 @@ void main() {
     expect(find.text('進階'), findsOneWidget);
     expect(find.text('地圖圖層'), findsNothing);
     expect(find.text('連線設定（進階）'), findsNothing);
+
+    // Unpaired: the manual-IP row is honest about having no value.
+    // The section sits below the fold of the 800x600 test surface.
+    await tester.ensureVisible(find.text('進階'));
+    await tester.pump();
+    await tester.tap(find.text('進階'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('手動區網 IP'), findsOneWidget);
+    expect(find.text('未設定'), findsOneWidget);
+    expect(find.text('Demo 模式'), findsOneWidget);
 
     await tester.tap(find.text('手動控制').last);
     await tester.pump(const Duration(milliseconds: 100));

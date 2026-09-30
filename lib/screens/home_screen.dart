@@ -242,32 +242,36 @@ class _DashboardHeader extends StatelessWidget {
             fontWeight: FontWeight.w900,
           ),
         ),
-        const SizedBox(height: 4),
-        InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => Navigator.of(
-            context,
-          ).push(MaterialPageRoute(builder: (_) => const RobotsScreen())),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Flexible(
-                  child: Text(
-                    robotName ?? '尚未配對機器人',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFF50605A),
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
+        // Ink paints on the nearest Material, which sits under the page's opaque
+        // ColoredBox; a transparent one here keeps the tap feedback visible.
+        Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const RobotsScreen())),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      robotName ?? '尚未配對機器人',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF50605A),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 4),
-                const Icon(AppIcons.chevronDown, size: 20),
-              ],
+                  const SizedBox(width: 4),
+                  const Icon(AppIcons.chevronDown, size: 20),
+                ],
+              ),
             ),
           ),
         ),
@@ -910,6 +914,9 @@ class _AdvancedSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // With a paired robot the rosbridge host is that robot's relay/LAN address
+    // (managed under 我的機器人), not something typed here.
+    final paired = context.select<RobotRegistry, bool>((r) => r.active != null);
     // ListTile-based children paint ink on the nearest Material; the card is a
     // plain DecoratedBox, so give them a transparent one to draw on.
     return Material(
@@ -937,7 +944,11 @@ class _AdvancedSection extends StatelessWidget {
             _MoreActionRow(
               icon: AppIcons.router,
               title: '手動區網 IP',
-              detail: mission.robotIp.isEmpty ? '未設定' : mission.robotIp,
+              detail: paired
+                  ? '已配對機器人由「我的機器人」管理'
+                  : mission.robotIp.isEmpty
+                  ? '未設定'
+                  : mission.robotIp,
               onTap: () =>
                   _showAppSheet(context, const _ConnectionSettingsSheet()),
             ),
