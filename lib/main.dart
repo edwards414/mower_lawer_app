@@ -12,6 +12,7 @@ import 'services/rosbridge_service.dart';
 import 'services/ros_service.dart';
 import 'services/weather_service.dart';
 import 'widgets/iphone_12_template.dart';
+import 'widgets/relay_lifecycle_gate.dart';
 import 'widgets/retry_rosbridge_on_resume.dart';
 
 void main() {
@@ -84,8 +85,26 @@ class MowerApp extends StatelessWidget {
         title: '割草任務控制台',
         debugShowCheckedModeBanner: false,
         builder: (context, child) {
+          // Back in the foreground: retry the robot at once (covers LAN and
+          // relay); the gate also closes the billed relay session while hidden.
           return RetryRosbridgeOnResume(
-            child: IPhone12Template(child: child ?? const SizedBox.shrink()),
+            child: RelayLifecycleGate(
+              rosbridge: context.read<RosbridgeService>(),
+              canSuspend: () {
+                final mission = context.read<MissionMockProvider>();
+                return !mission.navCommandPending &&
+                    !mission.cancelRequestInFlight &&
+                    !mission.cancelPending &&
+                    !mission.recordCommandPending;
+              },
+              beforeSuspend: () {
+                final mission = context.read<MissionMockProvider>();
+                if (mission.manualControlActive) {
+                  mission.stopManualControl();
+                }
+              },
+              child: IPhone12Template(child: child ?? const SizedBox.shrink()),
+            ),
           );
         },
         theme: ThemeData(

@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:mower_stdio/models/mission_mock.dart';
 import 'package:mower_stdio/providers/mission_mock_provider.dart';
 import 'package:mower_stdio/services/rosbridge_service.dart';
+import 'package:mower_stdio/widgets/add_object_sheet.dart';
+import 'package:mower_stdio/widgets/map_record_bar.dart';
 
 void main() {
   setUp(() {
@@ -178,6 +182,200 @@ void main() {
 
     provider.dispose();
     await ros.close();
+  });
+
+  test('startRecording says why it did not start', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+
+    // Robot not connected yet: nothing is sent, the reason is returned.
+    final offline = await provider.startRecording(RecordObjectType.zone);
+    expect(offline, contains('無法開始記錄'));
+    expect(ros.callCount['/record_zone_start'], isNull);
+    expect(provider.recordingType, isNull);
+
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+
+    // The robot refuses: recording UI stays off and the caller is told.
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: false, message: 'busy');
+    expect(
+      await provider.startRecording(RecordObjectType.zone),
+      '機器人沒有接受開始記錄，詳見日誌',
+    );
+    expect(provider.recordingType, isNull);
+
+    // Accepted: null means started; a second start explains it is running.
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+    expect(provider.recordingType, RecordObjectType.zone);
+    expect(
+      await provider.startRecording(RecordObjectType.risk),
+      contains('請先儲存或取消'),
+    );
+    expect(ros.callCount['/risk_zone_start'], isNull);
+
+    // A stopped-but-unsaved recording blocks the next one with its reason.
+    ros.handlers['/record_zone_end'] = () =>
+        _response('/record_zone_end', success: true);
+    ros.handlers['/save_zone_list'] = () =>
+        _response('/save_zone_list', success: false, message: 'disk');
+    expect(await provider.stopRecording(save: true), isFalse);
+    expect(provider.hasPendingRecordSave, isTrue);
+    expect(
+      await provider.startRecording(RecordObjectType.channel),
+      contains('尚未持久化'),
+    );
+    expect(ros.callCount['/channel_record_start'], isNull);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test('recording and hand-drawing exclude each other', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+
+    // Drawing first: recording is refused with a reason and nothing is sent.
+    expect(provider.startDrawRisk(), isNull);
+    expect(provider.drawMode, isTrue);
+    expect(
+      await provider.startRecording(RecordObjectType.zone),
+      contains('繪製'),
+    );
+    expect(ros.callCount['/record_zone_start'], isNull);
+    provider.cancelDraw();
+
+    // Recording first: drawing is refused and draw mode never turns on.
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+    expect(provider.startDrawRisk(), isNotNull);
+    expect(provider.drawMode, isFalse);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  testWidgets('live: add-object sheet hands off once the robot accepts', (
+    tester,
+  ) async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await tester.runAsync(_flushEvents);
+    var handedOff = 0;
+    await tester.pumpWidget(
+      _sheetHost(provider, onRecordingStarted: () => handedOff++),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    // Fresh robot state right before the tap: readiness gates are 200 ms wide.
+    _emitLivePrerequisites(ros);
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    await tester.tap(find.text('工作區'));
+    await tester.pumpAndSettle();
+
+    expect(provider.recordingType, RecordObjectType.zone);
+    expect(handedOff, 1);
+    expect(find.text('新增地圖物件'), findsNothing);
+
+    await _endWidgetTest(tester, provider, ros);
+  });
+
+  testWidgets('live: dismissing the sheet mid-request never pops the page', (
+    tester,
+  ) async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await tester.runAsync(_flushEvents);
+    var handedOff = 0;
+    await tester.pumpWidget(
+      _sheetHost(provider, onRecordingStarted: () => handedOff++),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    _emitLivePrerequisites(ros);
+    final response = Completer<RosbridgeServiceResponse>();
+    ros.handlers['/record_zone_start'] = () => response.future;
+    await tester.tap(find.text('工作區'));
+    await tester.pump();
+    expect(provider.recordCommandPending, isTrue);
+
+    // Dismiss via the barrier; the robot answers during the exit animation.
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pump(const Duration(milliseconds: 60));
+    response.complete(_response('/record_zone_start', success: true));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    // The page underneath is intact and the user was not yanked anywhere.
+    expect(find.text('open'), findsOneWidget);
+    expect(handedOff, 0);
+    // The recording did start and is now controllable from the map.
+    expect(provider.recordingType, RecordObjectType.zone);
+
+    await _endWidgetTest(tester, provider, ros);
+  });
+
+  testWidgets('live: failed save is reported as stopped-unsaved, not running', (
+    tester,
+  ) async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await tester.runAsync(_flushEvents);
+    _emitLivePrerequisites(ros);
+    // Let the provider's navigation-status poll answer before starting.
+    await tester.pump();
+    await tester.pump();
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<MissionMockProvider>.value(
+        value: provider,
+        child: MaterialApp(
+          home: Scaffold(body: MapRecordBar(onOpenManual: () {})),
+        ),
+      ),
+    );
+    expect(find.text('儲存'), findsOneWidget);
+
+    ros.handlers['/record_zone_end'] = () =>
+        _response('/record_zone_end', success: true);
+    ros.handlers['/save_zone_list'] = () =>
+        _response('/save_zone_list', success: false, message: 'disk');
+    await tester.tap(find.text('儲存'));
+    await tester.pump();
+    await tester.pump();
+
+    // The recorder stopped; only persisting failed. Say so, offer retry.
+    expect(provider.hasPendingRecordSave, isTrue);
+    expect(find.textContaining('記錄已停止，但儲存失敗'), findsOneWidget);
+    expect(find.textContaining('記錄仍在進行'), findsNothing);
+    expect(find.textContaining('已停止，但尚未儲存'), findsOneWidget);
+
+    // A failed retry is reported too (clear the first snackbar so the next
+    // one is not queued behind it).
+    tester
+        .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+        .clearSnackBars();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('重試'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.textContaining('重試儲存沒有成功'), findsOneWidget);
+
+    await _endWidgetTest(tester, provider, ros);
   });
 
   test('external navigation stops active manual velocity', () async {
@@ -1106,6 +1304,44 @@ RosbridgeServiceResponse _response(
     result: success,
     values: {'success': success, 'message': message},
   );
+}
+
+/// Host with a button that opens the real [AddObjectSheet] the way the map
+/// does (full-height modal sheet).
+Widget _sheetHost(
+  MissionMockProvider provider, {
+  required VoidCallback onRecordingStarted,
+}) {
+  return ChangeNotifierProvider<MissionMockProvider>.value(
+    value: provider,
+    child: MaterialApp(
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showModalBottomSheet<void>(
+              context: context,
+              isScrollControlled: true,
+              builder: (_) =>
+                  AddObjectSheet(onRecordingStarted: onRecordingStarted),
+            ),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// The provider owns a periodic timer; end it before the framework checks for
+/// pending timers.
+Future<void> _endWidgetTest(
+  WidgetTester tester,
+  MissionMockProvider provider,
+  _FakeRosbridgeService ros,
+) async {
+  await tester.pumpWidget(const SizedBox.shrink());
+  provider.dispose();
+  await tester.runAsync(ros.close);
 }
 
 Future<void> _flushEvents() async {

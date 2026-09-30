@@ -5,15 +5,72 @@ import 'package:provider/provider.dart';
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 
-class AddObjectSheet extends StatelessWidget {
-  const AddObjectSheet({super.key});
+class AddObjectSheet extends StatefulWidget {
+  const AddObjectSheet({super.key, this.onRecordingStarted});
+
+  /// Called once the robot has accepted a zone / risk / channel recording, so
+  /// the caller can take the user to where the robot is driven.
+  final VoidCallback? onRecordingStarted;
+
+  @override
+  State<AddObjectSheet> createState() => _AddObjectSheetState();
+}
+
+class _AddObjectSheetState extends State<AddObjectSheet> {
+  bool _starting = false;
+  String? _error;
+
+  Future<void> _startRecording(RecordObjectType type) async {
+    if (_starting) {
+      return;
+    }
+    final mission = context.read<MissionMockProvider>();
+    final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
+    setState(() {
+      _starting = true;
+      _error = null;
+    });
+    final error = await mission.startRecording(type);
+    // Dismissed while waiting: the user is already back on the map. `mounted`
+    // is still true during the sheet's exit animation, so ask the route: only
+    // pop (and hand off) while this sheet is still the top route, otherwise
+    // pop() would remove the page underneath. Recording, if it started, stays
+    // visible and controllable from the map.
+    if (!mounted || !(route?.isCurrent ?? false)) {
+      return;
+    }
+    if (error != null) {
+      setState(() {
+        _starting = false;
+        _error = error;
+      });
+      return;
+    }
+    navigator.pop();
+    // Demo recordings need no driving, so keep the user on the map there.
+    if (!mission.mockDataEnabled) {
+      widget.onRecordingStarted?.call();
+    }
+  }
+
+  void _startDraw() {
+    final mission = context.read<MissionMockProvider>();
+    final error = mission.startDrawRisk();
+    if (error != null) {
+      setState(() => _error = error);
+      return;
+    }
+    Navigator.of(context).pop();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final mission = context.read<MissionMockProvider>();
+    final idle = !_starting;
 
     return SafeArea(
-      child: Padding(
+      // Scrolls so the extra rows never overflow a landscape phone.
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -41,6 +98,56 @@ class AddObjectSheet extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 4),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '工作區、禁入區、通道：選擇後切到手動控制，開車沿邊界或路徑記錄。',
+                style: TextStyle(
+                  color: Color(0xFF78909C),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            // Status sits above the cards so it stays in view on a short
+            // (landscape) screen instead of falling below the fold.
+            if (_starting) ...[
+              const SizedBox(height: 12),
+              const LinearProgressIndicator(minHeight: 3),
+              const SizedBox(height: 6),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '正在通知機器人開始記錄…',
+                  style: TextStyle(
+                    color: Color(0xFF78909C),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(AppIcons.x, size: 16, color: Color(0xFFC62828)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(
+                        color: Color(0xFFC62828),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [
@@ -49,10 +156,9 @@ class AddObjectSheet extends StatelessWidget {
                     icon: AppIcons.squareDashed,
                     label: '工作區',
                     color: const Color(0xFF35B861),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      mission.startRecording(RecordObjectType.zone);
-                    },
+                    onTap: idle
+                        ? () => _startRecording(RecordObjectType.zone)
+                        : null,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -61,10 +167,9 @@ class AddObjectSheet extends StatelessWidget {
                     icon: AppIcons.ban,
                     label: '禁入區',
                     color: const Color(0xFFE55353),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      mission.startRecording(RecordObjectType.risk);
-                    },
+                    onTap: idle
+                        ? () => _startRecording(RecordObjectType.risk)
+                        : null,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -73,10 +178,9 @@ class AddObjectSheet extends StatelessWidget {
                     icon: AppIcons.spline,
                     label: '通道',
                     color: const Color(0xFF25AFC6),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      mission.startRecording(RecordObjectType.channel);
-                    },
+                    onTap: idle
+                        ? () => _startRecording(RecordObjectType.channel)
+                        : null,
                   ),
                 ),
               ],
@@ -86,10 +190,7 @@ class AddObjectSheet extends StatelessWidget {
               icon: AppIcons.mapPinPen,
               label: '地圖手繪危險區（點頂點）',
               color: const Color(0xFFE5852F),
-              onTap: () {
-                Navigator.of(context).pop();
-                mission.startDrawRisk();
-              },
+              onTap: idle ? _startDraw : null,
             ),
           ],
         ),
@@ -109,50 +210,53 @@ class _AddObjectCard extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(18),
-      onTap: onTap,
-      child: Container(
-        height: 112,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFE1E7EA)),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x12000000),
-              blurRadius: 12,
-              offset: Offset(0, 5),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(14),
+    return Opacity(
+      opacity: onTap == null ? 0.5 : 1,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          height: 112,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFE1E7EA)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x12000000),
+                blurRadius: 12,
+                offset: Offset(0, 5),
               ),
-              child: Icon(icon, color: color, size: 28),
-            ),
-            const SizedBox(height: 10),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                label,
-                maxLines: 1,
-                style: const TextStyle(fontWeight: FontWeight.w900),
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: color, size: 28),
               ),
-            ),
-          ],
+              const SizedBox(height: 10),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

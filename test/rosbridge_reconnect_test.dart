@@ -21,6 +21,45 @@ const _url = 'ws://robot.test:9090';
 const _secret = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 void main() {
+  test('suspendRelay drops the pending retry; resume retries at once with '
+      'the backoff started over', () {
+    fakeAsync((async) {
+      final robot = _FakeRobot();
+      final backoff = ReconnectBackoff(jitter: 0);
+      final service = RosbridgeService(
+        url: _url,
+        connector: robot.connect,
+        backoff: backoff,
+      );
+      service.configureEndpoint(url: 'wss://relay.test/r', framed: true);
+      async.flushMicrotasks();
+      expect(robot.attempts, 1);
+
+      // Let the relay fail a few times so the next retry is far off.
+      for (var i = 0; i < 4; i++) {
+        robot.last.refuse();
+        async.flushMicrotasks();
+        if (i < 3) async.elapse(const Duration(seconds: 30));
+      }
+      expect(backoff.failures, greaterThan(1));
+      final before = robot.attempts;
+      expect(async.pendingTimers, hasLength(1));
+
+      // Backgrounded: no retry may fire while suspended.
+      expect(service.suspendRelay(), isTrue);
+      expect(async.pendingTimers, isEmpty);
+      async.elapse(const Duration(minutes: 5));
+      expect(robot.attempts, before);
+
+      // Foreground again: connects immediately, not after a long backoff.
+      service.resume();
+      expect(robot.attempts, before + 1);
+      expect(backoff.failures, 0);
+
+      service.dispose();
+    });
+  });
+
   test('retries wait 1, 2, 4, 8, 16 s, then stay at 30 s', () {
     fakeAsync((async) {
       final robot = _FakeRobot();

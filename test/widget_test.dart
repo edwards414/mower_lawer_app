@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mower_stdio/main.dart';
 import 'package:mower_stdio/models/weather_snapshot.dart';
 import 'package:mower_stdio/services/weather_service.dart';
+import 'package:mower_stdio/widgets/execution_control_sheet.dart';
 
 void main() {
   testWidgets('shows self check then dashboard shell and map tab', (
@@ -28,17 +29,71 @@ void main() {
     expect(find.text('首頁'), findsOneWidget);
     expect(find.text('地圖'), findsOneWidget);
     expect(find.text('手動控制'), findsOneWidget);
-    expect(find.text('排程'), findsOneWidget);
     expect(find.text('更多'), findsOneWidget);
+    // The schedule tab was placeholder data only; it must not come back
+    // until scheduling is real.
+    expect(find.text('排程'), findsNothing);
+    expect(find.text('尚未配對機器人'), findsOneWidget);
+
+    // The robot name in the header opens 我的機器人.
+    await tester.tap(find.text('尚未配對機器人'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('還沒有配對的機器人'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pump();
+    // The default Android page transition is longer than 400 ms; wait it out
+    // so the popped route stops covering the bottom navigation.
+    await tester.pump(const Duration(seconds: 1));
     expect(find.text('等待新鮮 GPS 位置'), findsWidgets);
 
-    await tester.tap(find.byIcon(AppIcons.map));
+    // One main card: status, battery, mission and the way into the map.
+    expect(find.text('前往地圖執行任務'), findsOneWidget);
+    expect(find.text('電量'), findsNothing);
+
+    // The main button opens the map on its run panel.
+    await tester.ensureVisible(find.text('前往地圖執行任務'));
+    await tester.tap(find.text('前往地圖執行任務'));
     await tester.pump(const Duration(milliseconds: 300));
+    // It lands on the run panel itself, not just any map panel.
+    expect(find.byType(ExecutionControlSheet), findsOneWidget);
+
+    // Even if the operator collapsed the panel earlier, the button reveals it.
+    await tester.tap(find.byType(AnimatedRotation));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(ExecutionControlSheet), findsNothing);
+    await tester.tap(find.byIcon(AppIcons.house));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.ensureVisible(find.text('前往地圖執行任務'));
+    await tester.tap(find.text('前往地圖執行任務'));
+    await tester.pump();
+    // The panel animates open; wait for it to be tall enough for its content.
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(ExecutionControlSheet), findsOneWidget);
 
     expect(find.text('物件'), findsOneWidget);
     expect(find.text('規劃'), findsOneWidget);
     expect(find.text('執行'), findsOneWidget);
     expect(find.text('日誌'), findsOneWidget);
+
+    await tester.tap(find.byIcon(AppIcons.ellipsis));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // Layers live on the map only; connection tools are folded under 進階.
+    expect(find.text('我的機器人'), findsOneWidget);
+    expect(find.text('進階'), findsOneWidget);
+    expect(find.text('地圖圖層'), findsNothing);
+    expect(find.text('連線設定（進階）'), findsNothing);
+
+    // Unpaired: the manual-IP row is honest about having no value.
+    // The section sits below the fold of the 800x600 test surface.
+    await tester.ensureVisible(find.text('進階'));
+    await tester.pump();
+    await tester.tap(find.text('進階'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('手動區網 IP'), findsOneWidget);
+    expect(find.text('未設定'), findsOneWidget);
+    expect(find.text('Demo 模式'), findsOneWidget);
 
     await tester.tap(find.text('手動控制').last);
     await tester.pump(const Duration(milliseconds: 100));

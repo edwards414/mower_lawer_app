@@ -6,6 +6,7 @@ import '../utils/app_icons.dart';
 
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
+import 'map_record_bar.dart';
 import 'mission_map_canvas.dart';
 import 'webrtc_camera_view.dart';
 
@@ -74,6 +75,8 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
     final size = media.size;
     final joystickSize = size.shortestSide < 360 ? 100.0 : 124.0;
     final bottom = media.padding.bottom + 18.0;
+    // Snackbars float above the joysticks instead of covering them.
+    final snackClearance = bottom + joystickSize + 12;
     final topInset = media.padding.top + 12;
 
     final cameraStage = WebrtcCameraView(
@@ -113,14 +116,43 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
 
     final recordHud = _RecordHud(
       mission: mission,
-      onSave: () => mission.stopRecording(save: true),
-      onCancel: () => mission.stopRecording(save: false),
+      onSave: () => unawaited(
+        finishRecordingWithFeedback(
+          context,
+          mission,
+          save: true,
+          clearBottom: snackClearance,
+        ),
+      ),
+      onCancel: () => unawaited(
+        finishRecordingWithFeedback(
+          context,
+          mission,
+          save: false,
+          clearBottom: snackClearance,
+        ),
+      ),
     );
     final typeBar = _RecordTypeBar(
       enabled: canDrive && !mission.recordCommandPending,
-      onPick: mission.startRecording,
+      onPick: (type) async {
+        final messenger = ScaffoldMessenger.of(context);
+        final error = await mission.startRecording(type);
+        if (error != null) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(error),
+              behavior: SnackBarBehavior.floating,
+              margin: EdgeInsets.fromLTRB(16, 0, 16, snackClearance),
+            ),
+          );
+        }
+      },
     );
-    final pendingSaveHud = _PendingRecordSaveHud(mission: mission);
+    final pendingSaveHud = _PendingRecordSaveHud(
+      mission: mission,
+      clearBottom: snackClearance,
+    );
 
     return Stack(
       children: [
@@ -422,9 +454,13 @@ class _RecordChip extends StatelessWidget {
 }
 
 class _PendingRecordSaveHud extends StatelessWidget {
-  const _PendingRecordSaveHud({required this.mission});
+  const _PendingRecordSaveHud({
+    required this.mission,
+    required this.clearBottom,
+  });
 
   final MissionMockProvider mission;
+  final double clearBottom;
 
   @override
   Widget build(BuildContext context) {
@@ -456,7 +492,13 @@ class _PendingRecordSaveHud extends StatelessWidget {
               color: Colors.white,
               onTap: mission.recordCommandPending
                   ? null
-                  : () => unawaited(mission.retryPendingRecordSave()),
+                  : () => unawaited(
+                      retrySaveWithFeedback(
+                        context,
+                        mission,
+                        clearBottom: clearBottom,
+                      ),
+                    ),
             ),
           ],
         ),
