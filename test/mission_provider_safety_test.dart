@@ -137,6 +137,114 @@ void main() {
   );
 
   test(
+    'zone sequence needs every zone planned and a channel between each pair',
+    () async {
+      final ros = _FakeRosbridgeService();
+      final provider = MissionMockProvider(rosbridge: ros);
+      await _flushEvents();
+      _emitLivePrerequisites(ros);
+      _emitTwoZones(ros, channel: false);
+      await _flushEvents();
+
+      expect(provider.sequenceZoneIds, [7, 8]);
+      expect(provider.canStartZoneSequence, isFalse);
+      expect(provider.zoneSequenceBlockReason, contains('通道'));
+
+      _emitTwoZones(ros);
+      await _flushEvents();
+      expect(provider.zoneSequenceBlockReason, isNull);
+      expect(provider.canStartZoneSequence, isTrue);
+
+      ros.emit('/adapter/zone_summaries', {
+        'data': jsonEncode([
+          {'zoneId': 7, 'hasCoveragePath': true},
+          {'zoneId': 8, 'hasCoveragePath': false},
+        ]),
+      });
+      expect(provider.canStartZoneSequence, isFalse);
+      expect(provider.zoneSequenceBlockReason, contains('Zone 8'));
+
+      provider.dispose();
+      await ros.close();
+    },
+  );
+
+  test(
+    'zone sequence stays locked between legs until its status ends',
+    () async {
+      final ros = _FakeRosbridgeService();
+      final provider = MissionMockProvider(rosbridge: ros);
+      await _flushEvents();
+      _emitLivePrerequisites(ros);
+      _emitTwoZones(ros);
+      await _flushEvents();
+
+      provider.startZoneSequence();
+      await _flushEvents();
+      final start = ros.calls.singleWhere(
+        (c) => c.service == '/run_zone_sequence',
+      );
+      expect(start.args['zone_ids'], [7, 8]);
+      expect(start.args['channel_proximity_m'], 1.5);
+      expect(provider.navStatus, NavMockStatus.executing);
+
+      // The service answers before the first leg is dispatched: an idle
+      // report in between must not unlock the controls.
+      ros.handlers['/check_nav_status'] = () => _navState('idle');
+      await _triggerNavPoll(ros);
+      expect(provider.navStatus, NavMockStatus.executing);
+      expect(provider.canDriveManually, isFalse);
+
+      // Zone 7 finished: the navigation server reports it completed while the
+      // sequence is about to drive the channel.
+      ros.emit('/zone_sequence_status', _sequenceStatus('running', 0, 'zone'));
+      ros.handlers['/check_nav_status'] = () => _navState('completed');
+      await _triggerNavPoll(ros);
+      expect(provider.navStatus, NavMockStatus.executing);
+      expect(provider.canDriveManually, isFalse);
+      expect(provider.canStartMission, isFalse);
+      ros.emit(
+        '/zone_sequence_status',
+        _sequenceStatus('running', 0, 'channel'),
+      );
+      await _triggerNavPoll(ros);
+      expect(provider.navStatus, NavMockStatus.executing);
+
+      ros.emit('/zone_sequence_status', _sequenceStatus('completed', 1, ''));
+      await _flushEvents();
+      expect(provider.navStatus, NavMockStatus.idle);
+      expect(provider.coverageProgress, 1.0);
+      expect(provider.zoneSequenceRunning, isFalse);
+
+      provider.dispose();
+      await ros.close();
+    },
+  );
+
+  test('stopping a zone sequence stops it before the current goal', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    _emitTwoZones(ros);
+    await _flushEvents();
+    provider.startZoneSequence();
+    await _flushEvents();
+    ros.emit('/zone_sequence_status', _sequenceStatus('running', 0, 'zone'));
+
+    provider.cancelExecution();
+    await _flushEvents();
+    final order = ros.calls
+        .map((c) => c.service)
+        .where((s) => s == '/stop_zone_sequence' || s == '/cancel_nav2')
+        .toList();
+    expect(order, ['/stop_zone_sequence', '/cancel_nav2']);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test(
     'mission command is single-flight and failed cancel stays active',
     () async {
       final ros = _FakeRosbridgeService();
@@ -1307,6 +1415,72 @@ Future<void> _triggerNavPoll(_FakeRosbridgeService ros) async {
   await _flushEvents();
 }
 
+/// Zones 7 (0..4 m) and 8 (10..14 m), both planned, and unless [channel] is
+/// false a channel from inside zone 7 to inside zone 8.
+void _emitTwoZones(_FakeRosbridgeService ros, {bool channel = true}) {
+  List<Map<String, double>> square(double x0) => [
+    {'x': x0, 'y': 0.0},
+    {'x': x0 + 4, 'y': 0.0},
+    {'x': x0 + 4, 'y': 4.0},
+    {'x': x0, 'y': 4.0},
+  ];
+  ros.emit('/adapter/marker_layers/zones', {
+    'data': jsonEncode({
+      'name': 'zones',
+      'markers': [
+        {'id': 7, 'points': square(0)},
+        {'id': 8, 'points': square(10)},
+      ],
+    }),
+  });
+  ros.emit('/adapter/zone_summaries', {
+    'data': jsonEncode([
+      {'zoneId': 7, 'hasCoveragePath': true},
+      {'zoneId': 8, 'hasCoveragePath': true},
+    ]),
+  });
+  ros.emit('/adapter/marker_layers/channels', {
+    'data': jsonEncode({
+      'name': 'channels',
+      'markers': [
+        if (channel)
+          {
+            'id': 1,
+            'points': [
+              {'x': 3.5, 'y': 2.0},
+              {'x': 7.0, 'y': 2.0},
+              {'x': 10.5, 'y': 2.0},
+            ],
+          },
+      ],
+    }),
+  });
+}
+
+Map<String, dynamic> _sequenceStatus(String state, int index, String leg) => {
+  'data': jsonEncode({
+    'state': state,
+    'zone_ids': [7, 8],
+    'index': index,
+    'leg': leg,
+    'zone_id': leg.isEmpty ? null : [7, 8][index],
+    'next_zone_id': leg == 'channel' ? 8 : null,
+    'message': '$state $leg',
+  }),
+};
+
+RosbridgeServiceResponse _navState(String state) => _response(
+  '/check_nav_status',
+  success: true,
+  message: jsonEncode({
+    'state': state,
+    'task': null,
+    'message': 'Navigation $state',
+    'ready': true,
+    'block_reason': null,
+  }),
+);
+
 void _emitLivePrerequisites(
   _FakeRosbridgeService ros, {
   bool includeManualClock = true,
@@ -1446,6 +1620,7 @@ class _FakeRosbridgeService extends RosbridgeService {
   final Map<String, FutureOr<RosbridgeServiceResponse> Function()> handlers =
       {};
   final Map<String, int> callCount = {};
+  final List<({String service, Map<String, dynamic> args})> calls = [];
   final List<({String topic, Map<String, dynamic> message})> published = [];
 
   @override
@@ -1488,6 +1663,7 @@ class _FakeRosbridgeService extends RosbridgeService {
     Duration timeout = const Duration(seconds: 12),
   }) async {
     callCount[service] = (callCount[service] ?? 0) + 1;
+    calls.add((service: service, args: args));
     final handler = handlers[service];
     if (handler != null) return handler();
     if (service == '/check_nav_status') {
