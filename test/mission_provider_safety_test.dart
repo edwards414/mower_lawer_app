@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:mower_stdio/models/image_mission_draft.dart';
 import 'package:mower_stdio/models/mission_mock.dart';
 import 'package:mower_stdio/providers/mission_mock_provider.dart';
 import 'package:mower_stdio/services/rosbridge_service.dart';
@@ -43,6 +45,91 @@ void main() {
         ]),
       });
       expect(provider.canStartMission, isFalse);
+
+      provider.dispose();
+      await ros.close();
+    },
+  );
+
+  test(
+    'image mission can start its own zone, which the zone layer never has',
+    () async {
+      final ros = _FakeRosbridgeService();
+      final provider = MissionMockProvider(rosbridge: ros);
+      await _flushEvents();
+      _emitLivePrerequisites(ros);
+      await _flushEvents();
+      expect(provider.selectedZoneId, 7);
+
+      ros.handlers['/boustrophedon_coverage/set_parameters'] = () =>
+          const RosbridgeServiceResponse(
+            service: '/boustrophedon_coverage/set_parameters',
+            result: true,
+            values: {
+              'results': [
+                {'successful': true, 'reason': ''},
+              ],
+            },
+          );
+      provider.imageMissionDraft = ImageMissionDraft(
+        sourceName: 'star.png',
+        width: 2,
+        height: 2,
+        grayscale: Uint8List(4),
+        freeMask: Uint8List.fromList([255, 255, 255, 255]),
+        threshold: 128,
+        startPose: const ImageMissionStartPose(
+          point: MapPoint(0, 0),
+          headingRad: 0,
+        ),
+        placement: const ImageMissionPlacement(mapAnchor: MapPoint(2, 2)),
+      );
+      expect(await provider.submitImageMissionDraft(), isTrue);
+      expect(ros.callCount['/import_image_mask'], 1);
+      expect(ros.callCount['/generate_coverage_path'], 1);
+      expect(provider.selectedZoneId, ImageMissionDraft.defaultZoneId);
+
+      // The robot plans the image zone: map_manage reports it in the zone
+      // summaries, while the zone layer still holds only the recorded zone.
+      ros.emit('/adapter/zone_summaries', {
+        'data': jsonEncode([
+          {'zoneId': 7, 'hasCoveragePath': false},
+          {'zoneId': ImageMissionDraft.defaultZoneId, 'hasCoveragePath': true},
+        ]),
+      });
+      ros.emit('/adapter/marker_layers/coverage_path', {
+        'data': jsonEncode({
+          'name': 'coverage_path',
+          'markers': [
+            {
+              'type': 'line_strip',
+              'points': [
+                {'x': 2.0, 'y': 2.0},
+                {'x': 2.1, 'y': 2.0},
+              ],
+            },
+          ],
+        }),
+      });
+      ros.emit('/adapter/marker_layers/zones', {
+        'data': jsonEncode({
+          'name': 'zones',
+          'markers': [
+            {
+              'id': 7,
+              'points': [
+                {'x': 0.0, 'y': 0.0},
+                {'x': 4.0, 'y': 0.0},
+                {'x': 4.0, 'y': 4.0},
+              ],
+            },
+          ],
+        }),
+      });
+      await _flushEvents();
+
+      expect(provider.selectedZoneId, ImageMissionDraft.defaultZoneId);
+      expect(provider.canStartMission, isTrue);
 
       provider.dispose();
       await ros.close();

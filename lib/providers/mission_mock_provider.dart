@@ -224,9 +224,15 @@ class MissionMockProvider extends ChangeNotifier {
               hasFreshRobotPose &&
               hasFreshGpsFix &&
               coverageReady &&
-              zones.any(
-                (zone) => zone.id == selectedZoneId && zone.hasCoveragePath,
-              )));
+              _selectedZoneHasCoveragePath));
+
+  /// The selected zone has a planned path. An image mission's zone (9001)
+  /// exists only in map_manage, so it shows up in the zone summaries but
+  /// never in the recorded-zone layer that [zones] is built from; without
+  /// the second clause 確認後執行 could never start one against a robot.
+  bool get _selectedZoneHasCoveragePath =>
+      zones.any((zone) => zone.id == selectedZoneId && zone.hasCoveragePath) ||
+      (_imageMissionActive && (_zoneCoverageById[selectedZoneId] ?? false));
   bool get navCommandPending => _navCommandPending;
   bool get cancelRequestInFlight => _cancelRequestInFlight;
   bool get cancelPending => _cancelPending;
@@ -3606,6 +3612,12 @@ class MissionMockProvider extends ChangeNotifier {
 
   void _ensureSelectedZone() {
     if (zones.isEmpty) {
+      return;
+    }
+    // An active image mission selects its own zone, which is never in the
+    // recorded-zone layer: a zone-layer update must not swap it back to a
+    // recorded zone (that left 確認後執行 disabled).
+    if (_imageMissionActive) {
       return;
     }
     if (!zones.any((zone) => zone.id == selectedZoneId)) {
