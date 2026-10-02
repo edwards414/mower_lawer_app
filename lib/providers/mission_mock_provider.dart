@@ -2362,8 +2362,64 @@ class MissionMockProvider extends ChangeNotifier {
     _invalidateCoverageReadiness();
     notifyListeners();
     unawaited(
-      _completePlanningMutation('執行規劃', () => _runRosPlanningStep(step)),
+      _completePlanningMutation(
+        '執行規劃',
+        () => step == 'coverage' && !_imageMissionActive
+            ? _rebuildMapsAndPlan()
+            : _runRosPlanningStep(step),
+      ),
     );
+  }
+
+  /// 生成覆蓋路徑: the maps first, so a zone, no-go area or channel recorded
+  /// since they were last built is planned too (nothing on the robot rebuilds
+  /// them after a recording). An image mission only re-plans: rebuilding the
+  /// free space would replace its zone.
+  Future<void> _rebuildMapsAndPlan() async {
+    if (await _runPlanningChain(
+      _mapRebuildSteps,
+      _connectionGeneration,
+      '規劃已中止：連線或導航狀態已改變',
+    )) {
+      await _runRosPlanningStep('coverage');
+    }
+  }
+
+  /// The robot's maps from its recorded objects, in dependency order: the
+  /// free space (which drops the channel map), the no-go areas, and the
+  /// channels when there are any (/create_chennal_map refuses none). Without
+  /// the channel map Nav2 cannot drive between two zones.
+  List<String> get _mapRebuildSteps => [
+    '/create_free_space',
+    '/create_risk_map',
+    if (channels.isNotEmpty) '/create_chennal_map',
+  ];
+
+  /// Calls [steps] in order and stops at the first failure, except the
+  /// channel map's: only a zone sequence's channel leg needs it.
+  Future<bool> _runPlanningChain(
+    List<String> steps,
+    int connectionGeneration,
+    String abortLog,
+  ) async {
+    for (final s in steps) {
+      if (!_planningChainCanContinue(connectionGeneration)) {
+        _addLog('ERROR', abortLog);
+        return false;
+      }
+      final r = await _rosbridge.callService(s);
+      if (!r.success) {
+        final reason = '$s ${r.message.isEmpty ? '失敗' : r.message}';
+        if (s == '/create_chennal_map') {
+          _addLog('WARN', '$reason；全部區域依序無法走這些通道');
+          continue;
+        }
+        _addLog('ERROR', reason);
+        return false;
+      }
+      _addLog('INFO', '$s 完成');
+    }
+    return true;
   }
 
   Future<void> _runRosPlanningStep(String step) async {
@@ -2533,25 +2589,12 @@ class MissionMockProvider extends ChangeNotifier {
     final connectionGeneration = _connectionGeneration;
     replanning = true;
     notifyListeners();
-    const steps = [
-      '/load_zone_list',
-      '/create_free_space',
-      '/create_risk_map',
-      '/generate_coverage_path',
-    ];
     try {
-      for (final s in steps) {
-        if (!_planningChainCanContinue(connectionGeneration)) {
-          _addLog('ERROR', '規劃鏈已中止：連線或導航狀態已改變');
-          break;
-        }
-        final r = await _rosbridge.callService(s);
-        if (!r.success) {
-          _addLog('ERROR', '$s ${r.message.isEmpty ? '失敗' : r.message}');
-          break;
-        }
-        _addLog('INFO', '$s 完成');
-      }
+      await _runPlanningChain(
+        ['/load_zone_list', ..._mapRebuildSteps, '/generate_coverage_path'],
+        connectionGeneration,
+        '規劃鏈已中止：連線或導航狀態已改變',
+      );
     } finally {
       replanning = false;
       notifyListeners();
@@ -2762,24 +2805,11 @@ class MissionMockProvider extends ChangeNotifier {
     if (mockDataEnabled || !rosConnected) {
       return;
     }
-    final connectionGeneration = _connectionGeneration;
-    const steps = [
-      '/create_free_space',
-      '/create_risk_map',
-      '/generate_coverage_path',
-    ];
-    for (final s in steps) {
-      if (!_planningChainCanContinue(connectionGeneration)) {
-        _addLog('ERROR', '場地規劃已中止：連線或導航狀態已改變');
-        break;
-      }
-      final r = await _rosbridge.callService(s);
-      if (!r.success) {
-        _addLog('ERROR', '$s ${r.message.isEmpty ? '失敗' : r.message}');
-        break;
-      }
-      _addLog('INFO', '$s 完成');
-    }
+    await _runPlanningChain(
+      [..._mapRebuildSteps, '/generate_coverage_path'],
+      _connectionGeneration,
+      '場地規劃已中止：連線或導航狀態已改變',
+    );
   }
 
   bool _pointInPolygon(MapPoint p, List<MapPoint> poly) {

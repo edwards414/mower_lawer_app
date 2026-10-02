@@ -221,6 +221,78 @@ void main() {
     },
   );
 
+  test(
+    'generating the path rebuilds the maps first, channels when there are any',
+    () async {
+      final ros = _FakeRosbridgeService();
+      final provider = MissionMockProvider(rosbridge: ros);
+      await _flushEvents();
+      _emitLivePrerequisites(ros);
+      _emitTwoZones(ros, channel: false);
+      await _flushEvents();
+      List<String> planningCalls() => ros.calls
+          .map((c) => c.service)
+          .where(
+            (s) => s.startsWith('/create_') || s == '/generate_coverage_path',
+          )
+          .toList();
+
+      provider.runPlanningStep('coverage');
+      await _flushEvents();
+      expect(planningCalls(), [
+        '/create_free_space',
+        '/create_risk_map',
+        '/generate_coverage_path',
+      ]);
+
+      ros.calls.clear();
+      _emitTwoZones(ros);
+      await _flushEvents();
+      provider.runPlanningStep('coverage');
+      await _flushEvents();
+      expect(planningCalls(), [
+        '/create_free_space',
+        '/create_risk_map',
+        '/create_chennal_map',
+        '/generate_coverage_path',
+      ]);
+
+      // An image mission only re-plans: a free-space rebuild would replace
+      // its zone.
+      ros.handlers['/boustrophedon_coverage/set_parameters'] = () =>
+          const RosbridgeServiceResponse(
+            service: '/boustrophedon_coverage/set_parameters',
+            result: true,
+            values: {
+              'results': [
+                {'successful': true, 'reason': ''},
+              ],
+            },
+          );
+      provider.imageMissionDraft = ImageMissionDraft(
+        sourceName: 'star.png',
+        width: 2,
+        height: 2,
+        grayscale: Uint8List(4),
+        freeMask: Uint8List.fromList([255, 255, 255, 255]),
+        threshold: 128,
+        startPose: const ImageMissionStartPose(
+          point: MapPoint(0, 0),
+          headingRad: 0,
+        ),
+        placement: const ImageMissionPlacement(mapAnchor: MapPoint(2, 2)),
+      );
+      expect(await provider.submitImageMissionDraft(), isTrue);
+      ros.calls.clear();
+      provider.runPlanningStep('coverage');
+      await _flushEvents();
+      expect(planningCalls(), ['/generate_coverage_path']);
+
+      provider.dispose();
+      await ros.close();
+    },
+  );
+
   test('stopping a zone sequence stops it before the current goal', () async {
     final ros = _FakeRosbridgeService();
     final provider = MissionMockProvider(rosbridge: ros);
