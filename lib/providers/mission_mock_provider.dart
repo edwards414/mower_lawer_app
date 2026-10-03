@@ -10,6 +10,7 @@ import '../models/geo_anchor.dart';
 import '../models/image_mission_draft.dart';
 import '../models/mission_mock.dart';
 import '../models/site_info.dart';
+import '../models/zone_sequence.dart';
 import '../services/image_mission_processor.dart';
 import '../services/rosbridge_service.dart';
 
@@ -94,6 +95,26 @@ class MissionMockProvider extends ChangeNotifier {
   GeoAnchor? mapGeoAnchor;
   NavMockStatus navStatus = NavMockStatus.idle;
   MissionLayerVisibility layers = const MissionLayerVisibility();
+
+  /// 執行 scope: false runs the selected zone, true every zone in order
+  /// (the robot's /run_zone_sequence, channel to channel).
+  bool runAllZones = false;
+
+  /// The robot's zone sequence, from the latched /zone_sequence_status.
+  ZoneSequenceStatus? zoneSequence;
+
+  /// A sequence was started from here and its status has not ended it yet:
+  /// a stop must stop the sequence too, not only the current goal.
+  bool _sequenceRequested = false;
+
+  /// When the navigation server first reported a finished leg while the
+  /// sequence still runs: the gap before its next leg.
+  DateTime? _sequenceGapSince;
+  static const _sequenceGapLimit = Duration(seconds: 20);
+
+  /// A channel end belongs to a zone within this distance (the robot's
+  /// /get_channel_route default).
+  static const _channelProximityM = 1.5;
 
   MapPoint robotPosition = const MapPoint(0, 0);
   double robotHeadingRad = 0.0;
@@ -209,6 +230,11 @@ class MissionMockProvider extends ChangeNotifier {
       !_recordCommandPending &&
       !_planningMutationPending;
   bool get canStartMission =>
+      _localStartReady &&
+      (mockDataEnabled || (_liveStartReady && _selectedZoneHasCoveragePath));
+
+  /// What every navigation start needs on this side.
+  bool get _localStartReady =>
       !_connectionSettingsPending &&
       !_planningMutationPending &&
       !_navOperationActive &&
@@ -216,17 +242,109 @@ class MissionMockProvider extends ChangeNotifier {
       !_recordCommandPending &&
       !hasPendingRecordSave &&
       !manualControlActive &&
-      zones.isNotEmpty &&
-      (mockDataEnabled ||
-          (canControlRobot &&
-              hasFreshTerminalNavStatus &&
-              _navigationAdmissionReady &&
-              hasFreshRobotPose &&
-              hasFreshGpsFix &&
-              coverageReady &&
-              zones.any(
-                (zone) => zone.id == selectedZoneId && zone.hasCoveragePath,
-              )));
+      zones.isNotEmpty;
+
+  /// What a live navigation start needs from the robot.
+  bool get _liveStartReady =>
+      canControlRobot &&
+      hasFreshTerminalNavStatus &&
+      _navigationAdmissionReady &&
+      hasFreshRobotPose &&
+      hasFreshGpsFix &&
+      coverageReady;
+
+  /// Every zone in id order: the order 全部區域依序 mows them in.
+  List<int> get sequenceZoneIds => [for (final zone in zones) zone.id]..sort();
+
+  bool get canStartZoneSequence => zoneSequenceBlockReason == null;
+
+  bool get zoneSequenceRunning => zoneSequence?.running ?? false;
+
+  /// Why every zone in order cannot start now; null when it can.
+  String? get zoneSequenceBlockReason {
+    final ids = sequenceZoneIds;
+    if (ids.length < 2) {
+      return '至少需要兩個工作區';
+    }
+    if (!mockDataEnabled) {
+      final unplanned = [
+        for (final zone in zones)
+          if (!zone.hasCoveragePath) zone.id,
+      ]..sort();
+      if (unplanned.isNotEmpty) {
+        return 'Zone ${unplanned.join('、')} 尚未生成覆蓋路徑';
+      }
+      for (var i = 0; i + 1 < ids.length; i++) {
+        if (!_channelConnects(ids[i], ids[i + 1])) {
+          return 'Zone ${ids[i]} 與 Zone ${ids[i + 1]} 之間沒有通道，請先錄製通道';
+        }
+      }
+    }
+    if (!_localStartReady || !(mockDataEnabled || _liveStartReady)) {
+      return '機器人尚未就緒';
+    }
+    return null;
+  }
+
+  /// A recorded channel joins the two zones: one end in or near each (the
+  /// robot's /get_channel_route test, either direction).
+  bool _channelConnects(int fromZoneId, int toZoneId) {
+    final from = _zonePoints(fromZoneId);
+    final to = _zonePoints(toZoneId);
+    if (from == null || to == null) {
+      return false;
+    }
+    for (final channel in channels) {
+      if (channel.points.length < 2) {
+        continue;
+      }
+      final start = channel.points.first;
+      final end = channel.points.last;
+      if ((_nearZone(start, from) && _nearZone(end, to)) ||
+          (_nearZone(start, to) && _nearZone(end, from))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  List<MapPoint>? _zonePoints(int zoneId) {
+    for (final zone in zones) {
+      if (zone.id == zoneId && zone.points.length >= 3) {
+        return zone.points;
+      }
+    }
+    return null;
+  }
+
+  bool _nearZone(MapPoint point, List<MapPoint> polygon) {
+    if (_pointInPolygon(point, polygon)) {
+      return true;
+    }
+    for (var i = 0; i < polygon.length; i++) {
+      final next = polygon[(i + 1) % polygon.length];
+      if (_distToSegment(point, polygon[i], next) <= _channelProximityM) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void setRunAllZones(bool value) {
+    if (runAllZones == value || _navOperationActive) {
+      return;
+    }
+    runAllZones = value;
+    notifyListeners();
+  }
+
+  /// The selected zone has a planned path. An image mission's zone (9001)
+  /// exists only in map_manage, so it shows up in the zone summaries but
+  /// never in the recorded-zone layer that [zones] is built from; without
+  /// the second clause 確認後執行 could never start one against a robot.
+  bool get _selectedZoneHasCoveragePath =>
+      zones.any((zone) => zone.id == selectedZoneId && zone.hasCoveragePath) ||
+      (_imageMissionActive && (_zoneCoverageById[selectedZoneId] ?? false));
   bool get navCommandPending => _navCommandPending;
   bool get cancelRequestInFlight => _cancelRequestInFlight;
   bool get cancelPending => _cancelPending;
@@ -425,6 +543,7 @@ class MissionMockProvider extends ChangeNotifier {
       '/adapter/marker_layers/connectors',
       '/adapter/coverage_settings',
       '/adapter/zone_summaries',
+      '/zone_sequence_status',
     ];
     const mapTopics = [
       '/adapter/map_layers/map_grid',
@@ -719,6 +838,14 @@ class MissionMockProvider extends ChangeNotifier {
         final dto = _decodeStringMessage(event.message);
         if (dto is List) {
           _applyZoneSummaries(dto);
+        }
+        break;
+      case '/zone_sequence_status':
+        final status = ZoneSequenceStatus.fromJson(
+          _decodeStringMessage(event.message),
+        );
+        if (status != null) {
+          _applyZoneSequenceStatus(status);
         }
         break;
       case '/adapter/map_datum':
@@ -1104,6 +1231,35 @@ class MissionMockProvider extends ChangeNotifier {
     } catch (_) {
       return null;
     }
+  }
+
+  void _applyZoneSequenceStatus(ZoneSequenceStatus status) {
+    final previous = zoneSequence;
+    zoneSequence = status;
+    if (status.running) {
+      if (previous?.message != status.message && status.message.isNotEmpty) {
+        _addLog('INFO', status.message);
+      }
+    } else {
+      _sequenceGapSince = null;
+      if (previous?.running ?? false) {
+        _sequenceRequested = false;
+        _addLog(
+          status.state == 'completed'
+              ? 'SUCCESS'
+              : status.state == 'canceled'
+              ? 'WARN'
+              : 'ERROR',
+          status.message.isEmpty ? '任務序列：${status.state}' : status.message,
+        );
+        if (status.state == 'completed') {
+          coverageProgress = 1.0;
+        }
+        // The navigation server's report decides when the controls unlock.
+        unawaited(_pollNavStatus());
+      }
+    }
+    notifyListeners();
   }
 
   void _applyZoneSummaries(List<dynamic> summaries) {
@@ -2206,8 +2362,64 @@ class MissionMockProvider extends ChangeNotifier {
     _invalidateCoverageReadiness();
     notifyListeners();
     unawaited(
-      _completePlanningMutation('執行規劃', () => _runRosPlanningStep(step)),
+      _completePlanningMutation(
+        '執行規劃',
+        () => step == 'coverage' && !_imageMissionActive
+            ? _rebuildMapsAndPlan()
+            : _runRosPlanningStep(step),
+      ),
     );
+  }
+
+  /// 生成覆蓋路徑: the maps first, so a zone, no-go area or channel recorded
+  /// since they were last built is planned too (nothing on the robot rebuilds
+  /// them after a recording). An image mission only re-plans: rebuilding the
+  /// free space would replace its zone.
+  Future<void> _rebuildMapsAndPlan() async {
+    if (await _runPlanningChain(
+      _mapRebuildSteps,
+      _connectionGeneration,
+      '規劃已中止：連線或導航狀態已改變',
+    )) {
+      await _runRosPlanningStep('coverage');
+    }
+  }
+
+  /// The robot's maps from its recorded objects, in dependency order: the
+  /// free space (which drops the channel map), the no-go areas, and the
+  /// channels when there are any (/create_chennal_map refuses none). Without
+  /// the channel map Nav2 cannot drive between two zones.
+  List<String> get _mapRebuildSteps => [
+    '/create_free_space',
+    '/create_risk_map',
+    if (channels.isNotEmpty) '/create_chennal_map',
+  ];
+
+  /// Calls [steps] in order and stops at the first failure, except the
+  /// channel map's: only a zone sequence's channel leg needs it.
+  Future<bool> _runPlanningChain(
+    List<String> steps,
+    int connectionGeneration,
+    String abortLog,
+  ) async {
+    for (final s in steps) {
+      if (!_planningChainCanContinue(connectionGeneration)) {
+        _addLog('ERROR', abortLog);
+        return false;
+      }
+      final r = await _rosbridge.callService(s);
+      if (!r.success) {
+        final reason = '$s ${r.message.isEmpty ? '失敗' : r.message}';
+        if (s == '/create_chennal_map') {
+          _addLog('WARN', '$reason；全部區域依序無法走這些通道');
+          continue;
+        }
+        _addLog('ERROR', reason);
+        return false;
+      }
+      _addLog('INFO', '$s 完成');
+    }
+    return true;
   }
 
   Future<void> _runRosPlanningStep(String step) async {
@@ -2377,25 +2589,12 @@ class MissionMockProvider extends ChangeNotifier {
     final connectionGeneration = _connectionGeneration;
     replanning = true;
     notifyListeners();
-    const steps = [
-      '/load_zone_list',
-      '/create_free_space',
-      '/create_risk_map',
-      '/generate_coverage_path',
-    ];
     try {
-      for (final s in steps) {
-        if (!_planningChainCanContinue(connectionGeneration)) {
-          _addLog('ERROR', '規劃鏈已中止：連線或導航狀態已改變');
-          break;
-        }
-        final r = await _rosbridge.callService(s);
-        if (!r.success) {
-          _addLog('ERROR', '$s ${r.message.isEmpty ? '失敗' : r.message}');
-          break;
-        }
-        _addLog('INFO', '$s 完成');
-      }
+      await _runPlanningChain(
+        ['/load_zone_list', ..._mapRebuildSteps, '/generate_coverage_path'],
+        connectionGeneration,
+        '規劃鏈已中止：連線或導航狀態已改變',
+      );
     } finally {
       replanning = false;
       notifyListeners();
@@ -2606,24 +2805,11 @@ class MissionMockProvider extends ChangeNotifier {
     if (mockDataEnabled || !rosConnected) {
       return;
     }
-    final connectionGeneration = _connectionGeneration;
-    const steps = [
-      '/create_free_space',
-      '/create_risk_map',
-      '/generate_coverage_path',
-    ];
-    for (final s in steps) {
-      if (!_planningChainCanContinue(connectionGeneration)) {
-        _addLog('ERROR', '場地規劃已中止：連線或導航狀態已改變');
-        break;
-      }
-      final r = await _rosbridge.callService(s);
-      if (!r.success) {
-        _addLog('ERROR', '$s ${r.message.isEmpty ? '失敗' : r.message}');
-        break;
-      }
-      _addLog('INFO', '$s 完成');
-    }
+    await _runPlanningChain(
+      [..._mapRebuildSteps, '/generate_coverage_path'],
+      _connectionGeneration,
+      '場地規劃已中止：連線或導航狀態已改變',
+    );
   }
 
   bool _pointInPolygon(MapPoint p, List<MapPoint> poly) {
@@ -2997,26 +3183,73 @@ class MissionMockProvider extends ChangeNotifier {
       _addLog('WARN', '無法開始任務：缺少 ${missing.join('、')}');
       return;
     }
-    unawaited(_startRosExecution());
+    final zoneId = selectedZoneId;
+    unawaited(
+      _startRosNavigation(
+        service: '/zone_exec_path',
+        args: {'zone_id': zoneId},
+        label: 'Zone $zoneId',
+      ),
+    );
   }
 
-  Future<void> _startRosExecution() async {
+  /// 全部區域依序: every zone in id order, the robot driving the recorded
+  /// channel between two zones (/run_zone_sequence).
+  void startZoneSequence() {
+    if (_connectionSettingsPending ||
+        _planningMutationPending ||
+        _navOperationActive) {
+      return;
+    }
+    final reason = zoneSequenceBlockReason;
+    if (reason != null) {
+      _addLog('WARN', '無法依序執行全部區域：$reason');
+      notifyListeners();
+      return;
+    }
+    final ids = sequenceZoneIds;
+    final label = ids.map((id) => 'Zone $id').join(' → ');
+    if (mockDataEnabled) {
+      navStatus = NavMockStatus.executing;
+      selectedMode = MissionMode.run;
+      _addLog('INFO', 'Demo：依序執行 $label');
+      notifyListeners();
+      return;
+    }
+    unawaited(
+      _startRosNavigation(
+        service: '/run_zone_sequence',
+        args: {'zone_ids': ids, 'channel_proximity_m': _channelProximityM},
+        label: label,
+        sequence: true,
+      ),
+    );
+  }
+
+  Future<void> _startRosNavigation({
+    required String service,
+    required Map<String, dynamic> args,
+    required String label,
+    bool sequence = false,
+  }) async {
     if (_navCommandPending) {
       return;
     }
-    final zoneId = selectedZoneId;
+    if (sequence) {
+      // Set before the call: a stop pressed while the ACK is outstanding
+      // must stop the sequence as well.
+      _sequenceRequested = true;
+      _sequenceGapSince = null;
+    }
     _navCommandEpoch += 1;
     _navCommandPending = true;
     _cancelRequestedDuringStart = false;
     _cancelPending = false;
     _ambiguousCancelRetryTimer?.cancel();
     _ambiguousCancelRetryTimer = null;
-    _addLog('INFO', '呼叫 /zone_exec_path Zone $zoneId');
+    _addLog('INFO', '呼叫 $service $label');
     notifyListeners();
-    final response = await _rosbridge.callService(
-      '/zone_exec_path',
-      args: {'zone_id': zoneId},
-    );
+    final response = await _rosbridge.callService(service, args: args);
     if (_isDisposed) {
       return;
     }
@@ -3037,7 +3270,7 @@ class MissionMockProvider extends ChangeNotifier {
       selectedMode = MissionMode.run;
       _addLog(
         'SUCCESS',
-        response.message.isEmpty ? '開始執行 Zone $zoneId' : response.message,
+        response.message.isEmpty ? '開始執行 $label' : response.message,
       );
     } else if (response.success) {
       // A stop request made while the start ACK was outstanding wins. A late
@@ -3075,10 +3308,14 @@ class MissionMockProvider extends ChangeNotifier {
         _ambiguousCancelRetryTimer?.cancel();
         _ambiguousCancelRetryTimer = null;
       }
+      if (sequence && !_ambiguousStartCancelRequired) {
+        // A definite refusal: no sequence was started.
+        _sequenceRequested = false;
+      }
       _addLog(
         'ERROR',
         response.message.isEmpty
-            ? 'Zone $zoneId 開始結果未確認，正在查詢導航狀態'
+            ? '$label 開始結果未確認，正在查詢導航狀態'
             : response.message,
       );
       if (_ambiguousStartCancelRequired) {
@@ -3133,6 +3370,19 @@ class MissionMockProvider extends ChangeNotifier {
     notifyListeners();
     late final RosbridgeServiceResponse response;
     try {
+      if (_sequenceRequested || zoneSequenceRunning) {
+        // Stop the sequence first: between two legs there is no goal for
+        // /cancel_nav2 to cancel and the next leg would still start.
+        final stop = await _rosbridge.callService('/stop_zone_sequence');
+        _addLog(
+          stop.success ? 'WARN' : 'ERROR',
+          stop.message.isEmpty
+              ? stop.success
+                    ? '已要求停止任務序列'
+                    : '任務序列停止要求失敗'
+              : stop.message,
+        );
+      }
       response = await _rosbridge.callService('/cancel_nav2');
     } catch (error) {
       _cancelRequestInFlight = false;
@@ -3274,6 +3524,29 @@ class MissionMockProvider extends ChangeNotifier {
             : response.message,
       );
       return;
+    }
+
+    // Before a zone sequence's first leg (/run_zone_sequence answers before
+    // it dispatches) and between two legs (the navigation server reports the
+    // finished one) the sequence goes on: keep the run locked (no manual
+    // drive, no new start) until a leg runs or the sequence's status ends it,
+    // but no longer than _sequenceGapLimit on a status that stopped updating.
+    if ((zoneSequenceRunning || _sequenceRequested) &&
+        (state == 'completed' || state == 'idle')) {
+      final since = _sequenceGapSince ??= DateTime.now();
+      if (DateTime.now().difference(since) < _sequenceGapLimit) {
+        state = 'running';
+      } else {
+        _sequenceRequested = false;
+        if (navStatus == NavMockStatus.executing) {
+          _addLog(
+            'WARN',
+            '任務序列狀態 ${_sequenceGapLimit.inSeconds} 秒未更新，依導航狀態解除鎖定',
+          );
+        }
+      }
+    } else if (state != 'completed' && state != 'idle') {
+      _sequenceGapSince = null;
     }
 
     _navStatusPollFailures = 0;
@@ -3606,6 +3879,12 @@ class MissionMockProvider extends ChangeNotifier {
 
   void _ensureSelectedZone() {
     if (zones.isEmpty) {
+      return;
+    }
+    // An active image mission selects its own zone, which is never in the
+    // recorded-zone layer: a zone-layer update must not swap it back to a
+    // recorded zone (that left 確認後執行 disabled).
+    if (_imageMissionActive) {
       return;
     }
     if (!zones.any((zone) => zone.id == selectedZoneId)) {
