@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
+import '../models/zone_sequence.dart';
 import '../providers/mission_mock_provider.dart';
 
 class ExecutionControlSheet extends StatelessWidget {
@@ -26,6 +28,9 @@ class ExecutionControlSheet extends StatelessWidget {
         mission.zones.any((zone) => zone.id == mission.selectedZoneId)
         ? mission.selectedZoneId
         : null;
+    final sequenceAvailable = mission.zones.length >= 2;
+    final runAll = sequenceAvailable && mission.runAllZones;
+    final sequence = _ourSequence(mission);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -42,35 +47,55 @@ class ExecutionControlSheet extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF3F6F7),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<int>(
-              isExpanded: true,
-              value: selectedZoneId,
-              hint: const Text('尚未收到 Zone'),
-              items: mission.zones
-                  .map(
-                    (zone) => DropdownMenuItem<int>(
-                      value: zone.id,
-                      child: Text('Zone ${zone.id} · ${zone.name}'),
-                    ),
-                  )
-                  .toList(),
-              onChanged: active || commandPending || mission.zones.isEmpty
+        if (sequenceAvailable) ...[
+          SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text('單一區域')),
+                ButtonSegment(value: true, label: Text('全部區域依序')),
+              ],
+              selected: {runAll},
+              showSelectedIcon: false,
+              onSelectionChanged: active || commandPending
                   ? null
-                  : (value) {
-                      if (value != null) {
-                        mission.selectZone(value);
-                      }
-                    },
+                  : (selection) => mission.setRunAllZones(selection.first),
             ),
           ),
-        ),
+          const SizedBox(height: 12),
+        ],
+        if (runAll)
+          _SequencePlan(mission: mission, status: sequence)
+        else
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F6F7),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                isExpanded: true,
+                value: selectedZoneId,
+                hint: const Text('尚未收到 Zone'),
+                items: mission.zones
+                    .map(
+                      (zone) => DropdownMenuItem<int>(
+                        value: zone.id,
+                        child: Text('Zone ${zone.id} · ${zone.name}'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: active || commandPending || mission.zones.isEmpty
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          mission.selectZone(value);
+                        }
+                      },
+              ),
+            ),
+          ),
         const SizedBox(height: 14),
         ClipRRect(
           borderRadius: BorderRadius.circular(10),
@@ -92,6 +117,8 @@ class ExecutionControlSheet extends StatelessWidget {
                 label: '進度',
                 value: progressKnown
                     ? '${(mission.coverageProgress * 100).round()}%'
+                    : runAll && (sequence?.running ?? false)
+                    ? '第 ${sequence!.index + 1}/${sequence.zoneIds.length} 區'
                     : active
                     ? '後端執行中'
                     : mission.coverageProgress >= 1
@@ -122,11 +149,15 @@ class ExecutionControlSheet extends StatelessWidget {
           children: [
             Expanded(
               child: FilledButton.icon(
-                onPressed: mission.canStartMission
+                onPressed: runAll
+                    ? mission.canStartZoneSequence
+                          ? mission.startZoneSequence
+                          : null
+                    : mission.canStartMission
                     ? mission.startExecution
                     : null,
                 icon: const Icon(AppIcons.play),
-                label: const Text('開始'),
+                label: Text(runAll ? '依序開始' : '開始'),
               ),
             ),
             const SizedBox(width: 12),
@@ -140,6 +171,140 @@ class ExecutionControlSheet extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// The robot's sequence status when it is about the zones shown here.
+ZoneSequenceStatus? _ourSequence(MissionMockProvider mission) {
+  final status = mission.zoneSequence;
+  if (status == null ||
+      status.state == 'idle' ||
+      !listEquals(status.zoneIds, mission.sequenceZoneIds)) {
+    return null;
+  }
+  return status;
+}
+
+enum _LegState { pending, current, done, stopped }
+
+/// 全部區域依序: each zone in order with the channel between two zones; the
+/// leg the robot is on is highlighted and the finished ones are ticked.
+class _SequencePlan extends StatelessWidget {
+  const _SequencePlan({required this.mission, required this.status});
+
+  final MissionMockProvider mission;
+  final ZoneSequenceStatus? status;
+
+  @override
+  Widget build(BuildContext context) {
+    final ids = mission.sequenceZoneIds;
+    final status = this.status;
+    // Legs in order: zone i at 2i, the channel after it at 2i + 1.
+    final at = status == null
+        ? -1
+        : status.leg == 'channel'
+        ? 2 * status.index + 1
+        : 2 * status.index;
+    _LegState legState(int leg) {
+      if (status == null) {
+        return _LegState.pending;
+      }
+      if (status.state == 'completed' || leg < at) {
+        return _LegState.done;
+      }
+      if (leg == at) {
+        return status.running ? _LegState.current : _LegState.stopped;
+      }
+      return _LegState.pending;
+    }
+
+    final legs = <Widget>[];
+    for (var i = 0; i < ids.length; i++) {
+      if (i > 0) {
+        legs.add(const Icon(AppIcons.arrowRight, size: 14));
+        legs.add(_LegChip(label: '通道', state: legState(2 * i - 1)));
+        legs.add(const Icon(AppIcons.arrowRight, size: 14));
+      }
+      legs.add(_LegChip(label: 'Zone ${ids[i]}', state: legState(2 * i)));
+    }
+    final reason = mission.zoneSequenceBlockReason;
+    final running = status?.running ?? false;
+    final caption = running || (status != null && status.state != 'completed')
+        ? status!.message
+        : status?.state == 'completed'
+        ? '全部區域已完成'
+        : reason ?? '依序割完每個區域，區域之間沿通道自動移動';
+    final warn = !running && status == null && reason != null;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F6F7),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 4,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: legs,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            caption,
+            style: TextStyle(
+              color: warn ? const Color(0xFFB26A00) : const Color(0xFF607D8B),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LegChip extends StatelessWidget {
+  const _LegChip({required this.label, required this.state});
+
+  final String label;
+  final _LegState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final (background, foreground) = switch (state) {
+      _LegState.current => (const Color(0xFF167A4A), Colors.white),
+      _LegState.done => (const Color(0xFFE4F6EC), const Color(0xFF167A4A)),
+      _LegState.stopped => (const Color(0xFFFDECEA), const Color(0xFFC62828)),
+      _LegState.pending => (Colors.white, const Color(0xFF607D8B)),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFDDE5E8)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (state == _LegState.done) ...[
+            Icon(AppIcons.check, size: 13, color: foreground),
+            const SizedBox(width: 3),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              color: foreground,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -546,6 +546,8 @@ class _MissionMapPainter extends CustomPainter {
       for (final channel in mission.channels) ...channel.points,
       for (final row in mission.coverageRows) ...row,
       for (final segment in mission.invalidSegments) ...segment.points,
+      // the trail being driven: on a first recording it is the only content
+      ...mission.recordTrail,
       if (mission.freeSpaceLayer != null)
         ..._gridCorners(mission.freeSpaceLayer!),
       if (overlay != null) ...[
