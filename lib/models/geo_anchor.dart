@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:latlong2/latlong.dart';
 
+import 'mission_mock.dart';
+
 /// Geo-reference for the local ROS `map` frame: where map-frame (0,0) sits on
 /// Earth and how the map's +X axis is oriented relative to true north. With
 /// this anchor, any map-frame point (metres) can be placed on a satellite map.
@@ -50,6 +52,18 @@ class GeoAnchor {
         originLon +
         (metersPerDegLon.abs() < 1e-9 ? 0.0 : east / metersPerDegLon);
     return LatLng(lat, lon);
+  }
+
+  /// Inverse of [worldToLatLng]: geographic lat/lon → map-frame (x, y) metres.
+  /// Used to drop an external GPS fix (e.g. the phone's) onto the local map.
+  MapPoint latLngToWorld(LatLng p) {
+    final metersPerDegLon =
+        _metersPerDegLat * math.cos(originLat * math.pi / 180.0);
+    final north = (p.latitude - originLat) * _metersPerDegLat;
+    final east = (p.longitude - originLon) * metersPerDegLon;
+    final sinB = math.sin(bearingRad);
+    final cosB = math.cos(bearingRad);
+    return MapPoint(east * sinB + north * cosB, -east * cosB + north * sinB);
   }
 
   GeoAnchor copyWith({

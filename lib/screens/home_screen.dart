@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
+import '../providers/phone_location_provider.dart';
 import '../providers/weather_provider.dart';
 import '../services/rosbridge_service.dart';
 import '../providers/robot_fleet_provider.dart';
@@ -1035,6 +1036,25 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     AddObjectSheet(onRecordingStarted: widget.onOpenManual),
   );
 
+  Future<void> _togglePhoneLocation() async {
+    final phone = context.read<PhoneLocationProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    await phone.toggle();
+    if (!mounted) return;
+    final message = switch (phone.status) {
+      PhoneLocationStatus.denied => '沒有定位權限，請到設定允許 App 取用位置',
+      PhoneLocationStatus.serviceDisabled => '手機的定位服務已關閉',
+      _ => null,
+    };
+    if (message == null) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        action: SnackBarAction(label: '開啟設定', onPressed: phone.openSettings),
+      ),
+    );
+  }
+
   void _dismissPopup() {
     context.read<RobotFleetProvider>().selectRobot(null);
     setState(() => _popupOffset = null);
@@ -1063,6 +1083,11 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
     final fleet = context.watch<RobotFleetProvider>();
+    final phone = context.watch<PhoneLocationProvider>();
+    // The phone's GPS fix in the map frame; needs the map's geo anchor.
+    final phoneWorld = (phone.position != null && mission.mapGeoAnchor != null)
+        ? mission.mapGeoAnchor!.latLngToWorld(phone.position!)
+        : null;
     final media = MediaQuery.of(context);
     final size = media.size;
     final isLandscape = size.width > size.height;
@@ -1170,6 +1195,8 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                   ? SatelliteMapView(
                       mission: mission,
                       anchor: mission.mapGeoAnchor!,
+                      phonePosition: phone.position,
+                      phoneAccuracyM: phone.accuracyM,
                     )
                   : MissionMapCanvas(
                       key: _canvasKey,
@@ -1177,6 +1204,8 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                       robots: fleet.robots,
                       selectedRobotId: fleet.selectedRobotId,
                       bottomInset: effectivePanelH,
+                      phonePosition: phoneWorld,
+                      phoneAccuracyM: phone.accuracyM,
                     ),
             ),
             Positioned(
@@ -1192,6 +1221,23 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                 on: mission.satelliteBaseMap,
                 enabled: mission.mapGeoAnchor != null,
                 onTap: mission.toggleSatelliteBaseMap,
+              ),
+            ),
+            Positioned(
+              top: media.padding.top + 78 + 56,
+              left: 12,
+              child: _PhoneLocationToggle(
+                on: phone.enabled,
+                statusText: !phone.enabled
+                    ? null
+                    : phone.position == null
+                    ? '定位中…'
+                    : mission.mapGeoAnchor == null
+                    ? '地圖尚未對應 GPS，無法標示'
+                    : mission.shouldShowRobot
+                    ? '距割草機 ${_formatDistance(phoneWorld!, mission.robotPosition)}'
+                    : null,
+                onTap: _togglePhoneLocation,
               ),
             ),
             Positioned(
@@ -1422,6 +1468,74 @@ class _SatelliteToggle extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+String _formatDistance(MapPoint a, MapPoint b) {
+  final d = math.sqrt(math.pow(a.x - b.x, 2) + math.pow(a.y - b.y, 2));
+  return d < 1000 ? '${d.round()} m' : '${(d / 1000).toStringAsFixed(1)} km';
+}
+
+/// Shows / hides the phone's own position on the map, with a small status
+/// caption (locating, distance to the mower, or why it can't be placed).
+class _PhoneLocationToggle extends StatelessWidget {
+  const _PhoneLocationToggle({
+    required this.on,
+    required this.statusText,
+    required this.onTap,
+  });
+
+  final bool on;
+  final String? statusText;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: on ? '隱藏我的位置' : '顯示我的位置',
+          child: Material(
+            color: on
+                ? const Color(0xFF1A73E8)
+                : Colors.black.withValues(alpha: 0.55),
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onTap,
+              child: SizedBox(
+                width: 46,
+                height: 46,
+                child: Icon(
+                  on ? AppIcons.locateFixed : AppIcons.locate,
+                  color: Colors.white,
+                  size: 24,
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (statusText != null) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Text(
+              statusText!,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

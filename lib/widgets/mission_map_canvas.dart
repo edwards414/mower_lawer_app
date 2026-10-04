@@ -174,6 +174,8 @@ class MissionMapCanvas extends StatefulWidget {
     this.alignmentOverlay,
     this.worldBoundsOverride,
     this.onProjectionPainted,
+    this.phonePosition,
+    this.phoneAccuracyM,
   });
 
   final MissionMockProvider mission;
@@ -190,6 +192,12 @@ class MissionMapCanvas extends StatefulWidget {
 
   /// Reports the world↔screen mapping each paint (no setState; safe).
   final ValueChanged<MapProjection>? onProjectionPainted;
+
+  /// The phone's own position in the map frame (blue dot), when location
+  /// display is on and the map is geo-anchored. Not part of the framing, so a
+  /// phone far from the lawn doesn't shrink the map to fit it.
+  final MapPoint? phonePosition;
+  final double? phoneAccuracyM;
 
   @override
   MissionMapCanvasState createState() => MissionMapCanvasState();
@@ -250,6 +258,8 @@ class MissionMapCanvasState extends State<MissionMapCanvas>
           alignmentOverlay: widget.alignmentOverlay,
           worldBoundsOverride: widget.worldBoundsOverride,
           onProjectionPainted: _onProjectionPainted,
+          phonePosition: widget.phonePosition,
+          phoneAccuracyM: widget.phoneAccuracyM,
         ),
         child: const SizedBox.expand(),
       ),
@@ -269,6 +279,8 @@ class _MissionMapPainter extends CustomPainter {
     this.alignmentOverlay,
     this.worldBoundsOverride,
     this.onProjectionPainted,
+    this.phonePosition,
+    this.phoneAccuracyM,
   });
 
   final MissionMockProvider mission;
@@ -281,6 +293,8 @@ class _MissionMapPainter extends CustomPainter {
   final ImageAlignmentOverlay? alignmentOverlay;
   final Rect? worldBoundsOverride;
   final void Function(MapProjection)? onProjectionPainted;
+  final MapPoint? phonePosition;
+  final double? phoneAccuracyM;
 
   static const Rect _fallbackWorldBounds = Rect.fromLTWH(0, 12, 104, 128);
 
@@ -420,6 +434,14 @@ class _MissionMapPainter extends CustomPainter {
         canvas,
         project(mission.robotPosition),
         mission.robotHeadingRad,
+      );
+    }
+
+    if (phonePosition != null) {
+      _drawPhoneLocation(
+        canvas,
+        project(phonePosition!),
+        (phoneAccuracyM ?? 0) * projection.scale,
       );
     }
 
@@ -971,6 +993,34 @@ class _MissionMapPainter extends CustomPainter {
       Paint()..color = const Color(0xFF46D28B),
     );
     canvas.restore();
+  }
+
+  /// Phone "you are here": accuracy halo + blue dot with a white ring.
+  void _drawPhoneLocation(Canvas canvas, Offset center, double accuracyPx) {
+    if (accuracyPx > 11) {
+      canvas.drawCircle(
+        center,
+        accuracyPx,
+        Paint()..color = const Color(0x261A73E8),
+      );
+      canvas.drawCircle(
+        center,
+        accuracyPx,
+        Paint()
+          ..color = const Color(0x661A73E8)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+    }
+    canvas.drawCircle(
+      center + const Offset(0, 1),
+      11,
+      Paint()
+        ..color = const Color(0x55000000)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+    );
+    canvas.drawCircle(center, 11, Paint()..color = Colors.white);
+    canvas.drawCircle(center, 8, Paint()..color = const Color(0xFF1A73E8));
   }
 
   void _drawRecordingTrace(

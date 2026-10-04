@@ -115,6 +115,24 @@ Future<http.Response> deleteWhepSession({
       );
 }
 
+/// Decoded-frame counters of the inbound video stream in a `getStats()`
+/// snapshot, or null when there is no inbound video yet.
+@visibleForTesting
+({int? framesDecoded, double? framesPerSecond})? inboundVideoFrameStats(
+  List<StatsReport> reports,
+) {
+  for (final report in reports) {
+    if (report.type != 'inbound-rtp') continue;
+    final values = report.values;
+    if ((values['kind'] ?? values['mediaType']) != 'video') continue;
+    return (
+      framesDecoded: (values['framesDecoded'] as num?)?.toInt(),
+      framesPerSecond: (values['framesPerSecond'] as num?)?.toDouble(),
+    );
+  }
+  return null;
+}
+
 const List<Map<String, dynamic>> _publicIceServers = <Map<String, dynamic>>[
   {
     'urls': <String>['stun:stun.cloudflare.com:3478'],
@@ -237,8 +255,39 @@ class WhepClient {
   bool _disposed = false;
   Future<void>? _disposeFuture;
   WhepState _state = WhepState.idle;
+  int? _lastFramesDecoded;
+  DateTime? _lastFramesAt;
 
   WhepState get state => _state;
+
+  /// Received video frame rate (Hz), or null when there is no video. Measured
+  /// from the decoded-frame count since the previous call, so a stalled stream
+  /// reads 0; the first call falls back to WebRTC's own `framesPerSecond`.
+  Future<double?> videoFps() async {
+    final pc = _pc;
+    if (pc == null) return null;
+    final List<StatsReport> reports;
+    try {
+      reports = await pc.getStats();
+    } catch (_) {
+      return null;
+    }
+    final stats = inboundVideoFrameStats(reports);
+    if (stats == null) return null;
+    final now = DateTime.now();
+    final decoded = stats.framesDecoded;
+    final lastDecoded = _lastFramesDecoded;
+    final lastAt = _lastFramesAt;
+    _lastFramesDecoded = decoded;
+    _lastFramesAt = now;
+    if (decoded != null && lastDecoded != null && lastAt != null) {
+      final seconds = now.difference(lastAt).inMicroseconds / 1e6;
+      if (seconds > 0 && decoded >= lastDecoded) {
+        return (decoded - lastDecoded) / seconds;
+      }
+    }
+    return stats.framesPerSecond;
+  }
 
   Map<String, String> _requestHeaders() => {
     ...RemoteAccessConfig.cloudflareAccessHeaders,

@@ -20,10 +20,16 @@ class SatelliteMapView extends StatelessWidget {
     super.key,
     required this.mission,
     required this.anchor,
+    this.phonePosition,
+    this.phoneAccuracyM,
   });
 
   final MissionMockProvider mission;
   final GeoAnchor anchor;
+
+  /// The phone's own GPS fix (blue dot), when location display is on.
+  final LatLng? phonePosition;
+  final double? phoneAccuracyM;
 
   /// Inject at build/run time with `--dart-define=MAPBOX_TOKEN=...` or a
   /// gitignored `--dart-define-from-file`. Never keep a fallback token in the
@@ -163,6 +169,19 @@ class SatelliteMapView extends StatelessWidget {
             if (zonePolygons.isNotEmpty) PolygonLayer(polygons: zonePolygons),
             if (coveragePolylines.isNotEmpty)
               PolylineLayer(polylines: coveragePolylines),
+            if (phonePosition != null && (phoneAccuracyM ?? 0) > 0)
+              CircleLayer(
+                circles: [
+                  CircleMarker(
+                    point: phonePosition!,
+                    radius: phoneAccuracyM!,
+                    useRadiusInMeter: true,
+                    color: const Color(0x261A73E8),
+                    borderColor: const Color(0x661A73E8),
+                    borderStrokeWidth: 1,
+                  ),
+                ],
+              ),
             MarkerLayer(
               markers: [
                 Marker(
@@ -171,6 +190,13 @@ class SatelliteMapView extends StatelessWidget {
                   height: 40,
                   child: const BreathingMarker(),
                 ),
+                if (phonePosition != null)
+                  Marker(
+                    point: phonePosition!,
+                    width: 22,
+                    height: 22,
+                    child: const PhoneLocationDot(),
+                  ),
               ],
             ),
             const RichAttributionWidget(
@@ -235,6 +261,26 @@ class _NoTokenBanner extends StatelessWidget {
       child: const Text(
         '缺少 Mapbox token：請用 flutter run --dart-define-from-file=.env 啟動',
         style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
+/// "You are here" marker for the phone's own position: a blue dot with a white
+/// ring, the convention users know from phone map apps.
+class PhoneLocationDot extends StatelessWidget {
+  const PhoneLocationDot({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A73E8),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 3),
+        boxShadow: const [
+          BoxShadow(color: Color(0x55000000), blurRadius: 4),
+        ],
       ),
     );
   }
