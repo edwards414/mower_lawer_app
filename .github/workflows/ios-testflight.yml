@@ -76,7 +76,7 @@ jobs:
       - name: Analyze and test
         run: |
           flutter analyze
-          flutter test
+          flutter test --concurrency=1
 
       - name: Version
         id: version
