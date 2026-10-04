@@ -37,6 +37,8 @@
 	<string>顯示機器人的即時攝影機影像。</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>連線至區域網路內的機器人以取得影像與控制。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>在地圖上顯示你目前的位置，方便對照割草機與場地。</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>WebRTC 影像串流所需(本 App 不錄音)。</string>
 	<key>NSPhotoLibraryUsageDescription</key>

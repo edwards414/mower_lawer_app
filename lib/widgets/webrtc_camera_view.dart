@@ -45,6 +45,8 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
   WhepState _state = WhepState.idle;
   Timer? _retryTimer;
   int _retryAttempt = 0;
+  Timer? _fpsTimer;
+  double? _fps;
 
   @override
   void initState() {
@@ -64,6 +66,7 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
   Future<void> _restart({required bool resetBackoff}) async {
     _retryTimer?.cancel();
     _retryTimer = null;
+    _stopFps();
     if (resetBackoff) {
       _retryAttempt = 0;
     }
@@ -96,8 +99,12 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
           _retryAttempt = 0;
           _retryTimer?.cancel();
           _retryTimer = null;
-        } else if (state == WhepState.failed) {
-          _scheduleRetry();
+          _startFps(client);
+        } else {
+          _stopFps();
+          if (state == WhepState.failed) {
+            _scheduleRetry();
+          }
         }
       },
     );
@@ -105,6 +112,24 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
     setState(() => _state = WhepState.connecting);
     // Errors surface through onStateChanged (-> WhepState.failed).
     client.connect();
+  }
+
+  /// Polls the received video frame rate once a second for the Hz badge.
+  void _startFps(WhepClient client) {
+    _stopFps();
+    _fpsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      final fps = await client.videoFps();
+      if (!mounted || _client != client || _fpsTimer == null) {
+        return;
+      }
+      setState(() => _fps = fps);
+    });
+  }
+
+  void _stopFps() {
+    _fpsTimer?.cancel();
+    _fpsTimer = null;
+    _fps = null;
   }
 
   void _scheduleRetry() {
@@ -125,6 +150,8 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
   void dispose() {
     _retryTimer?.cancel();
     _retryTimer = null;
+    _fpsTimer?.cancel();
+    _fpsTimer = null;
     _client?.dispose();
     _client = null;
     super.dispose();
@@ -154,6 +181,8 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
               ),
             ),
           ),
+          if (_fps != null)
+            Positioned(left: 10, bottom: 10, child: _FpsBadge(fps: _fps!)),
         ],
       );
     }
@@ -163,6 +192,34 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
       state: _state,
       hasUrl: widget.whepUrl.isNotEmpty,
       noUrlDetail: widget.noUrlDetail,
+    );
+  }
+}
+
+/// Received camera frame rate, e.g. "15 Hz"; red when the stream has stalled.
+class _FpsBadge extends StatelessWidget {
+  const _FpsBadge({required this.fps});
+
+  final double fps;
+
+  @override
+  Widget build(BuildContext context) {
+    final stalled = fps < 1;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        '${fps.toStringAsFixed(fps < 10 ? 1 : 0)} Hz',
+        style: TextStyle(
+          color: stalled ? const Color(0xFFFF6B6B) : Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
     );
   }
 }

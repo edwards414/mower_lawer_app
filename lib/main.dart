@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'providers/mission_mock_provider.dart';
+import 'providers/phone_location_provider.dart';
 import 'providers/recorder_provider.dart';
 import 'providers/robot_fleet_provider.dart';
 import 'providers/robot_info_provider.dart';
@@ -44,6 +45,9 @@ class MowerApp extends StatelessWidget {
         ChangeNotifierProvider<MissionMockProvider>(
           create: (ctx) =>
               MissionMockProvider(rosbridge: ctx.read<RosbridgeService>()),
+        ),
+        ChangeNotifierProvider<PhoneLocationProvider>(
+          create: (_) => PhoneLocationProvider(),
         ),
         ChangeNotifierProvider<RecorderProvider>(
           create: (ctx) =>

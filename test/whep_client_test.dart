@@ -158,6 +158,25 @@ void main() {
 
     expect(client.closed, isTrue);
   });
+
+  test('reads frame counters from the inbound video RTP stats only', () {
+    final stats = inboundVideoFrameStats([
+      StatsReport('a', 'inbound-rtp', 0, {'kind': 'audio'}),
+      StatsReport('t', 'transport', 0, {}),
+      StatsReport('v', 'inbound-rtp', 0, {
+        'kind': 'video',
+        'framesDecoded': 450,
+        'framesPerSecond': 15,
+      }),
+    ]);
+
+    expect(stats?.framesDecoded, 450);
+    expect(stats?.framesPerSecond, 15.0);
+    expect(
+      inboundVideoFrameStats([StatsReport('a', 'inbound-rtp', 0, {})]),
+      isNull,
+    );
+  });
 }
 
 class _TrackingClient extends http.BaseClient {
