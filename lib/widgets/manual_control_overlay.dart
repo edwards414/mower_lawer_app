@@ -6,6 +6,7 @@ import '../utils/app_icons.dart';
 
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
+import '../providers/recorder_provider.dart';
 import 'map_record_bar.dart';
 import 'mission_map_canvas.dart';
 import 'webrtc_camera_view.dart';
@@ -15,10 +16,14 @@ class ManualControlOverlay extends StatefulWidget {
     super.key,
     required this.mission,
     required this.onExit,
+    this.recorder,
   });
 
   final MissionMockProvider mission;
   final VoidCallback onExit;
+
+  /// Topic (rosbag) recorder; null hides the record button.
+  final RecorderProvider? recorder;
 
   @override
   State<ManualControlOverlay> createState() => _ManualControlOverlayState();
@@ -169,11 +174,25 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
           ),
         ),
 
-        // ── Manual-drive status pill, top-right in both orientations.
+        // ── Manual-drive status pill, top-right in both orientations, with
+        // the topic-recording toggle under it.
         Positioned(
           top: topInset,
           right: 12,
-          child: _ManualStatusPill(connected: canDrive, moving: _moving),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              _ManualStatusPill(connected: canDrive, moving: _moving),
+              if (widget.recorder case final recorder?) ...[
+                const SizedBox(height: 8),
+                _BagRecordButton(
+                  recorder: recorder,
+                  onPressed: () =>
+                      unawaited(_toggleBagRecording(recorder, snackClearance)),
+                ),
+              ],
+            ],
+          ),
         ),
 
         // ── Orientation-specific control band.
@@ -211,7 +230,9 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
             top: topInset,
             left: 64,
             child: _GlassIconButton(
-              icon: _controlsExpanded ? AppIcons.chevronUp : AppIcons.slidersHorizontal,
+              icon: _controlsExpanded
+                  ? AppIcons.chevronUp
+                  : AppIcons.slidersHorizontal,
               tooltip: '切換功能',
               onPressed: () =>
                   setState(() => _controlsExpanded = !_controlsExpanded),
@@ -315,6 +336,23 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
     }
   }
 
+  Future<void> _toggleBagRecording(
+    RecorderProvider recorder,
+    double clearBottom,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = recorder.status.recording
+        ? await recorder.stopRecording()
+        : await recorder.startRecording();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(result.ok ? result.message : '錄製失敗：${result.message}'),
+        behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.fromLTRB(16, 0, 16, clearBottom),
+      ),
+    );
+  }
+
   Future<void> _exitManual() async {
     if (widget.mission.recordingType != null) {
       final stopped = await widget.mission.stopRecording(save: false);
@@ -324,6 +362,83 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
     }
     _stopAll();
     widget.onExit();
+  }
+}
+
+/// Topic (rosbag) recording toggle: grey "錄話題" when idle, red REC + elapsed
+/// while mower_recorder is running. Driven by /mower_recorder/status.
+class _BagRecordButton extends StatelessWidget {
+  const _BagRecordButton({required this.recorder, required this.onPressed});
+
+  final RecorderProvider recorder;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: recorder,
+      builder: (context, _) {
+        final status = recorder.status;
+        final pending = recorder.commandPending;
+        final recording = status.recording;
+        final String label;
+        if (pending) {
+          label = recording ? '停止中…' : '啟動中…';
+        } else if (recording) {
+          final mins = (status.elapsedS ~/ 60).toString().padLeft(2, '0');
+          final secs = (status.elapsedS.toInt() % 60).toString().padLeft(
+            2,
+            '0',
+          );
+          label = 'REC $mins:$secs';
+        } else {
+          label = '錄話題';
+        }
+        const red = Color(0xFFE55353);
+        final fg = recording ? Colors.white : const Color(0xFFE0E0E0);
+        return Tooltip(
+          message: recording ? '停止錄製話題' : '開始錄製話題',
+          child: Opacity(
+            opacity: pending ? 0.6 : 1,
+            child: Material(
+              color: recording
+                  ? red.withValues(alpha: 0.85)
+                  : Colors.black.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(18),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(18),
+                onTap: pending ? null : onPressed,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        recording ? AppIcons.square : AppIcons.disc,
+                        color: recording ? Colors.white : red,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        label,
+                        style: TextStyle(
+                          color: fg,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }
 
@@ -531,11 +646,7 @@ class _RecordHud extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
           children: [
-            const Icon(
-              AppIcons.disc,
-              color: Color(0xFFE55353),
-              size: 16,
-            ),
+            const Icon(AppIcons.disc, color: Color(0xFFE55353), size: 16),
             const SizedBox(width: 6),
             Expanded(
               child: Text(
@@ -801,9 +912,7 @@ class _ManualStatusPill extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              connected
-                  ? AppIcons.circleDot
-                  : AppIcons.wifiOff,
+              connected ? AppIcons.circleDot : AppIcons.wifiOff,
               color: color,
               size: 18,
             ),

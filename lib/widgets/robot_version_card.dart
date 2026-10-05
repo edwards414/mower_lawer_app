@@ -6,7 +6,6 @@ import 'package:provider/provider.dart';
 import '../models/robot_info.dart';
 import '../providers/robot_info_provider.dart';
 import '../providers/robot_registry.dart';
-import '../screens/robots_screen.dart';
 
 const _kGreen = Color(0xFF167A4A);
 const _kGrey = Color(0xFF78909C);
@@ -63,12 +62,8 @@ class RobotVersionCard extends StatelessWidget {
             _VersionRow(
               icon: AppIcons.circuitBoard,
               title: 'STM32 韌體',
-              detail: info == null
-                  ? '—'
-                  : _firmwareDetail(info),
-              trailing: info == null
-                  ? null
-                  : _FirmwareChip(info),
+              detail: info == null ? '—' : _firmwareDetail(info),
+              trailing: info == null ? null : _FirmwareChip(info),
               muted: stale,
             ),
             if (info != null && info.update.state.isNotEmpty)
@@ -79,7 +74,8 @@ class RobotVersionCard extends StatelessWidget {
                     ? AppIcons.cloudDownload
                     : AppIcons.circleCheck,
                 title: '更新狀態',
-                detail: '${_updateStateLabel(info.update.state)}'
+                detail:
+                    '${_updateStateLabel(info.update.state)}'
                     '${info.update.message.isEmpty ? '' : ' · ${info.update.message}'}',
                 muted: stale,
               ),
@@ -99,7 +95,8 @@ class RobotVersionCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: _canAct(provider) ? () => _confirmAndRun(
+                    onPressed: _canAct(provider)
+                        ? () => _confirmAndRun(
                             context,
                             title: '更新機器人',
                             body:
@@ -115,7 +112,8 @@ class RobotVersionCard extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: _canAct(provider) ? () => _confirmAndRun(
+                    onPressed: _canAct(provider)
+                        ? () => _confirmAndRun(
                             context,
                             title: '重新啟動機器人軟體',
                             body: '重新啟動 ROS 容器（不更新）。機器人會離線約 1 分鐘。',
@@ -415,7 +413,11 @@ class CompatibilityNotice extends StatelessWidget {
 /// outside what this app supports, the page is dimmed and blocked until the
 /// operator updates or explicitly overrides.
 class CompatibilityGate extends StatelessWidget {
-  const CompatibilityGate({super.key, required this.child, this.onShowVersions});
+  const CompatibilityGate({
+    super.key,
+    required this.child,
+    this.onShowVersions,
+  });
 
   final Widget child;
   final VoidCallback? onShowVersions;
@@ -440,8 +442,9 @@ class CompatibilityGate extends StatelessWidget {
               alignment: Alignment.topCenter,
               child: Padding(
                 padding: const EdgeInsets.all(22),
+                // Robot settings and versions share the 更多 tab.
                 child: mismatch
-                    ? const IdentityMismatchNotice()
+                    ? IdentityMismatchNotice(onOpenSettings: onShowVersions)
                     : CompatibilityNotice(onShowVersions: onShowVersions),
               ),
             ),
@@ -456,7 +459,10 @@ class CompatibilityGate extends StatelessWidget {
 /// LAN address points at another machine). Operation stays blocked until
 /// the operator picks the right robot.
 class IdentityMismatchNotice extends StatelessWidget {
-  const IdentityMismatchNotice({super.key});
+  const IdentityMismatchNotice({super.key, this.onOpenSettings});
+
+  /// Switches to the robot settings (更多 tab); no button when null.
+  final VoidCallback? onOpenSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -490,23 +496,23 @@ class IdentityMismatchNotice extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             '這個位址回報的是 ${registry.reportedRobotId}，但你配對的是 '
-            '${active.displayName}（${active.id}）。檢查 LAN 位址 / relay 設定，或改選正確的機器人。',
+            '${active.displayName}（${active.id}）。檢查直連 IP / relay 設定，或改選正確的機器人。',
             style: const TextStyle(
               color: Color(0xFF7F1D1D),
               fontWeight: FontWeight.w700,
               fontSize: 12,
             ),
           ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const RobotsScreen()),
+          if (onOpenSettings != null) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: onOpenSettings,
+                child: const Text('我的機器人'),
               ),
-              child: const Text('我的機器人'),
             ),
-          ),
+          ],
         ],
       ),
     );

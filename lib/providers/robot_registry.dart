@@ -11,7 +11,8 @@ import '../services/rosbridge_service.dart';
 import '../services/websocket_connector.dart';
 
 /// Tries to open the robot's LAN rosbridge; true when the upgrade succeeds.
-typedef LanProbe = Future<bool> Function(String url, Map<String, String> headers);
+typedef LanProbe =
+    Future<bool> Function(String url, Map<String, String> headers);
 
 Future<bool> defaultLanProbe(String url, Map<String, String> headers) async {
   try {
@@ -65,7 +66,7 @@ class MemoryPairingStore implements PairingStore {
 /// "我的機器人": the robots this phone is paired with, which one is active,
 /// and the identity check against what the connected robot reports.
 ///
-/// Selecting a robot (or changing its LAN/relay preference) points
+/// Selecting a robot (or changing its 直連 IP) points
 /// [RosbridgeService] at it; the pairing headers are generated per
 /// connection from the robot's secret and this install's [clientId].
 class RobotRegistry extends ChangeNotifier {
@@ -142,6 +143,7 @@ class RobotRegistry extends ChangeNotifier {
     // Nothing stored (or the store is unreadable, e.g. a simulator keychain
     // without entitlements) counts as a first start.
     var firstStart = true;
+    var unpinned = false;
     try {
       final raw = await _store.read(_robotsKey);
       firstStart = raw == null;
@@ -151,7 +153,8 @@ class RobotRegistry extends ChangeNotifier {
             .map((e) => PairedRobot.fromJson(e.cast<String, dynamic>()))
             .where((r) => PairedRobot.idPattern.hasMatch(r.id))
             .toList();
-        _robots = List.unmodifiable(list);
+        unpinned = list.any(_hasLanPin);
+        _robots = List.unmodifiable(list.map(_unpinLan));
       }
       _activeId = await _store.read(_activeKey);
       _clientId = await _store.read(_clientKey) ?? '';
@@ -162,6 +165,7 @@ class RobotRegistry extends ChangeNotifier {
       _clientId = PairingAuth.newClientId();
       await _store.write(_clientKey, _clientId);
     }
+    if (unpinned) await _persist();
     if (firstStart && _robots.isEmpty && kDebugMode && _devPairUrl.isNotEmpty) {
       try {
         final robot = PairedRobot.fromPairUrl(_devPairUrl);
@@ -179,6 +183,20 @@ class RobotRegistry extends ChangeNotifier {
     _loaded = true;
     _applyActive();
     notifyListeners();
+  }
+
+  /// The robot page used to have a "固定走 LAN" switch; with one 直連 IP it is
+  /// gone, so nothing could undo an old pin on a robot that has a relay. Its
+  /// LAN address becomes the 直連 IP instead: still tried first, but with
+  /// the relay as fallback rather than stuck on an unreachable LAN.
+  static bool _hasLanPin(PairedRobot r) => r.preferLan && r.hasRelay;
+
+  static PairedRobot _unpinLan(PairedRobot r) {
+    if (!_hasLanPin(r)) return r;
+    return r.copyWith(
+      directAddress: r.hasDirect ? null : r.lanAddress,
+      preferLan: false,
+    );
   }
 
   /// Add (or update) a robot from its QR payload and make it active.
@@ -304,7 +322,10 @@ class RobotRegistry extends ChangeNotifier {
   }
 
   Future<void> _routeDirectFirst(PairedRobot a, int seq) async {
-    final reachable = await _lanProbe(a.directUrl, PairingAuth.headers(a, _clientId));
+    final reachable = await _lanProbe(
+      a.directUrl,
+      PairingAuth.headers(a, _clientId),
+    );
     if (seq != _routeSeq) return; // the user picked something else meanwhile
     if (reachable) {
       _useRoute(a, 'direct');
@@ -329,7 +350,10 @@ class RobotRegistry extends ChangeNotifier {
   }
 
   Future<void> _routeLanFirst(PairedRobot a, int seq) async {
-    final reachable = await _lanProbe(a.lanUrl, PairingAuth.headers(a, _clientId));
+    final reachable = await _lanProbe(
+      a.lanUrl,
+      PairingAuth.headers(a, _clientId),
+    );
     if (seq != _routeSeq) return; // the user picked something else meanwhile
     _useRoute(a, reachable ? 'lan' : 'relay');
     notifyListeners();
@@ -346,10 +370,13 @@ class RobotRegistry extends ChangeNotifier {
       return;
     }
     _activeRoute = route;
-    // The direct (Tailscale) route carries control only. Video keeps going
+    // A Tailscale direct route carries control only. Video keeps going
     // through the backend's HTTP relay + Cloudflare TURN, exactly as on the
-    // relay route, so it is configured as if the relay were in use.
-    final cameraRoute = route == 'direct' ? 'relay' : route;
+    // relay route, so it is configured as if the relay were in use. A direct
+    // LAN address serves video from the robot itself, like the LAN route.
+    final cameraRoute = route == 'direct' && a.directIsTailscale
+        ? 'relay'
+        : route;
     final controlViaBackend = route == 'relay' && a.usesBackendRelay;
     final cameraViaBackend = cameraRoute == 'relay' && a.usesBackendRelay;
     _rosbridge.configureEndpoint(
@@ -365,10 +392,14 @@ class RobotRegistry extends ChangeNotifier {
   }
 
   /// Where the WHEP video of [robot] is served for a route: the QR's `c`
-  /// when given, else the robot's MediaMTX on the LAN, else (fleet relay)
-  /// the same MediaMTX reached through the backend's HTTP relay.
+  /// when given, else the robot's MediaMTX on the LAN (or the direct LAN
+  /// address), else (fleet relay) the same MediaMTX reached through the
+  /// backend's HTTP relay.
   static String cameraBaseUrlFor(PairedRobot robot, String route) {
     if (robot.cameraUrl.isNotEmpty) return robot.cameraUrl;
+    if (route == 'direct' && robot.hasDirect) {
+      return 'http://${robot.directAddress}:${PairedRobot.webrtcPort}';
+    }
     if (route == 'lan' && robot.hasLan) {
       return 'http://${robot.lanAddress}:${PairedRobot.webrtcPort}';
     }

@@ -8,8 +8,8 @@ import 'package:provider/provider.dart';
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 import '../providers/phone_location_provider.dart';
+import '../providers/recorder_provider.dart';
 import '../providers/weather_provider.dart';
-import '../services/rosbridge_service.dart';
 import '../providers/robot_fleet_provider.dart';
 import '../providers/robot_info_provider.dart';
 import '../providers/robot_registry.dart';
@@ -113,6 +113,7 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
         children: [
           _DashboardHomePage(
             onShowVersions: () => setState(() => _selectedIndex = 3),
+            onOpenSettings: () => setState(() => _selectedIndex = 3),
             onOpenRun: () {
               context.read<MissionMockProvider>().selectMode(MissionMode.run);
               // A panel the operator collapsed earlier would hide the run
@@ -139,7 +140,7 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
               },
             ),
           ),
-          const _MoreTab(),
+          _MoreTab(visible: _selectedIndex == 3),
         ],
       ),
       bottomNavigationBar: hideNav
@@ -185,16 +186,26 @@ class _ManualControlTabState extends State<_ManualControlTab> {
   @override
   Widget build(BuildContext context) {
     return Consumer<MissionMockProvider>(
-      builder: (context, mission, _) =>
-          ManualControlOverlay(mission: mission, onExit: widget.onGoHome),
+      builder: (context, mission, _) => ManualControlOverlay(
+        mission: mission,
+        onExit: widget.onGoHome,
+        recorder: context.read<RecorderProvider>(),
+      ),
     );
   }
 }
 
 class _DashboardHomePage extends StatelessWidget {
-  const _DashboardHomePage({this.onShowVersions, this.onOpenRun});
+  const _DashboardHomePage({
+    this.onShowVersions,
+    this.onOpenSettings,
+    this.onOpenRun,
+  });
 
   final VoidCallback? onShowVersions;
+
+  /// Switches to the 更多 tab, where the robot settings live.
+  final VoidCallback? onOpenSettings;
 
   /// Opens the map on its run panel (navigation only; never sends a command).
   final VoidCallback? onOpenRun;
@@ -216,10 +227,10 @@ class _DashboardHomePage extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
           physics: const BouncingScrollPhysics(),
           children: [
-            const _DashboardHeader(),
+            _DashboardHeader(onOpenSettings: onOpenSettings),
             const SizedBox(height: 16),
             if (mismatch) ...[
-              const IdentityMismatchNotice(),
+              IdentityMismatchNotice(onOpenSettings: onOpenSettings),
               const SizedBox(height: 10),
             ],
             if (incompatible) ...[
@@ -237,7 +248,9 @@ class _DashboardHomePage extends StatelessWidget {
 }
 
 class _DashboardHeader extends StatelessWidget {
-  const _DashboardHeader();
+  const _DashboardHeader({this.onOpenSettings});
+
+  final VoidCallback? onOpenSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -261,9 +274,7 @@ class _DashboardHeader extends StatelessWidget {
           type: MaterialType.transparency,
           child: InkWell(
             borderRadius: BorderRadius.circular(8),
-            onTap: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const RobotsScreen())),
+            onTap: onOpenSettings,
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
               child: Row(
@@ -782,12 +793,17 @@ class _VerticalDivider extends StatelessWidget {
 }
 
 class _MoreTab extends StatelessWidget {
-  const _MoreTab();
+  const _MoreTab({required this.visible});
+
+  /// This tab is on screen (the shell keeps every tab alive).
+  final bool visible;
 
   @override
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
 
+    // The app's one settings page: robots and their 直連 IP are edited right
+    // here, not on a separate page.
     return ColoredBox(
       color: const Color(0xFFF6F7F8),
       child: SafeArea(
@@ -800,37 +816,16 @@ class _MoreTab extends StatelessWidget {
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 16),
+            RobotSettingsSection(visible: visible),
+            const SizedBox(height: 16),
             _DashboardCard(
-              child: Column(
-                children: [
-                  _MoreActionRow(
-                    icon: AppIcons.bot,
-                    title: '我的機器人',
-                    detail: () {
-                      final active = context.watch<RobotRegistry>().active;
-                      if (active == null) return '尚未配對 · 掃描 QR code';
-                      final registry = context.watch<RobotRegistry>();
-                      final route = registry.activeRoute == 'direct'
-                          ? '直連 ${active.directAddress}'
-                          : active.usesLan
-                          ? 'LAN ${active.lanAddress}'
-                          : '遠端';
-                      return '${active.displayName} · $route';
-                    }(),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const RobotsScreen()),
-                    ),
-                  ),
-                  const Divider(height: 24),
-                  _MoreActionRow(
-                    icon: AppIcons.video,
-                    title: '錄製 / Bag',
-                    detail: '錄製狀態、清單、上傳 R2',
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const RecorderScreen()),
-                    ),
-                  ),
-                ],
+              child: _MoreActionRow(
+                icon: AppIcons.video,
+                title: '錄製 / Bag',
+                detail: '錄製狀態、清單、上傳 R2',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const RecorderScreen()),
+                ),
               ),
             ),
             const SizedBox(height: 10),
@@ -853,9 +848,6 @@ class _AdvancedSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // With a paired robot the rosbridge host is that robot's relay/LAN address
-    // (managed under 我的機器人), not something typed here.
-    final paired = context.select<RobotRegistry, bool>((r) => r.active != null);
     // ListTile-based children paint ink on the nearest Material; the card is a
     // plain DecoratedBox, so give them a transparent one to draw on.
     return Material(
@@ -873,25 +865,13 @@ class _AdvancedSection extends StatelessWidget {
             style: TextStyle(fontWeight: FontWeight.w900),
           ),
           subtitle: const Text(
-            '連線設定、Demo 模式、資料來源',
+            'Demo 模式、資料來源',
             style: TextStyle(
               color: Color(0xFF78909C),
               fontWeight: FontWeight.w700,
             ),
           ),
           children: [
-            _MoreActionRow(
-              icon: AppIcons.router,
-              title: '手動區網 IP',
-              detail: paired
-                  ? '已配對機器人由「我的機器人」管理'
-                  : mission.robotIp.isEmpty
-                  ? '未設定'
-                  : mission.robotIp,
-              onTap: () =>
-                  _showAppSheet(context, const _ConnectionSettingsSheet()),
-            ),
-            const SizedBox(height: 4),
             const _DemoModeTile(),
             const SizedBox(height: 8),
             _InfoRow(
@@ -911,6 +891,11 @@ class _AdvancedSection extends StatelessWidget {
               detail: mission.mockDataEnabled
                   ? 'Demo 不代表真機安全'
                   : '尚未提供安全狀態 topic',
+            ),
+            _InfoRow(
+              icon: AppIcons.link,
+              title: 'rosbridge',
+              detail: mission.rosbridgeUrl,
             ),
           ],
         ),
@@ -1957,21 +1942,6 @@ class _LayerSwitch extends StatelessWidget {
   }
 }
 
-/// True while changing the connection or data source would disturb a live
-/// operation (mission, recording, manual drive, pending save).
-bool _connectionSettingsLocked(MissionMockProvider mission) {
-  return mission.connectionSettingsPending ||
-      mission.planningMutationPending ||
-      mission.navCommandPending ||
-      mission.cancelPending ||
-      mission.navStatus == NavMockStatus.executing ||
-      mission.navStatus == NavMockStatus.paused ||
-      mission.recordingType != null ||
-      mission.recordCommandPending ||
-      mission.manualControlActive ||
-      mission.hasPendingRecordSave;
-}
-
 class _DemoModeTile extends StatelessWidget {
   const _DemoModeTile();
 
@@ -1994,139 +1964,12 @@ class _DemoModeTile extends StatelessWidget {
         ),
       ),
       value: mission.mockDataEnabled,
-      onChanged: _connectionSettingsLocked(mission)
+      onChanged: connectionSettingsLocked(mission)
           ? null
           : (value) {
               unawaited(mission.setMockDataEnabled(value));
             },
     );
-  }
-}
-
-class _ConnectionSettingsSheet extends StatefulWidget {
-  const _ConnectionSettingsSheet();
-
-  @override
-  State<_ConnectionSettingsSheet> createState() =>
-      _ConnectionSettingsSheetState();
-}
-
-class _ConnectionSettingsSheetState extends State<_ConnectionSettingsSheet> {
-  final _formKey = GlobalKey<FormState>();
-  final _ipController = TextEditingController();
-  bool _initialized = false;
-  bool _saving = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_initialized) {
-      return;
-    }
-    final host = context.read<MissionMockProvider>().robotIp;
-    _ipController.text = RosbridgeService.validateRobotIp(host) == null
-        ? host
-        : '';
-    _initialized = true;
-  }
-
-  @override
-  void dispose() {
-    _ipController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final mission = context.watch<MissionMockProvider>();
-    final settingsLocked = _connectionSettingsLocked(mission);
-
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const _SheetHandle(),
-            const SizedBox(height: 18),
-            const Text(
-              '手動區網 IP',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              '已配對的機器人請到「我的機器人」設定 LAN 位址；這裡僅供未配對的本機開發連線使用。',
-              style: TextStyle(
-                color: Color(0xFF78909C),
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 14),
-            Form(
-              key: _formKey,
-              child: TextFormField(
-                controller: _ipController,
-                keyboardType: TextInputType.text,
-                validator: (value) =>
-                    RosbridgeService.validateRobotIp(value ?? ''),
-                decoration: const InputDecoration(
-                  labelText: '區網模式機器人 IP',
-                  hintText: '192.168.1.100',
-                  prefixIcon: Icon(AppIcons.router),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _saving || settingsLocked
-                    ? null
-                    : () => _saveRobotIp(context),
-                icon: _saving
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(AppIcons.radioTower),
-                label: Text(_saving ? '儲存中' : '儲存並重連'),
-              ),
-            ),
-            const SizedBox(height: 16),
-            _InfoRow(
-              icon: AppIcons.link,
-              title: 'rosbridge',
-              detail: mission.rosbridgeUrl,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _saveRobotIp(BuildContext context) async {
-    if (!(_formKey.currentState?.validate() ?? false)) {
-      return;
-    }
-    setState(() => _saving = true);
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-    final mission = context.read<MissionMockProvider>();
-    final error = await mission.updateRobotIp(_ipController.text);
-    if (!mounted) {
-      return;
-    }
-    setState(() => _saving = false);
-    if (error != null) {
-      messenger.showSnackBar(SnackBar(content: Text(error)));
-      return;
-    }
-    messenger.showSnackBar(const SnackBar(content: Text('區網機器人 IP 已更新')));
-    navigator.pop();
   }
 }
 
