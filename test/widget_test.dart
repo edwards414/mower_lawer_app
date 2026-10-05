@@ -35,16 +35,13 @@ void main() {
     expect(find.text('排程'), findsNothing);
     expect(find.text('尚未配對機器人'), findsOneWidget);
 
-    // The robot name in the header opens 我的機器人.
+    // The robot name in the header opens 我的機器人, which lives on the 更多
+    // tab (the one settings page), not on a page of its own.
     await tester.tap(find.text('尚未配對機器人'));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('還沒有配對的機器人'), findsOneWidget);
-    await tester.pageBack();
+    await tester.tap(find.byIcon(AppIcons.house));
     await tester.pump();
-    // The default Android page transition is longer than 400 ms; wait it out
-    // so the popped route stops covering the bottom navigation.
-    await tester.pump(const Duration(seconds: 1));
     expect(find.text('等待新鮮 GPS 位置'), findsWidgets);
 
     // One main card: status, battery, mission and the way into the map.
@@ -79,20 +76,27 @@ void main() {
     await tester.tap(find.byIcon(AppIcons.ellipsis));
     await tester.pump(const Duration(milliseconds: 100));
 
-    // Layers live on the map only; connection tools are folded under 進階.
+    // Layers live on the map only. Robot settings are right on this page;
+    // only Demo / data source are folded under 進階.
     expect(find.text('我的機器人'), findsOneWidget);
-    expect(find.text('進階'), findsOneWidget);
     expect(find.text('地圖圖層'), findsNothing);
     expect(find.text('連線設定（進階）'), findsNothing);
 
-    // Unpaired: the manual-IP row is honest about having no value.
-    // The section sits below the fold of the 800x600 test surface.
-    await tester.ensureVisible(find.text('進階'));
-    await tester.pump();
+    // Unpaired: the one 直連 IP field is the manual development connection,
+    // right on this page (the old 進階 sheet and LAN/直連 dialogs are gone).
+    expect(find.widgetWithText(TextField, '直連 IP'), findsOneWidget);
+    expect(find.text('手動區網 IP'), findsNothing);
+
+    // 進階 sits below the fold of the 800x600 test surface.
+    await tester.scrollUntilVisible(
+      find.text('進階'),
+      200,
+      scrollable: find
+          .ancestor(of: find.text('我的機器人'), matching: find.byType(Scrollable))
+          .first,
+    );
     await tester.tap(find.text('進階'));
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('手動區網 IP'), findsOneWidget);
-    expect(find.text('未設定'), findsOneWidget);
     expect(find.text('Demo 模式'), findsOneWidget);
 
     await tester.tap(find.text('手動控制').last);

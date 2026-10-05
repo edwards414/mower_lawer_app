@@ -188,6 +188,41 @@ void main() {
     service.dispose();
   });
 
+  test('a direct LAN IP serves video from the robot, a Tailscale one keeps it on the relay', () async {
+    final service = RosbridgeService(
+      url: 'ws://unused',
+      connector: (_, {headers = const <String, dynamic>{}, protocols = const <String>[]}) =>
+          _FakeWebSocketChannel(),
+    );
+    final registry = RobotRegistry(
+      rosbridge: service,
+      store: MemoryPairingStore(),
+      backend: BackendClient(client: MockClient((_) async => http.Response('{}', 404))),
+      lanProbe: (url, _) async => !url.contains('192.168.1.5'), // only the direct IP answers
+    );
+    await registry.load();
+    await registry.pairFromText(_backendQr);
+
+    await registry.update('MW-7K3Q9P', directAddress: '192.168.0.42');
+    await _flush();
+    expect(registry.activeRoute, 'direct');
+    expect(service.url, 'ws://192.168.0.42:9090');
+    expect(service.cameraBaseUrl, 'http://192.168.0.42:8889');
+    expect(service.cameraIceServersUrl, '', reason: 'LAN: host candidates only');
+
+    await registry.update('MW-7K3Q9P', directAddress: '100.67.138.19');
+    await _flush();
+    expect(registry.activeRoute, 'direct');
+    expect(service.url, 'ws://100.67.138.19:9090');
+    expect(service.cameraBaseUrl, 'https://api.mower.fxrbindi.com/v1/robots/MW-7K3Q9P/http');
+    expect(service.cameraIceServersUrl, 'https://api.mower.fxrbindi.com/v1/robots/MW-7K3Q9P/turn');
+
+    expect(PairedRobot.fromPairUrl(_backendQr).copyWith(directAddress: '100.127.0.1').directIsTailscale, isTrue);
+    expect(PairedRobot.fromPairUrl(_backendQr).copyWith(directAddress: '100.128.0.1').directIsTailscale, isFalse);
+    expect(PairedRobot.fromPairUrl(_backendQr).copyWith(directAddress: '10.0.0.7').directIsTailscale, isFalse);
+    service.dispose();
+  });
+
   test('registry reads backend status and adopts the reported LAN address', () async {
     final channel = _FakeWebSocketChannel();
     final service = RosbridgeService(

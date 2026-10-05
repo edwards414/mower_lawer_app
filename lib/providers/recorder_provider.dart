@@ -30,6 +30,14 @@ class RecordingStatus {
   );
 }
 
+/// Outcome of a /mower_recorder/start|stop call.
+class RecorderCommandResult {
+  const RecorderCommandResult({required this.ok, required this.message});
+
+  final bool ok;
+  final String message;
+}
+
 /// One recorded run, from the /mower_recorder/bags list.
 class BagInfo {
   const BagInfo({
@@ -66,6 +74,7 @@ class BagInfo {
 ///  - subscribes /mower_recorder/bags    (the list + network/R2 state)
 ///  - publishes  /mower_recorder/command (refresh/rename/delete/upload_now)
 ///  - listens    /mower_recorder/command_result (toast text)
+///  - calls      /mower_recorder/start|stop (record toggle on the remote panel)
 class RecorderProvider extends ChangeNotifier {
   RecorderProvider({required RosbridgeService rosbridge})
     : _rosbridge = rosbridge {
@@ -79,6 +88,8 @@ class RecorderProvider extends ChangeNotifier {
   static const _bagsTopic = '/mower_recorder/bags';
   static const _commandTopic = '/mower_recorder/command';
   static const _resultTopic = '/mower_recorder/command_result';
+  static const _startService = '/mower_recorder/start';
+  static const _stopService = '/mower_recorder/stop';
   static const _latchedQos = {
     'durability': 'transient_local',
     'reliability': 'reliable',
@@ -90,8 +101,10 @@ class RecorderProvider extends ChangeNotifier {
   bool _r2Configured = false;
   String? _lastResult;
   int _cmdSeq = 0;
+  bool _commandPending = false;
 
   RecordingStatus get status => _status;
+  bool get commandPending => _commandPending;
   List<BagInfo> get bags => _bags;
   bool get networkOk => _networkOk;
   bool get r2Configured => _r2Configured;
@@ -162,6 +175,45 @@ class RecorderProvider extends ChangeNotifier {
   void delete(String runId) => _send({'action': 'delete', 'run_id': runId});
 
   void uploadNow() => _send({'action': 'upload_now'});
+
+  /// Starts a new bag run (recorder_manager /mower_recorder/start). Returns
+  /// the robot's message; [RecorderCommandResult.ok] only on a real ACK.
+  Future<RecorderCommandResult> startRecording() =>
+      _trigger(_startService, const Duration(seconds: 12));
+
+  /// Stops and finalizes the current run. The robot waits for every recorder
+  /// to index its mcap (up to 20 s each), so the timeout is longer.
+  Future<RecorderCommandResult> stopRecording() =>
+      _trigger(_stopService, const Duration(seconds: 45));
+
+  Future<RecorderCommandResult> _trigger(
+    String service,
+    Duration timeout,
+  ) async {
+    if (_commandPending) {
+      return const RecorderCommandResult(ok: false, message: '上一個指令還在處理');
+    }
+    _commandPending = true;
+    notifyListeners();
+    try {
+      final res = await _rosbridge.callService(service, timeout: timeout);
+      final String message;
+      if (res.message.isNotEmpty) {
+        message = res.message;
+      } else if (!res.result) {
+        // The bridge refused the call without a Trigger response: the normal
+        // stack runs without mower_recorder (record:=false); recording is the
+        // data-collection stack (docs/資料收集錄製程序.md).
+        message = '機器人上沒有在跑錄製服務（先在機器人執行 sudo mower-data-collection.sh start）';
+      } else {
+        message = res.success ? '完成' : '機器人沒有回應';
+      }
+      return RecorderCommandResult(ok: res.success, message: message);
+    } finally {
+      _commandPending = false;
+      notifyListeners();
+    }
+  }
 
   @override
   void dispose() {

@@ -113,11 +113,20 @@ void main() {
     await registry.update(robot.id, preferLan: true);
     expect(uris.last.toString(), 'ws://192.168.0.113:9090');
 
-    // a second app start reads the same robots and client id back
-    final again = RobotRegistry(rosbridge: service, store: store);
+    // a second app start reads the same robots and client id back; the old
+    // "固定走 LAN" pin of a robot with a relay comes back as its 直連 IP
+    final again = RobotRegistry(
+      rosbridge: service,
+      store: store,
+      lanProbe: (url, _) async => url == 'ws://192.168.0.113:9090',
+    );
     await again.load();
+    await Future<void>.delayed(Duration.zero);
     expect(again.robots.single.id, 'MW-7K3Q9P');
-    expect(again.active?.preferLan, isTrue);
+    expect(again.active?.preferLan, isFalse);
+    expect(again.active?.directAddress, '192.168.0.113');
+    expect(again.activeRoute, 'direct');
+    expect(uris.last.toString(), 'ws://192.168.0.113:9090');
     expect(again.clientId, registry.clientId);
 
     // identity check against /robot/info
@@ -130,6 +139,30 @@ void main() {
     expect(again.robots, isEmpty);
     expect(again.active, isNull);
 
+    service.dispose();
+  });
+
+  test('a LAN-only robot keeps its LAN pin across app starts', () async {
+    final service = RosbridgeService(
+      url: 'ws://default.test:9090',
+      connector: (_, {headers = const <String, dynamic>{}, protocols = const <String>[]}) =>
+          _FakeWebSocketChannel(),
+    );
+    final store = MemoryPairingStore();
+    final registry = RobotRegistry(rosbridge: service, store: store);
+    await registry.load();
+    await registry.pairFromText('id=MW-ABC123&s=$_vectorSecret&l=10.0.0.5');
+
+    // no relay: the LAN is the only way in, nothing to migrate or probe
+    final again = RobotRegistry(
+      rosbridge: service,
+      store: store,
+      lanProbe: (_, _) async => fail('a pinned LAN is not probed'),
+    );
+    await again.load();
+    expect(again.active?.preferLan, isTrue);
+    expect(again.active?.directAddress, isEmpty);
+    expect(again.activeRoute, 'lan');
     service.dispose();
   });
 

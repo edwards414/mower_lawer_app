@@ -35,19 +35,22 @@ class PairedRobot {
   /// Empty when the robot has no relay.
   final String relayUrl;
 
-  /// LAN IP or host of the robot, editable (DHCP changes it).
+  /// LAN IP of the robot from the QR (`l`), refreshed by the backend with
+  /// every heartbeat. Not edited by hand: a LAN IP the operator types goes
+  /// into [directAddress].
   final String lanAddress;
 
-  /// Tailscale (or any other fixed, routable) address of the robot, entered
-  /// by hand. Unlike [lanAddress] the robot's heartbeat never replaces it, and
-  /// it is tried before everything else: a direct WireGuard path avoids the
-  /// relay hop (and its latency) when the phone is on the same tailnet.
+  /// The one "直連 IP" the operator enters: the robot's LAN IP or its
+  /// Tailscale address. Unlike [lanAddress] the robot's heartbeat never
+  /// replaces it (on 4G that would be a carrier-private 10.x), and it is
+  /// tried before everything else, skipping the relay hop.
   final String directAddress;
 
   /// Optional WHEP base URL override (`c` in the QR); empty = derive.
   final String cameraUrl;
 
-  /// Connect over the LAN instead of the relay.
+  /// Use the LAN without probing it. Set at pairing for a robot without a
+  /// relay, where the LAN is the only way in.
   final bool preferLan;
   final DateTime? pairedAt;
 
@@ -55,6 +58,16 @@ class PairedRobot {
   bool get hasRelay => relayUrl.isNotEmpty;
   bool get hasLan => lanAddress.isNotEmpty;
   bool get hasDirect => directAddress.isNotEmpty;
+
+  /// [directAddress] is a Tailscale one (CGNAT 100.64.0.0/10). Over it only
+  /// control goes direct and video stays on the relay; any other direct
+  /// address is on the LAN and carries video too.
+  bool get directIsTailscale {
+    final parts = directAddress.split('.');
+    if (parts.length != 4) return false;
+    final second = int.tryParse(parts[1]) ?? -1;
+    return parts[0] == '100' && second >= 64 && second <= 127;
+  }
 
   String get lanUrl => hasLan ? 'ws://$lanAddress:$rosbridgePort' : '';
   String get directUrl => hasDirect ? 'ws://$directAddress:$rosbridgePort' : '';
@@ -166,7 +179,9 @@ class PairedRobot {
     }
     Map<String, String> params;
     final uri = Uri.tryParse(trimmed);
-    if (uri != null && uri.hasQuery && (uri.path.endsWith('pair') || uri.host == 'pair')) {
+    if (uri != null &&
+        uri.hasQuery &&
+        (uri.path.endsWith('pair') || uri.host == 'pair')) {
       params = uri.queryParameters;
     } else if (trimmed.contains('id=') && trimmed.contains('s=')) {
       params = Uri.splitQueryString(trimmed.replaceFirst(RegExp(r'^\?'), ''));
@@ -182,7 +197,9 @@ class PairedRobot {
       throw const FormatException('配對碼裡的密鑰無效');
     }
     final relay = (params['h'] ?? '').trim();
-    if (relay.isNotEmpty && !relay.startsWith('ws://') && !relay.startsWith('wss://')) {
+    if (relay.isNotEmpty &&
+        !relay.startsWith('ws://') &&
+        !relay.startsWith('wss://')) {
       throw const FormatException('relay 位址必須是 ws:// 或 wss://');
     }
     final lan = (params['l'] ?? '').trim();
