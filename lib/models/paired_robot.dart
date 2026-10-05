@@ -11,6 +11,7 @@ class PairedRobot {
     this.name = '',
     this.relayUrl = '',
     this.lanAddress = '',
+    this.directAddress = '',
     this.cameraUrl = '',
     this.preferLan = false,
     this.pairedAt,
@@ -37,6 +38,12 @@ class PairedRobot {
   /// LAN IP or host of the robot, editable (DHCP changes it).
   final String lanAddress;
 
+  /// Tailscale (or any other fixed, routable) address of the robot, entered
+  /// by hand. Unlike [lanAddress] the robot's heartbeat never replaces it, and
+  /// it is tried before everything else: a direct WireGuard path avoids the
+  /// relay hop (and its latency) when the phone is on the same tailnet.
+  final String directAddress;
+
   /// Optional WHEP base URL override (`c` in the QR); empty = derive.
   final String cameraUrl;
 
@@ -47,8 +54,10 @@ class PairedRobot {
   String get displayName => name.isNotEmpty ? name : id;
   bool get hasRelay => relayUrl.isNotEmpty;
   bool get hasLan => lanAddress.isNotEmpty;
+  bool get hasDirect => directAddress.isNotEmpty;
 
   String get lanUrl => hasLan ? 'ws://$lanAddress:$rosbridgePort' : '';
+  String get directUrl => hasDirect ? 'ws://$directAddress:$rosbridgePort' : '';
 
   /// Path of the fleet backend's app relay (docs/BACKEND_ARCHITECTURE.md §7).
   static const backendRelayPath = '/v1/relay/app';
@@ -105,6 +114,7 @@ class PairedRobot {
     String? name,
     String? relayUrl,
     String? lanAddress,
+    String? directAddress,
     String? cameraUrl,
     bool? preferLan,
     String? secret,
@@ -115,6 +125,7 @@ class PairedRobot {
       name: name ?? this.name,
       relayUrl: relayUrl ?? this.relayUrl,
       lanAddress: lanAddress ?? this.lanAddress,
+      directAddress: directAddress ?? this.directAddress,
       cameraUrl: cameraUrl ?? this.cameraUrl,
       preferLan: preferLan ?? this.preferLan,
       pairedAt: pairedAt,
@@ -127,6 +138,7 @@ class PairedRobot {
     'name': name,
     'relay_url': relayUrl,
     'lan_address': lanAddress,
+    'direct_address': directAddress,
     'camera_url': cameraUrl,
     'prefer_lan': preferLan,
     'paired_at': pairedAt?.toUtc().toIso8601String(),
@@ -138,6 +150,7 @@ class PairedRobot {
     name: j['name']?.toString() ?? '',
     relayUrl: j['relay_url']?.toString() ?? '',
     lanAddress: j['lan_address']?.toString() ?? '',
+    directAddress: j['direct_address']?.toString() ?? '',
     cameraUrl: j['camera_url']?.toString() ?? '',
     preferLan: j['prefer_lan'] == true,
     pairedAt: DateTime.tryParse(j['paired_at']?.toString() ?? ''),

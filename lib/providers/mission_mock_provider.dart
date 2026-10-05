@@ -145,8 +145,11 @@ class MissionMockProvider extends ChangeNotifier {
   static const Duration _heartbeatTimeout = Duration(seconds: 3);
   static const Duration _poseTimeout = Duration(seconds: 3);
   static const Duration _navStatusTimeout = Duration(seconds: 5);
+  // The robot-issued clock must round-trip phone <-> relay <-> robot inside
+  // the robot's manual_velocity_guard max_input_age_s (mower_rsd.yaml). Keep
+  // the two in step: the 4G + Cloudflare relay path measured ~0.3-0.4 s.
   static const Duration _manualCommandClockTimeout = Duration(
-    milliseconds: 200,
+    milliseconds: 800,
   );
   static const Duration _ambiguousCancelRetryInterval = Duration(seconds: 2);
   double? _batteryPercent;

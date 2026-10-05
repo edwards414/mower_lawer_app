@@ -809,7 +809,13 @@ class _MoreTab extends StatelessWidget {
                     detail: () {
                       final active = context.watch<RobotRegistry>().active;
                       if (active == null) return '尚未配對 · 掃描 QR code';
-                      return '${active.displayName} · ${active.usesLan ? 'LAN ${active.lanAddress}' : '遠端'}';
+                      final registry = context.watch<RobotRegistry>();
+                      final route = registry.activeRoute == 'direct'
+                          ? '直連 ${active.directAddress}'
+                          : active.usesLan
+                          ? 'LAN ${active.lanAddress}'
+                          : '遠端';
+                      return '${active.displayName} · $route';
                     }(),
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute(builder: (_) => const RobotsScreen()),

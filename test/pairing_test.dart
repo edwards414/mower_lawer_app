@@ -132,6 +132,51 @@ void main() {
 
     service.dispose();
   });
+
+  for (final reachable in [true, false]) {
+    test('direct (Tailscale) address is tried first, reachable=$reachable', () async {
+      final uris = <Uri>[];
+      final service = RosbridgeService(
+        url: 'ws://default.test:9090',
+        connector: (uri, {headers = const <String, dynamic>{}, protocols = const <String>[]}) {
+          uris.add(uri);
+          return _FakeWebSocketChannel();
+        },
+      );
+      final probed = <String>[];
+      final registry = RobotRegistry(
+        rosbridge: service,
+        store: MemoryPairingStore(),
+        lanProbe: (url, headers) async {
+          probed.add(url);
+          return reachable && url == 'ws://100.67.138.19:9090';
+        },
+      );
+      await registry.load();
+      final robot = await registry.pairFromText(_qr);
+      await registry.update(robot.id, directAddress: '100.67.138.19');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(probed.first, 'ws://100.67.138.19:9090');
+      if (reachable) {
+        expect(registry.activeRoute, 'direct');
+        expect(uris.last.toString(), 'ws://100.67.138.19:9090');
+        // control only: video stays on the backend relay + TURN
+        expect(service.cameraBaseUrl, isNot(contains('100.67.138.19')));
+      } else {
+        // phone off the tailnet: the usual relay choice applies
+        expect(registry.activeRoute, isNot('direct'));
+        expect(uris.last.toString(), isNot(contains('100.67.138.19')));
+      }
+
+      // the heartbeat's LAN address never touches the direct one
+      await registry.update(robot.id, lanAddress: '10.247.112.64');
+      expect(registry.active!.directAddress, '100.67.138.19');
+
+      service.dispose();
+    });
+  }
 }
 
 class _FakeWebSocketChannel implements WebSocketChannel {

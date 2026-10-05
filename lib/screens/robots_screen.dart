@@ -199,7 +199,7 @@ class _RobotCard extends StatelessWidget {
   final PairedRobot robot;
   final bool active;
 
-  /// 'lan' / 'relay' for the active robot, '' otherwise.
+  /// 'direct' / 'lan' / 'relay' for the active robot, '' otherwise.
   final String route;
   final bool connected;
   final bool online;
@@ -210,8 +210,10 @@ class _RobotCard extends StatelessWidget {
   final String? backendError;
 
   String get _routeLabel {
+    if (active && route == 'direct') return '直連 ${robot.directAddress}';
     if (active && route == 'lan') return 'LAN ${robot.lanAddress}';
     if (active && route == 'relay') return '遠端 relay';
+    if (active && robot.hasDirect && route.isEmpty) return '偵測直連中…';
     if (active && robot.hasRelay && robot.hasLan) return '偵測 LAN 中…';
     if (robot.usesLan) return 'LAN ${robot.lanAddress}';
     if (robot.hasRelay) return '遠端 relay';
@@ -309,6 +311,7 @@ class _RobotCard extends StatelessWidget {
                   child: Text(robot.preferLan ? '自動選路' : '固定走 LAN'),
                 ),
               TextButton(onPressed: () => _editLan(context, robot), child: const Text('LAN 位址')),
+              TextButton(onPressed: () => _editDirect(context, robot), child: const Text('直連位址')),
               TextButton(onPressed: () => _rename(context, robot), child: const Text('改名')),
               const Spacer(),
               IconButton(
@@ -351,6 +354,43 @@ class _RobotCard extends StatelessWidget {
       lanAddress: value,
       preferLan: value.isNotEmpty && !robot.hasRelay ? true : null,
     );
+  }
+
+  /// Tailscale address of the robot. Kept apart from the LAN address because
+  /// the robot's heartbeat overwrites that one with whatever IP it has on its
+  /// default route (a carrier-private 10.x on 4G).
+  Future<void> _editDirect(BuildContext context, PairedRobot robot) async {
+    final controller = TextEditingController(text: robot.directAddress);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('直連位址 (Tailscale)'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(hintText: '100.x.y.z'),
+            ),
+            const SizedBox(height: 8),
+            const Text('手機需先開啟 Tailscale。連不上時會自動改走 LAN / 遠端 relay。清空即停用。'),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('儲存')),
+        ],
+      ),
+    );
+    if (value == null || !context.mounted) return;
+    if (value.isNotEmpty && RosbridgeService.validateRobotIp(value) != null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('請輸入有效的 IPv4 位址')));
+      return;
+    }
+    await context.read<RobotRegistry>().update(robot.id, directAddress: value);
   }
 
   Future<void> _rename(BuildContext context, PairedRobot robot) async {

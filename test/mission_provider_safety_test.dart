@@ -733,12 +733,12 @@ void main() {
       await _flushEvents();
       expect(provider.canDriveManually, isTrue);
 
-      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await Future<void>.delayed(const Duration(milliseconds: 600));
       ros.emit('/manual_command_clock', {
         'stamp': {'sec': 123, 'nanosec': 456},
         'frame_id': 'manual-session-v1:test-session',
       });
-      await Future<void>.delayed(const Duration(milliseconds: 80));
+      await Future<void>.delayed(const Duration(milliseconds: 250));
       expect(provider.canDriveManually, isFalse);
 
       ros.emit('/manual_command_clock', {

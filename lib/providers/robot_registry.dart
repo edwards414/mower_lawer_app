@@ -110,8 +110,8 @@ class RobotRegistry extends ChangeNotifier {
   bool get loaded => _loaded;
   String get clientId => _clientId;
 
-  /// How the active robot is reached right now: 'lan', 'relay' or '' while
-  /// the LAN probe is still running / nothing is configured.
+  /// How the active robot is reached right now: 'direct', 'lan', 'relay' or ''
+  /// while a probe is still running / nothing is configured.
   String get activeRoute => _activeRoute;
 
   /// Last backend status of a robot (null until [refreshStatus] ran).
@@ -222,6 +222,7 @@ class RobotRegistry extends ChangeNotifier {
     String id, {
     String? name,
     String? lanAddress,
+    String? directAddress,
     String? relayUrl,
     bool? preferLan,
   }) async {
@@ -231,6 +232,7 @@ class RobotRegistry extends ChangeNotifier {
           r.copyWith(
             name: name,
             lanAddress: lanAddress,
+            directAddress: directAddress,
             relayUrl: relayUrl,
             preferLan: preferLan,
           )
@@ -291,6 +293,28 @@ class RobotRegistry extends ChangeNotifier {
     final a = active;
     if (a == null) return;
     final seq = ++_routeSeq;
+    if (a.hasDirect) {
+      // A hand-entered Tailscale address goes first; if it does not answer
+      // (phone off the tailnet) the usual LAN / relay choice applies.
+      _activeRoute = '';
+      unawaited(_routeDirectFirst(a, seq));
+      return;
+    }
+    _applyLanOrRelay(a, seq);
+  }
+
+  Future<void> _routeDirectFirst(PairedRobot a, int seq) async {
+    final reachable = await _lanProbe(a.directUrl, PairingAuth.headers(a, _clientId));
+    if (seq != _routeSeq) return; // the user picked something else meanwhile
+    if (reachable) {
+      _useRoute(a, 'direct');
+    } else {
+      _applyLanOrRelay(a, seq);
+    }
+    notifyListeners();
+  }
+
+  void _applyLanOrRelay(PairedRobot a, int seq) {
     if (a.preferLan && a.hasLan) {
       _useRoute(a, 'lan');
       return;
@@ -312,22 +336,31 @@ class RobotRegistry extends ChangeNotifier {
   }
 
   void _useRoute(PairedRobot a, String route) {
-    final url = route == 'lan' ? a.lanUrl : a.relayWsUrl;
+    final url = switch (route) {
+      'direct' => a.directUrl,
+      'lan' => a.lanUrl,
+      _ => a.relayWsUrl,
+    };
     if (url.isEmpty) {
       _activeRoute = '';
       return;
     }
     _activeRoute = route;
-    final viaBackend = route == 'relay' && a.usesBackendRelay;
+    // The direct (Tailscale) route carries control only. Video keeps going
+    // through the backend's HTTP relay + Cloudflare TURN, exactly as on the
+    // relay route, so it is configured as if the relay were in use.
+    final cameraRoute = route == 'direct' ? 'relay' : route;
+    final controlViaBackend = route == 'relay' && a.usesBackendRelay;
+    final cameraViaBackend = cameraRoute == 'relay' && a.usesBackendRelay;
     _rosbridge.configureEndpoint(
       url: url,
       authHeaders: authHeaders,
-      framed: viaBackend,
-      cameraBaseUrl: cameraBaseUrlFor(a, route),
+      framed: controlViaBackend,
+      cameraBaseUrl: cameraBaseUrlFor(a, cameraRoute),
       // Through the backend the WHEP signaling is authenticated like every
       // other backend call, and TURN credentials come from the same place.
-      cameraAuth: viaBackend && a.cameraUrl.isEmpty,
-      cameraIceServersUrl: viaBackend ? a.turnUrl : '',
+      cameraAuth: cameraViaBackend && a.cameraUrl.isEmpty,
+      cameraIceServersUrl: cameraViaBackend ? a.turnUrl : '',
     );
   }
 
