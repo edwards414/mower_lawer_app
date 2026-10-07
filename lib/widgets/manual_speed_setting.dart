@@ -83,16 +83,6 @@ class ManualSpeedSetting extends StatelessWidget {
           divisions: divisions,
           inset: _overlayRadius + _trackHeight / 2,
         ),
-        const SizedBox(height: 8),
-        const Text(
-          '搖桿推到底時的前進／後退速度，存在這支手機上。'
-          '0.40 以上再同時打滿轉向，外側輪會頂到馬達上限。',
-          style: TextStyle(
-            color: _kGrey,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
       ],
     );
   }
