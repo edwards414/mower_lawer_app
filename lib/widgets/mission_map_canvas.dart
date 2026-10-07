@@ -176,6 +176,7 @@ class MissionMapCanvas extends StatefulWidget {
     this.onProjectionPainted,
     this.phonePosition,
     this.phoneAccuracyM,
+    this.centerOn,
   });
 
   final MissionMockProvider mission;
@@ -198,6 +199,11 @@ class MissionMapCanvas extends StatefulWidget {
   /// phone far from the lawn doesn't shrink the map to fit it.
   final MapPoint? phonePosition;
   final double? phoneAccuracyM;
+
+  /// When set (the robot being followed), the map is framed with this point
+  /// at the centre of the map area, zoomed out just enough that all content
+  /// stays in view. Ignored when [worldBoundsOverride] is set.
+  final MapPoint? centerOn;
 
   @override
   MissionMapCanvasState createState() => MissionMapCanvasState();
@@ -260,6 +266,7 @@ class MissionMapCanvasState extends State<MissionMapCanvas>
           onProjectionPainted: _onProjectionPainted,
           phonePosition: widget.phonePosition,
           phoneAccuracyM: widget.phoneAccuracyM,
+          centerOn: widget.centerOn,
         ),
         child: const SizedBox.expand(),
       ),
@@ -281,6 +288,7 @@ class _MissionMapPainter extends CustomPainter {
     this.onProjectionPainted,
     this.phonePosition,
     this.phoneAccuracyM,
+    this.centerOn,
   });
 
   final MissionMockProvider mission;
@@ -295,6 +303,7 @@ class _MissionMapPainter extends CustomPainter {
   final void Function(MapProjection)? onProjectionPainted;
   final MapPoint? phonePosition;
   final double? phoneAccuracyM;
+  final MapPoint? centerOn;
 
   static const Rect _fallbackWorldBounds = Rect.fromLTWH(0, 12, 104, 128);
 
@@ -310,7 +319,10 @@ class _MissionMapPainter extends CustomPainter {
     final mapRect = Rect.fromLTWH(0, 0, size.width, mapHeight);
 
     _drawGrid(canvas, mapRect);
-    final projection = _projection(mapRect, worldBoundsOverride ?? _worldBounds());
+    final projection = _projection(
+      mapRect,
+      worldBoundsOverride ?? _centeredOn(_worldBounds(), centerOn),
+    );
     final project = projection.project;
     onProjectionPainted?.call(projection);
 
@@ -580,6 +592,20 @@ class _MissionMapPainter extends CustomPainter {
       minY - padding,
       maxX + padding,
       maxY + padding,
+    );
+  }
+
+  /// [bounds] grown to be symmetric about [center], so [_projection] puts
+  /// [center] in the middle of the map while everything in [bounds] stays in
+  /// view.
+  static Rect _centeredOn(Rect bounds, MapPoint? center) {
+    if (center == null) return bounds;
+    final halfW = math.max(center.x - bounds.left, bounds.right - center.x);
+    final halfH = math.max(center.y - bounds.top, bounds.bottom - center.y);
+    return Rect.fromCenter(
+      center: Offset(center.x, center.y),
+      width: halfW * 2,
+      height: halfH * 2,
     );
   }
 

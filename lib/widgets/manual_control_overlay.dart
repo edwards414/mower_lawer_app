@@ -97,6 +97,8 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
       // Full-bleed: the map fills its panel; the joysticks just overlay it.
       bottomInset: 0,
       showScalePill: false,
+      // Driving by hand: keep the robot in the middle of the map.
+      centerOn: mission.shouldShowRobot ? mission.robotPosition : null,
     );
 
     // Always show BOTH camera and map. Portrait: camera band on top (1/4),
