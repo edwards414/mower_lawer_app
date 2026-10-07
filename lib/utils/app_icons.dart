@@ -41,6 +41,7 @@ class AppIcons {
   static const IconData cloudLightning = LucideIcons.cloudLightning300;
   static const IconData cloudUpload = LucideIcons.cloudUpload300;
   static const IconData cpu = LucideIcons.cpu300;
+  static const IconData crosshair = LucideIcons.crosshair300;
   static const IconData database = LucideIcons.database300;
   static const IconData disc = LucideIcons.disc300;
   static const IconData download = LucideIcons.download300;

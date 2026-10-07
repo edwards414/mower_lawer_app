@@ -15,13 +15,15 @@ import 'breathing_marker.dart';
 /// (freespace / risk / channel grids, zones, coverage path, robot) projected
 /// from the local map frame onto real-world lat/lon via [GeoAnchor]. The
 /// alternative to the schematic [MissionMapCanvas] when satellite mode is on.
-class SatelliteMapView extends StatelessWidget {
+class SatelliteMapView extends StatefulWidget {
   const SatelliteMapView({
     super.key,
     required this.mission,
     required this.anchor,
     this.phonePosition,
     this.phoneAccuracyM,
+    this.followRobot = false,
+    this.onFollowRobotChanged,
   });
 
   final MissionMockProvider mission;
@@ -31,17 +33,82 @@ class SatelliteMapView extends StatelessWidget {
   final LatLng? phonePosition;
   final double? phoneAccuracyM;
 
+  /// Keep the camera centred on the robot as it moves. Zoom gestures keep
+  /// following; a one-finger drag reports `false` to [onFollowRobotChanged].
+  final bool followRobot;
+  final ValueChanged<bool>? onFollowRobotChanged;
+
   /// Inject at build/run time with `--dart-define=MAPBOX_TOKEN=...` or a
   /// gitignored `--dart-define-from-file`. Never keep a fallback token in the
   /// source tree: even a Mapbox public token should be scoped and rotatable.
   static const String _mapboxToken = String.fromEnvironment('MAPBOX_TOKEN');
 
+  @override
+  State<SatelliteMapView> createState() => _SatelliteMapViewState();
+}
+
+class _SatelliteMapViewState extends State<SatelliteMapView> {
+  final _mapController = MapController();
+
+  /// A pinch or double-tap zoom is running; recentring now would fight it.
+  bool _zooming = false;
+  bool _recentreScheduled = false;
+
+  MissionMockProvider get mission => widget.mission;
+  GeoAnchor get anchor => widget.anchor;
+
+  @override
+  void didUpdateWidget(SatelliteMapView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.followRobot) _scheduleRecentre();
+  }
+
+  @override
+  void dispose() {
+    _mapController.dispose();
+    super.dispose();
+  }
+
+  /// Puts the robot at the centre of the map, keeping the zoom. Runs after the
+  /// frame: the map controller must not be driven mid-build.
+  void _scheduleRecentre() {
+    if (_recentreScheduled) return;
+    _recentreScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _recentreScheduled = false;
+      if (!mounted || !widget.followRobot || _zooming) return;
+      _mapController.move(
+        _ll(mission.robotPosition),
+        _mapController.camera.zoom,
+      );
+    });
+  }
+
+  void _onMapEvent(MapEvent event) {
+    switch (event) {
+      case MapEventMoveStart(source: MapEventSource.multiFingerGestureStart) ||
+          MapEventDoubleTapZoomStart():
+        _zooming = true;
+      case MapEventMoveEnd(source: MapEventSource.multiFingerEnd) ||
+          MapEventDoubleTapZoomEnd():
+        _zooming = false;
+        if (widget.followRobot) _scheduleRecentre();
+      case MapEventScrollWheelZoom():
+        if (widget.followRobot) _scheduleRecentre();
+      case MapEventMoveStart(source: MapEventSource.dragStart):
+        // A one-finger pan means the user wants to look somewhere else.
+        if (widget.followRobot) widget.onFollowRobotChanged?.call(false);
+    }
+  }
+
   LatLng _ll(MapPoint p) => anchor.worldToLatLng(p.x, p.y);
 
   /// Bounded viewing area (so the satellite view can't pan off to arbitrary
   /// places on Earth): the map content extent — freespace grid + zones + robot
-  /// — squared, expanded by a margin, with a sensible minimum size.
-  LatLngBounds _contentBounds() {
+  /// — squared, expanded by a margin, with a sensible minimum size. With
+  /// [centreOnRobot] the square is centred on the robot instead, still
+  /// covering all the content.
+  LatLngBounds _contentBounds({bool centreOnRobot = false}) {
     double? minX, minY, maxX, maxY;
     void add(double x, double y) {
       minX = (minX == null || x < minX!) ? x : minX;
@@ -65,13 +132,13 @@ class SatelliteMapView extends StatelessWidget {
     }
     add(mission.robotPosition.x, mission.robotPosition.y);
 
-    final cx = (minX! + maxX!) / 2;
-    final cy = (minY! + maxY!) / 2;
+    final robot = mission.robotPosition;
+    final cx = centreOnRobot ? robot.x : (minX! + maxX!) / 2;
+    final cy = centreOnRobot ? robot.y : (minY! + maxY!) / 2;
+    final halfX = math.max(cx - minX!, maxX! - cx);
+    final halfY = math.max(cy - minY!, maxY! - cy);
     // Square half-extent: at least 10 m, plus a 20% + 2 m margin.
-    final half =
-        math.max(math.max((maxX! - minX!) / 2, (maxY! - minY!) / 2), 10.0) *
-            1.2 +
-        2.0;
+    final half = math.max(math.max(halfX, halfY), 10.0) * 1.2 + 2.0;
     return LatLngBounds.fromPoints([
       anchor.worldToLatLng(cx - half, cy - half),
       anchor.worldToLatLng(cx + half, cy - half),
@@ -105,6 +172,8 @@ class SatelliteMapView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final phonePosition = widget.phonePosition;
+    final phoneAccuracyM = widget.phoneAccuracyM;
     final gridOverlays = <RotatedOverlayImage?>[
       // Drawn bottom→top: freespace, then channel, then risk on top.
       _gridOverlay(mission.freeSpaceLayer, 0.55),
@@ -138,15 +207,22 @@ class SatelliteMapView extends StatelessWidget {
     return Stack(
       children: [
         FlutterMap(
+          mapController: _mapController,
           options: MapOptions(
             // Open framed on the content; keep the map CENTRE locked to it (so
             // you can't pan away to arbitrary places), but allow zooming out to
             // see the surroundings (z16–z22, ~6 levels).
             initialCameraFit: CameraFit.bounds(
-              bounds: bounds,
+              bounds: widget.followRobot
+                  ? _contentBounds(centreOnRobot: true)
+                  : bounds,
               padding: const EdgeInsets.all(24),
             ),
+            // Until the fit applies, start inside the constraint (the
+            // controller asserts this when it is handed the options).
+            initialCenter: bounds.center,
             cameraConstraint: CameraConstraint.containCenter(bounds: bounds),
+            onMapEvent: _onMapEvent,
             minZoom: 16,
             maxZoom: 22,
             // Enable all gestures incl. mouse-wheel / trackpad zoom (works in
@@ -156,11 +232,11 @@ class SatelliteMapView extends StatelessWidget {
             ),
           ),
           children: [
-            if (_mapboxToken.isNotEmpty)
+            if (SatelliteMapView._mapboxToken.isNotEmpty)
               TileLayer(
                 urlTemplate:
                     'https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90'
-                    '?access_token=$_mapboxToken',
+                    '?access_token=${SatelliteMapView._mapboxToken}',
                 userAgentPackageName: 'com.example.mower_stdio',
                 maxNativeZoom: 22,
               ),
@@ -173,7 +249,7 @@ class SatelliteMapView extends StatelessWidget {
               CircleLayer(
                 circles: [
                   CircleMarker(
-                    point: phonePosition!,
+                    point: phonePosition,
                     radius: phoneAccuracyM!,
                     useRadiusInMeter: true,
                     color: const Color(0x261A73E8),
@@ -192,7 +268,7 @@ class SatelliteMapView extends StatelessWidget {
                 ),
                 if (phonePosition != null)
                   Marker(
-                    point: phonePosition!,
+                    point: phonePosition,
                     width: 22,
                     height: 22,
                     child: const PhoneLocationDot(),
@@ -204,7 +280,7 @@ class SatelliteMapView extends StatelessWidget {
             ),
           ],
         ),
-        if (_mapboxToken.isEmpty)
+        if (SatelliteMapView._mapboxToken.isEmpty)
           const Positioned(
             left: 16,
             right: 16,

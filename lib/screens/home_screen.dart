@@ -975,6 +975,10 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
   bool _panelCollapsed = false;
   int? _dragVertexIndex;
 
+  /// Keep the map centred on the robot. Toggled by the follow button; dragging
+  /// the satellite map also turns it off.
+  bool _followRobot = true;
+
   /// Expands the bottom panel (used when another tab sends the user to it).
   void revealPanel() {
     if (_panelCollapsed) {
@@ -1101,6 +1105,14 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
         : 0.0;
     final effectivePanelH = collapsed ? collapsedH : panelHeight + bannerExtra;
 
+    // Paused while drawing / editing vertices so the map holds still under
+    // the finger.
+    final following =
+        _followRobot &&
+        mission.shouldShowRobot &&
+        !mission.drawMode &&
+        !mission.editVertexMode;
+
     final selectedRobot = fleet.selectedRobot;
     final popupOrigin = (_popupOffset != null && selectedRobot != null)
         ? _clampedPopupOrigin(_popupOffset!, size)
@@ -1178,30 +1190,45 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
         },
         child: Stack(
           children: [
-            Positioned.fill(
-              // While drawing, force the vector canvas (it owns the projection
-              // that tap-to-vertex needs); satellite has no projection yet.
-              child:
-                  (mission.satelliteBaseMap &&
-                      mission.mapGeoAnchor != null &&
-                      !mission.drawMode &&
-                      !mission.editVertexMode)
-                  ? SatelliteMapView(
-                      mission: mission,
-                      anchor: mission.mapGeoAnchor!,
-                      phonePosition: phone.position,
-                      phoneAccuracyM: phone.accuracyM,
-                    )
-                  : MissionMapCanvas(
-                      key: _canvasKey,
-                      mission: mission,
-                      robots: fleet.robots,
-                      selectedRobotId: fleet.selectedRobotId,
-                      bottomInset: effectivePanelH,
-                      phonePosition: phoneWorld,
-                      phoneAccuracyM: phone.accuracyM,
-                    ),
-            ),
+            // While drawing, force the vector canvas (it owns the projection
+            // that tap-to-vertex needs); satellite has no projection yet.
+            if (mission.satelliteBaseMap &&
+                mission.mapGeoAnchor != null &&
+                !mission.drawMode &&
+                !mission.editVertexMode)
+              // Sized to the area above the panel (reaching under its rounded
+              // corners, resizing with it) so the framing and the followed
+              // robot are centred in what is visible.
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: effectivePanelH - 28,
+                child: SatelliteMapView(
+                  mission: mission,
+                  anchor: mission.mapGeoAnchor!,
+                  phonePosition: phone.position,
+                  phoneAccuracyM: phone.accuracyM,
+                  followRobot: following,
+                  onFollowRobotChanged: (on) =>
+                      setState(() => _followRobot = on),
+                ),
+              )
+            else
+              Positioned.fill(
+                child: MissionMapCanvas(
+                  key: _canvasKey,
+                  mission: mission,
+                  robots: fleet.robots,
+                  selectedRobotId: fleet.selectedRobotId,
+                  bottomInset: effectivePanelH,
+                  phonePosition: phoneWorld,
+                  phoneAccuracyM: phone.accuracyM,
+                  centerOn: following ? mission.robotPosition : null,
+                ),
+              ),
             Positioned(
               top: media.padding.top + 10,
               left: 12,
@@ -1232,6 +1259,15 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                     ? '距割草機 ${_formatDistance(phoneWorld!, mission.robotPosition)}'
                     : null,
                 onTap: _togglePhoneLocation,
+              ),
+            ),
+            Positioned(
+              top: media.padding.top + 78 + 112,
+              left: 12,
+              child: _FollowRobotToggle(
+                on: _followRobot,
+                enabled: mission.shouldShowRobot,
+                onTap: () => setState(() => _followRobot = !_followRobot),
               ),
             ),
             Positioned(
@@ -1459,6 +1495,46 @@ class _SatelliteToggle extends StatelessWidget {
             on ? AppIcons.satellite : AppIcons.satellite,
             color: enabled ? Colors.white : Colors.white38,
             size: 24,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Keeps the map centred on the robot as it moves.
+class _FollowRobotToggle extends StatelessWidget {
+  const _FollowRobotToggle({
+    required this.on,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final bool on;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = on && enabled;
+    return Tooltip(
+      message: on ? '停止跟隨割草機' : '跟隨割草機',
+      child: Material(
+        color: active
+            ? const Color(0xFF167A4A)
+            : Colors.black.withValues(alpha: 0.55),
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: enabled ? onTap : null,
+          child: SizedBox(
+            width: 46,
+            height: 46,
+            child: Icon(
+              AppIcons.crosshair,
+              color: enabled ? Colors.white : Colors.white38,
+              size: 24,
+            ),
           ),
         ),
       ),
