@@ -3,10 +3,13 @@
 # Runs on every `v*` tag (v1.2.0 -> build name 1.2.0) and on demand. The
 # build number is the workflow run number, so it always increases.
 #
-# Signing uses App Store Connect API-key based automatic signing
-# (`xcodebuild -allowProvisioningUpdates`): Xcode manages the provisioning
-# profile and, if no Apple Distribution certificate is imported, uses a
-# cloud-managed one. Secrets (repo Settings -> Secrets and variables -> Actions):
+# The archive is built unsigned; the export signs it with App Store Connect
+# API-key based automatic signing (`xcodebuild -allowProvisioningUpdates`):
+# Xcode manages the provisioning profile and, if no Apple Distribution
+# certificate is imported, uses a cloud-managed one. A signed archive needed
+# an Apple Development certificate, and every fresh runner created a new one
+# until the account hit Apple's certificate limit (run 14).
+# Secrets (repo Settings -> Secrets and variables -> Actions):
 #
 #   APP_STORE_CONNECT_KEY_ID        key ID of an App Store Connect API key
 #   APP_STORE_CONNECT_ISSUER_ID     issuer ID (Users and Access -> Integrations)
@@ -122,10 +125,8 @@ jobs:
             --build-name="${{ steps.version.outputs.build_name }}" \
             --build-number="${{ steps.version.outputs.build_number }}"
 
-      - name: Archive
-        env:
-          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      - name: Archive (unsigned)
+        # Signed at export, with the distribution certificate; see the header.
         run: |
           set -o pipefail
           xcodebuild \
@@ -134,11 +135,7 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/ios/Runner.xcarchive \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$ASC_KEY_PATH" \
-            -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER_ID" \
-            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGNING_ALLOWED=NO \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             archive | tail -n 60
 
