@@ -85,6 +85,40 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     mission.dispose();
   });
+
+  testWidgets('full forward stick sends the 更多 page speed', (tester) async {
+    SharedPreferences.setMockInitialValues({'mock_data_enabled': false});
+    final mission = _ManualMissionSpy();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ManualControlOverlay(mission: mission, onExit: () {}),
+        ),
+      ),
+    );
+
+    final joystick = find
+        .byWidgetPredicate(
+          (widget) => widget.runtimeType.toString() == '_ManualJoystick',
+        )
+        .first;
+    Future<double> fullForward() async {
+      final gesture = await tester.startGesture(tester.getCenter(joystick));
+      await gesture.moveBy(const Offset(0, -200));
+      await tester.pump();
+      final linear = mission.velocities.last.$1;
+      await gesture.up();
+      await tester.pump();
+      return linear;
+    }
+
+    expect(await fullForward(), closeTo(0.35, 1e-9));
+    await mission.setManualLinearSpeed(0.2);
+    expect(await fullForward(), closeTo(0.2, 1e-9));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    mission.dispose();
+  });
 }
 
 class _ManualMissionSpy extends MissionMockProvider {
