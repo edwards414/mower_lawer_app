@@ -19,6 +19,7 @@ import 'robots_screen.dart';
 import '../widgets/add_object_sheet.dart';
 import '../widgets/execution_control_sheet.dart';
 import '../widgets/manual_control_overlay.dart';
+import '../widgets/manual_speed_setting.dart';
 import '../widgets/map_objects_sheet.dart';
 import '../widgets/map_record_bar.dart';
 import '../widgets/mission_map_canvas.dart';
@@ -818,6 +819,8 @@ class _MoreTab extends StatelessWidget {
             const SizedBox(height: 16),
             RobotSettingsSection(visible: visible),
             const SizedBox(height: 16),
+            const _DashboardCard(child: ManualSpeedSetting()),
+            const SizedBox(height: 10),
             _DashboardCard(
               child: _MoreActionRow(
                 icon: AppIcons.video,

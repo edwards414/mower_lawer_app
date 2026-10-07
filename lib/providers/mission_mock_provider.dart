@@ -16,6 +16,16 @@ import '../services/rosbridge_service.dart';
 
 class MissionMockProvider extends ChangeNotifier {
   static const _mockDataPreferenceKey = 'mock_data_enabled';
+  static const _manualLinearSpeedPreferenceKey = 'manual_linear_speed_m_s';
+
+  /// Steps of the 手動搖桿速度 slider on the 更多 page, in m/s. The robot's
+  /// velocity_command_guard answers anything above 0.5 m/s with a stop, and
+  /// the 58 rpm wheels top out near 0.55 m/s, so the last step stays below
+  /// both.
+  static const manualLinearSpeedMin = 0.10;
+  static const manualLinearSpeedMax = 0.45;
+  static const manualLinearSpeedStep = 0.05;
+  static const manualLinearSpeedDefault = 0.35;
   static const manualVelocityTopic = '/app_joy_cmd';
   static const _manualCommandClockTopic = '/manual_command_clock';
   static const frontCameraTopic = '/front_depth_camera/image_raw';
@@ -37,6 +47,7 @@ class MissionMockProvider extends ChangeNotifier {
       _ownsRosbridge = rosbridge == null {
     _addLog('INFO', '等待 ROS 真實資料', notify: false);
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    unawaited(_loadManualLinearSpeedPreference());
     unawaited(_connectRosbridge());
   }
 
@@ -191,6 +202,11 @@ class MissionMockProvider extends ChangeNotifier {
   bool liveDataActive = false;
   bool mockDataEnabled = false;
   bool manualControlActive = false;
+  double _manualLinearSpeed = manualLinearSpeedDefault;
+  bool _manualLinearSpeedChosen = false;
+
+  /// Linear speed (m/s) the manual joystick sends at full deflection.
+  double get manualLinearSpeed => _manualLinearSpeed;
 
   List<MissionZone> zones = const [];
   List<MissionZone> riskZones = const [];
@@ -630,6 +646,63 @@ class MissionMockProvider extends ChangeNotifier {
       _clearMissionData();
       _addLog('INFO', 'Demo 模式關閉，等待 ROS 真實資料', notify: false);
     }
+  }
+
+  Future<void> _loadManualLinearSpeedPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getDouble(_manualLinearSpeedPreferenceKey);
+      // A slider move made while this was loading wins over the stored value.
+      if (saved == null || _manualLinearSpeedChosen || _isDisposed) {
+        return;
+      }
+      final speed = _snapManualLinearSpeed(saved);
+      if (speed != _manualLinearSpeed) {
+        _manualLinearSpeed = speed;
+        notifyListeners();
+      }
+    } catch (error) {
+      if (!_isDisposed) {
+        _addLog('WARN', '讀取手動搖桿速度失敗，使用預設值: $error', notify: false);
+      }
+    }
+  }
+
+  /// Sets the joystick's full-deflection speed, snapped to a slider step, and
+  /// remembers it on this phone.
+  Future<void> setManualLinearSpeed(double value) async {
+    final speed = _snapManualLinearSpeed(value);
+    // The first pick is saved even when it equals the value shown, so a
+    // stored speed that has not finished loading cannot come back.
+    if (speed == _manualLinearSpeed && _manualLinearSpeedChosen) {
+      return;
+    }
+    _manualLinearSpeedChosen = true;
+    _manualLinearSpeed = speed;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_manualLinearSpeedPreferenceKey, speed);
+    } catch (error) {
+      if (!_isDisposed) {
+        _addLog('ERROR', '儲存手動搖桿速度失敗: $error');
+      }
+    }
+  }
+
+  /// [value] clamped to the slider range and rounded to its nearest step, as
+  /// an exact two-decimal number (0.35, not 0.35000000000000003).
+  static double _snapManualLinearSpeed(double value) {
+    if (!value.isFinite) {
+      return manualLinearSpeedDefault;
+    }
+    final clamped = value
+        .clamp(manualLinearSpeedMin, manualLinearSpeedMax)
+        .toDouble();
+    final steps = ((clamped - manualLinearSpeedMin) / manualLinearSpeedStep)
+        .round();
+    final snapped = manualLinearSpeedMin + steps * manualLinearSpeedStep;
+    return double.parse(snapped.toStringAsFixed(2));
   }
 
   Future<String?> updateRobotIp(String value) async {

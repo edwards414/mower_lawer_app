@@ -32,7 +32,8 @@ class ManualControlOverlay extends StatefulWidget {
 class _ManualControlOverlayState extends State<ManualControlOverlay>
     with WidgetsBindingObserver {
   static const _publishInterval = Duration(milliseconds: 100);
-  static const _linearSpeed = 0.22;
+  // The linear full-deflection speed is the 更多 page's slider
+  // (MissionMockProvider.manualLinearSpeed).
   static const _angularSpeed = 0.75;
   static const _deadband = 0.04;
 
@@ -275,7 +276,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
   }
 
   void _setLinearAxis(Offset value) {
-    _linearX = _scaleAxis(-value.dy, _linearSpeed);
+    _linearX = _scaleAxis(-value.dy, widget.mission.manualLinearSpeed);
     _publishCurrent();
   }
 
