@@ -103,6 +103,10 @@ class MissionMockProvider extends ChangeNotifier {
   // Satellite base-map toggle + the geo-anchor (from /adapter/map_datum) used
   // to place the local map-frame overlays on real-world satellite imagery.
   bool satelliteBaseMap = false;
+
+  /// Overlay the satellite base map with AI-sharpened (x4) aerial tiles. On
+  /// by default; display only: the extra detail is model output.
+  bool aiBaseMap = true;
   GeoAnchor? mapGeoAnchor;
   NavMockStatus navStatus = NavMockStatus.idle;
   MissionLayerVisibility layers = const MissionLayerVisibility();
@@ -1772,6 +1776,11 @@ class MissionMockProvider extends ChangeNotifier {
 
   void toggleSatelliteBaseMap() {
     satelliteBaseMap = !satelliteBaseMap;
+    notifyListeners();
+  }
+
+  void setAiBaseMap(bool on) {
+    aiBaseMap = on;
     notifyListeners();
   }
 

@@ -1214,6 +1214,7 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                   followRobot: following,
                   onFollowRobotChanged: (on) =>
                       setState(() => _followRobot = on),
+                  aiEnhance: mission.aiBaseMap,
                 ),
               )
             else
@@ -1992,6 +1993,12 @@ class _LayerToggleSheet extends StatelessWidget {
               value: mission.layers.invalidSegments,
               onChanged: (value) => mission.updateLayer(invalidSegments: value),
             ),
+            _LayerSwitch(
+              title: 'AI 強化衛星圖',
+              subtitle: '細節由 AI 推算，僅供參考，請勿依此描邊界',
+              value: mission.aiBaseMap,
+              onChanged: mission.setAiBaseMap,
+            ),
           ],
         ),
       ),
@@ -2002,11 +2009,13 @@ class _LayerToggleSheet extends StatelessWidget {
 class _LayerSwitch extends StatelessWidget {
   const _LayerSwitch({
     required this.title,
+    this.subtitle,
     required this.value,
     required this.onChanged,
   });
 
   final String title;
+  final String? subtitle;
   final bool value;
   final ValueChanged<bool> onChanged;
 
@@ -2015,6 +2024,7 @@ class _LayerSwitch extends StatelessWidget {
     return SwitchListTile(
       contentPadding: EdgeInsets.zero,
       title: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+      subtitle: subtitle == null ? null : Text(subtitle!),
       value: value,
       onChanged: onChanged,
     );

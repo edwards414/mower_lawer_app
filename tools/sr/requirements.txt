@@ -1,0 +1,16 @@
+torch
+torchvision
+spandrel
+pillow
+numpy
+lpips
+onnx
+onnxscript
+onnx2tf
+onnxsim
+onnx-graphsurgeon
+sng4onnx
+psutil
+tensorflow
+tf-keras
+ai-edge-litert

@@ -19,13 +19,12 @@ Endpoints can be overridden at build time:
 flutter build apk \
   --dart-define=ROSBRIDGE_URL=wss://control.example.com \
   --dart-define=CAMERA_BASE_URL=https://camera.example.com \
-  --dart-define=GPS_FIX_TOPIC=/fix \
-  --dart-define=MAPBOX_TOKEN=your-scoped-public-token
+  --dart-define=GPS_FIX_TOPIC=/fix
 ```
 
-Keep the Mapbox token out of source control and restrict it to the required
-styles/origins in Mapbox. Builds without it show a clear satellite-map setup
-message instead of silently using a bundled credential.
+The satellite base map uses the NLSC (內政部國土測繪中心) PHOTO2 aerial
+orthophoto tiles: free under the Open Government Data License (keep the
+attribution), no token needed, Taiwan only, ~27 cm/px (native up to z19).
 
 The code can attach a Cloudflare Access service token in native Android/iOS
 builds for isolated bench testing:
