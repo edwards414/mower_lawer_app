@@ -32,14 +32,14 @@ bool connectionSettingsLocked(MissionMockProvider mission) {
       mission.hasPendingRecordSave;
 }
 
-/// "我的機器人" on the 更多 tab, the app's one settings page: paired robots,
+/// "我的機器人" on the 設定 tab, the app's one settings page: paired robots,
 /// which one is active, its 直連 IP, pairing by QR code (or pasted code) and
 /// unpairing. Without a paired robot the 直連 IP is the manual development
 /// connection instead.
 class RobotSettingsSection extends StatefulWidget {
   const RobotSettingsSection({super.key, required this.visible});
 
-  /// The 更多 tab is on screen; backend presence is only polled then.
+  /// The 設定 tab is on screen; backend presence is only polled then.
   final bool visible;
 
   @override

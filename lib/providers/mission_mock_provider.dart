@@ -18,7 +18,7 @@ class MissionMockProvider extends ChangeNotifier {
   static const _mockDataPreferenceKey = 'mock_data_enabled';
   static const _manualLinearSpeedPreferenceKey = 'manual_linear_speed_m_s';
 
-  /// Steps of the 手動搖桿速度 slider on the 更多 page, in m/s. The robot's
+  /// Steps of the 手動搖桿速度 slider on the 設定 page, in m/s. The robot's
   /// velocity_command_guard answers anything above 0.5 m/s with a stop, and
   /// the 58 rpm wheels top out near 0.55 m/s, so the last step stays below
   /// both.

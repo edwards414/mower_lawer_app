@@ -1,26 +1,21 @@
 import 'package:flutter/material.dart';
 import '../utils/app_icons.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../models/robot_info.dart';
 import '../providers/robot_info_provider.dart';
 import '../providers/robot_registry.dart';
+import '../services/rosbridge_service.dart';
 
 const _kGreen = Color(0xFF167A4A);
 const _kGrey = Color(0xFF78909C);
 const _kWarn = Color(0xFFB26A00);
 const _kBad = Color(0xFFC62828);
 
-/// App version from the bundle (once), shared by the widgets below.
-final Future<PackageInfo> _packageInfo = PackageInfo.fromPlatform();
-
-String _appVersionLabel(PackageInfo? p) =>
-    p == null ? '…' : '${p.version} (${p.buildNumber})';
-
-/// Versions of the three moving parts (app, robot software, STM32 firmware)
-/// plus the host update state and the update / restart actions. Lives in the
-/// "更多" tab.
+/// "版本與更新": one line saying whether the robot has the latest version, and
+/// the update / check / restart actions that go with it. No version numbers:
+/// the robot checks its own channel and reports the verdict. Lives in the
+/// "設定" tab.
 class RobotVersionCard extends StatelessWidget {
   const RobotVersionCard({super.key});
 
@@ -28,302 +23,207 @@ class RobotVersionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final provider = context.watch<RobotInfoProvider>();
     final info = provider.info;
-    final stale = provider.stale;
-
-    return FutureBuilder<PackageInfo>(
-      future: _packageInfo,
-      builder: (context, snapshot) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '版本與更新',
-              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
-            ),
-            const SizedBox(height: 10),
-            _VersionRow(
-              icon: AppIcons.smartphone,
-              title: 'App',
-              detail:
-                  '${_appVersionLabel(snapshot.data)} · 支援機器人 API '
-                  '${kMinRobotApiVersion == kMaxRobotApiVersion ? kMinRobotApiVersion : '$kMinRobotApiVersion–$kMaxRobotApiVersion'}',
-            ),
-            _VersionRow(
-              icon: AppIcons.cpu,
-              title: '機器人軟體',
-              detail: info == null
-                  ? '尚未收到 /robot/info'
-                  : '${info.software.label}'
-                        '${info.imageTag.isEmpty ? '' : ' · ${info.imageTag}'}'
-                        ' · API ${info.apiVersion}',
-              trailing: _CompatibilityChip(provider.compatibility),
-              muted: stale,
-            ),
-            _VersionRow(
-              icon: AppIcons.circuitBoard,
-              title: 'STM32 韌體',
-              detail: info == null ? '—' : _firmwareDetail(info),
-              trailing: info == null ? null : _FirmwareChip(info),
-              muted: stale,
-            ),
-            if (info != null && info.update.state.isNotEmpty)
-              _VersionRow(
-                icon: info.update.failed
-                    ? AppIcons.circleAlert
-                    : info.update.inProgress
-                    ? AppIcons.cloudDownload
-                    : AppIcons.circleCheck,
-                title: '更新狀態',
-                detail:
-                    '${_updateStateLabel(info.update.state)}'
-                    '${info.update.message.isEmpty ? '' : ' · ${info.update.message}'}',
-                muted: stale,
-              ),
-            if (provider.lastActionResult != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  provider.lastActionResult!,
-                  style: const TextStyle(
-                    color: _kGrey,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            Row(
-              children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: _canAct(provider)
-                        ? () => _confirmAndRun(
-                            context,
-                            title: '更新機器人',
-                            body:
-                                '機器人會下載目前頻道（${info?.imageTag.isEmpty ?? true ? 'stable' : info!.imageTag}）的新版本並重新啟動，'
-                                '同時把 STM32 韌體換成該版本內附的。過程約 1–3 分鐘，期間無法操作。',
-                            action: provider.requestUpdate,
-                          )
-                        : null,
-                    icon: const Icon(AppIcons.download),
-                    label: const Text('更新機器人'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _canAct(provider)
-                        ? () => _confirmAndRun(
-                            context,
-                            title: '重新啟動機器人軟體',
-                            body: '重新啟動 ROS 容器（不更新）。機器人會離線約 1 分鐘。',
-                            action: provider.requestRestart,
-                          )
-                        : null,
-                    icon: const Icon(AppIcons.rotateCcw),
-                    label: const Text('重新啟動'),
-                  ),
-                ),
-              ],
-            ),
-            if (info != null && info.busy)
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
-                child: Text(
-                  '機器人移動或導航中，先停止才能更新。',
-                  style: TextStyle(
-                    color: _kWarn,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
-
-  static bool _canAct(RobotInfoProvider p) {
-    final info = p.info;
-    return info != null &&
-        !p.stale &&
-        !p.actionPending &&
-        !info.busy &&
+    final status = provider.versionStatus;
+    final canAct = _canAct(provider);
+    // A check works while the robot moves, so it is not held back by `busy`.
+    final canCheck =
+        info != null &&
+        !provider.stale &&
+        !provider.actionPending &&
         !info.update.inProgress;
-  }
+    // Next to the restart button: the update when there is something to
+    // update (or it cannot be told), the check when it has not been looked up.
+    final checkSupported =
+        (info?.apiVersion ?? 0) >= 2 && !provider.checkUpdateUnsupported;
+    final offer = switch (status) {
+      VersionStatus.newerAvailable ||
+      VersionStatus.updateFailed ||
+      VersionStatus.firmwareFailed ||
+      VersionStatus.robotTooOld => _Offer.update,
+      VersionStatus.notChecked || VersionStatus.checkFailed =>
+        checkSupported ? _Offer.check : _Offer.update,
+      _ => _Offer.none,
+    };
 
-  static String _firmwareDetail(RobotInfo info) {
-    final running = info.firmwareRunning;
-    final bundled = info.firmwareBundled;
-    if (running.isEmpty && bundled.isEmpty) return '沒有韌體資訊';
-    final parts = <String>[
-      '執行中 ${running.label}',
-      if (!bundled.isEmpty && info.firmwareUpToDate != true)
-        '內附 ${bundled.label}',
-      if (info.firmwareSyncError.isNotEmpty) '燒錄錯誤：${info.firmwareSyncError}',
-    ];
-    return parts.join(' · ');
-  }
-
-  static String _updateStateLabel(String state) {
-    switch (state) {
-      case 'idle':
-        return '閒置';
-      case 'pulling':
-        return '下載中';
-      case 'restarting':
-        return '重新啟動中';
-      case 'up_to_date':
-        return '已是最新';
-      case 'failed':
-        return '失敗';
-      case 'rebooting':
-        return '主機重開中';
-      case 'powering_off':
-        return '關機中';
-      default:
-        return state;
-    }
-  }
-
-  static Future<void> _confirmAndRun(
-    BuildContext context, {
-    required String title,
-    required String body,
-    required Future<Object?> Function() action,
-  }) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: Text(body),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('確定'),
-          ),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '版本與更新',
+          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+        ),
+        const SizedBox(height: 12),
+        _StatusLine(status),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            if (offer == _Offer.update) ...[
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: canAct
+                      ? () => _confirmUpdate(context, provider)
+                      : null,
+                  icon: const Icon(AppIcons.download),
+                  // Why it is greyed out, without a line of small print.
+                  label: Text(info?.busy ?? false ? '機器人忙碌中' : '更新機器人'),
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            if (offer == _Offer.check) ...[
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: canCheck
+                      ? () =>
+                            _run(context, provider, provider.requestCheckUpdate)
+                      : null,
+                  icon: const Icon(AppIcons.refreshCw),
+                  label: const Text('檢查更新'),
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: canAct
+                    ? () => _confirmAndRun(
+                        context,
+                        provider: provider,
+                        title: '重新啟動機器人軟體',
+                        body: '重新啟動 ROS 容器（不更新）。機器人會離線約 1 分鐘。',
+                        action: provider.requestRestart,
+                      )
+                    : null,
+                icon: const Icon(AppIcons.rotateCcw),
+                label: const Text('重新啟動'),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
-    if (ok == true) {
-      await action();
-    }
   }
 }
 
-class _VersionRow extends StatelessWidget {
-  const _VersionRow({
-    required this.icon,
-    required this.title,
-    required this.detail,
-    this.trailing,
-    this.muted = false,
-  });
+bool _canAct(RobotInfoProvider p) {
+  final info = p.info;
+  return info != null &&
+      !p.stale &&
+      !p.actionPending &&
+      !info.busy &&
+      !info.update.inProgress;
+}
 
-  final IconData icon;
-  final String title;
-  final String detail;
-  final Widget? trailing;
-  final bool muted;
+/// Runs a robot action. The card shows state, not messages, so a request the
+/// robot refused (busy, the bridge says no) is reported here, once.
+Future<void> _run(
+  BuildContext context,
+  RobotInfoProvider provider,
+  Future<RosbridgeServiceResponse> Function() action,
+) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final result = await action();
+  if (!result.success) {
+    messenger.showSnackBar(
+      SnackBar(content: Text(provider.lastActionResult ?? result.message)),
+    );
+  }
+}
+
+Future<void> _confirmAndRun(
+  BuildContext context, {
+  required RobotInfoProvider provider,
+  required String title,
+  required String body,
+  required Future<RosbridgeServiceResponse> Function() action,
+}) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(title),
+      content: Text(body),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('確定'),
+        ),
+      ],
+    ),
+  );
+  if (ok == true && context.mounted) {
+    await _run(context, provider, action);
+  }
+}
+
+/// Asks, then has the robot pull its channel and restart.
+Future<void> _confirmUpdate(BuildContext context, RobotInfoProvider provider) {
+  final tag = provider.info?.imageTag ?? '';
+  return _confirmAndRun(
+    context,
+    provider: provider,
+    title: '更新機器人',
+    body:
+        '機器人會下載目前頻道（${tag.isEmpty ? 'stable' : tag}）的新版本並重新啟動，'
+        '同時把 STM32 韌體換成該版本內附的。過程約 1–3 分鐘，期間無法操作。',
+    action: provider.requestUpdate,
+  );
+}
+
+/// The action offered beside 重新啟動.
+enum _Offer { none, update, check }
+
+/// The one line the card is about: an icon and the verdict, at full size.
+class _StatusLine extends StatelessWidget {
+  const _StatusLine(this.status);
+
+  final VersionStatus status;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: muted ? _kGrey : _kGreen),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-                Text(
-                  detail,
-                  style: TextStyle(
-                    color: muted ? const Color(0xFFB0BEC5) : _kGrey,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
+    final (icon, color, label) = switch (status) {
+      VersionStatus.upToDate => (AppIcons.circleCheck, _kGreen, '已是最新版'),
+      VersionStatus.newerAvailable => (AppIcons.cloudDownload, _kWarn, '有新版本'),
+      VersionStatus.updating => (AppIcons.refreshCw, _kGreen, '更新中…'),
+      VersionStatus.updateFailed => (AppIcons.circleAlert, _kBad, '上次更新失敗'),
+      VersionStatus.firmwareFailed => (AppIcons.circleAlert, _kBad, '韌體燒錄失敗'),
+      VersionStatus.firmwareMismatch => (
+        AppIcons.triangleAlert,
+        _kWarn,
+        '韌體版本不符，請重新啟動',
+      ),
+      VersionStatus.robotTooOld => (
+        AppIcons.triangleAlert,
+        _kBad,
+        '機器人版本太舊，請更新',
+      ),
+      VersionStatus.appTooOld => (
+        AppIcons.triangleAlert,
+        _kBad,
+        'App 版本太舊，請更新 App',
+      ),
+      VersionStatus.checkFailed => (AppIcons.circleAlert, _kGrey, '無法檢查更新'),
+      VersionStatus.notChecked => (AppIcons.info, _kGrey, '尚未檢查更新'),
+      VersionStatus.offline => (AppIcons.wifiOff, _kGrey, '尚未連線到機器人'),
+    };
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 26),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w900,
+              fontSize: 18,
             ),
           ),
-          if (trailing != null) ...[const SizedBox(width: 8), trailing!],
-        ],
-      ),
-    );
-  }
-}
-
-class _CompatibilityChip extends StatelessWidget {
-  const _CompatibilityChip(this.compatibility);
-
-  final RobotCompatibility compatibility;
-
-  @override
-  Widget build(BuildContext context) {
-    final (label, color) = switch (compatibility) {
-      RobotCompatibility.compatible => ('相容', _kGreen),
-      RobotCompatibility.robotTooOld => ('機器人太舊', _kBad),
-      RobotCompatibility.appTooOld => ('App 太舊', _kBad),
-      RobotCompatibility.unknown => ('未知', _kGrey),
-    };
-    return _Chip(label: label, color: color);
-  }
-}
-
-class _FirmwareChip extends StatelessWidget {
-  const _FirmwareChip(this.info);
-
-  final RobotInfo info;
-
-  @override
-  Widget build(BuildContext context) {
-    if (info.firmwareSyncError.isNotEmpty ||
-        info.firmwareSyncAction == 'failed') {
-      return const _Chip(label: '燒錄失敗', color: _kBad);
-    }
-    return switch (info.firmwareUpToDate) {
-      true => const _Chip(label: '最新', color: _kGreen),
-      false => const _Chip(label: '版本不符', color: _kWarn),
-      null => const _Chip(label: '未知', color: _kGrey),
-    };
-  }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontWeight: FontWeight.w900,
-          fontSize: 11,
         ),
-      ),
+      ],
     );
   }
 }
@@ -391,9 +291,10 @@ class CompatibilityNotice extends StatelessWidget {
                 ),
               if (robotTooOld)
                 TextButton(
-                  onPressed: provider.actionPending
-                      ? null
-                      : () => provider.requestUpdate(),
+                  // The same ask-first, report-a-refusal path as the card.
+                  onPressed: _canAct(provider)
+                      ? () => _confirmUpdate(context, provider)
+                      : null,
                   child: const Text('更新機器人'),
                 ),
               const Spacer(),
@@ -409,9 +310,9 @@ class CompatibilityNotice extends StatelessWidget {
   }
 }
 
-/// Wraps an operating page (map / manual control): when the robot's API is
-/// outside what this app supports, the page is dimmed and blocked until the
-/// operator updates or explicitly overrides.
+/// Wraps an operating page (the map, manual mode included): when the robot's
+/// API is outside what this app supports, the page is dimmed and blocked until
+/// the operator updates or explicitly overrides.
 class CompatibilityGate extends StatelessWidget {
   const CompatibilityGate({
     super.key,
@@ -442,7 +343,7 @@ class CompatibilityGate extends StatelessWidget {
               alignment: Alignment.topCenter,
               child: Padding(
                 padding: const EdgeInsets.all(22),
-                // Robot settings and versions share the 更多 tab.
+                // Robot settings and versions share the 設定 tab.
                 child: mismatch
                     ? IdentityMismatchNotice(onOpenSettings: onShowVersions)
                     : CompatibilityNotice(onShowVersions: onShowVersions),
@@ -461,7 +362,7 @@ class CompatibilityGate extends StatelessWidget {
 class IdentityMismatchNotice extends StatelessWidget {
   const IdentityMismatchNotice({super.key, this.onOpenSettings});
 
-  /// Switches to the robot settings (更多 tab); no button when null.
+  /// Switches to the robot settings (設定 tab); no button when null.
   final VoidCallback? onOpenSettings;
 
   @override

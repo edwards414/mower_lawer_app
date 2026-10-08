@@ -8,6 +8,10 @@ import '../models/robot_fleet.dart';
 import '../services/rosbridge_service.dart';
 import 'mission_mock_provider.dart';
 
+/// The name the map shows for the default (un-namespaced) robot: the 雲科大
+/// mower. Other robots found on the graph are named after their namespace.
+const kDefaultRobotName = 'XR-02';
+
 /// Discovers robots from the ROS graph (via rosapi) and tracks per-robot
 /// liveness/pose/battery.
 ///
@@ -103,7 +107,7 @@ class RobotFleetProvider extends ChangeNotifier {
         RobotAgent(
           id: 0,
           ns: _demoNs,
-          name: 'GM-1',
+          name: kDefaultRobotName,
           color: RobotAgent.palette[0],
           batteryPercent: mission.batteryPercent ?? 0.0,
           hasBattery: mission.batteryPercent != null,
@@ -293,7 +297,7 @@ class RobotFleetProvider extends ChangeNotifier {
   RobotAgent _agentFor(String ns, int id, DateTime now, RobotAgent? prev) {
     final isDefault = ns == _defaultNs;
     final color = RobotAgent.palette[id % RobotAgent.palette.length];
-    final name = isDefault ? 'GM-1' : ns.toUpperCase();
+    final name = isDefault ? kDefaultRobotName : ns.toUpperCase();
 
     final bool online;
     final MapPoint position;

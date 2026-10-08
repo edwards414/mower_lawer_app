@@ -32,6 +32,7 @@ class RobotInfoProvider extends ChangeNotifier {
   static const infoTopic = '/robot/info';
   static const updateService = '/system/update';
   static const restartService = '/system/restart';
+  static const checkUpdateService = '/system/check_update';
 
   final RosbridgeService _rosbridge;
   final Duration staleAfter;
@@ -45,6 +46,7 @@ class RobotInfoProvider extends ChangeNotifier {
   bool _actionPending = false;
   String? _lastActionResult;
   bool _overrideCompatibility = false;
+  bool _checkUnsupported = false;
 
   RobotInfo? get info => _info;
   DateTime? get receivedAt => _receivedAt;
@@ -56,6 +58,12 @@ class RobotInfoProvider extends ChangeNotifier {
 
   /// Operator chose to continue despite an API mismatch (bench use).
   bool get overrideCompatibility => _overrideCompatibility;
+
+  /// The robot turned a check request down: its software predates the checker
+  /// (new services do not bump `api_version`), so the card falls back to the
+  /// plain update, which is also how it gets the checker. Cleared as soon as
+  /// the robot reports a check result.
+  bool get checkUpdateUnsupported => _checkUnsupported;
 
   RobotCompatibility get compatibility {
     final info = _info;
@@ -72,6 +80,41 @@ class RobotInfoProvider extends ChangeNotifier {
         c == RobotCompatibility.appTooOld;
   }
 
+  /// What the version card says: whether the robot has the latest version,
+  /// from the robot's own check (`update.available`, API 2), or what stands in
+  /// the way of saying so.
+  VersionStatus get versionStatus {
+    final info = this.info;
+    if (info == null || stale) return VersionStatus.offline;
+    // Whatever else is true, an update under way is what the robot is doing.
+    if (info.update.inProgress) return VersionStatus.updating;
+    switch (info.compatibility) {
+      case RobotCompatibility.robotTooOld:
+        return VersionStatus.robotTooOld;
+      case RobotCompatibility.appTooOld:
+        return VersionStatus.appTooOld;
+      case RobotCompatibility.compatible:
+      case RobotCompatibility.unknown:
+        break;
+    }
+    final update = info.update;
+    if (info.firmwareSyncError.isNotEmpty ||
+        info.firmwareSyncAction == 'failed') {
+      return VersionStatus.firmwareFailed;
+    }
+    if (update.available == true) return VersionStatus.newerAvailable;
+    // Not at the version it was built for, though nothing newer is out.
+    if (info.firmwareUpToDate == false) return VersionStatus.firmwareMismatch;
+    // Nothing newer on the channel: an earlier failed update no longer matters.
+    if (update.available == false && update.checkError.isEmpty) {
+      return VersionStatus.upToDate;
+    }
+    if (update.failed) return VersionStatus.updateFailed;
+    if (update.checkError.isNotEmpty) return VersionStatus.checkFailed;
+    if (update.state == 'up_to_date') return VersionStatus.upToDate;
+    return VersionStatus.notChecked;
+  }
+
   void setOverrideCompatibility(bool value) {
     if (_overrideCompatibility == value) return;
     _overrideCompatibility = value;
@@ -84,6 +127,17 @@ class RobotInfoProvider extends ChangeNotifier {
 
   Future<RosbridgeServiceResponse> requestRestart() =>
       _call(restartService, '重新啟動');
+
+  /// Ask the robot to look the channel up now (no download, no restart; fine
+  /// while it moves). The answer shows in `update.available` within seconds.
+  Future<RosbridgeServiceResponse> requestCheckUpdate() async {
+    final response = await _call(checkUpdateService, '檢查更新');
+    if (!response.success && !_checkUnsupported) {
+      _checkUnsupported = true;
+      notifyListeners();
+    }
+    return response;
+  }
 
   Future<RosbridgeServiceResponse> _call(String service, String label) async {
     if (_actionPending) {
@@ -115,6 +169,7 @@ class RobotInfoProvider extends ChangeNotifier {
     final parsed = RobotInfo.tryParse(raw);
     if (parsed == null) return;
     _info = parsed;
+    if (parsed.update.available != null) _checkUnsupported = false;
     _receivedAt = DateTime.now();
     _stale = false;
     notifyListeners();

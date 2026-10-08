@@ -9,7 +9,7 @@ import '../utils/app_icons.dart';
 const _kGreen = Color(0xFF167A4A);
 const _kGrey = Color(0xFF78909C);
 
-/// The manual joystick's full-deflection speed on the 更多 page: a stepped
+/// The manual joystick's full-deflection speed on the 設定 page: a stepped
 /// slider with a ruler under it, one tick and label per 0.05 m/s stop.
 class ManualSpeedSetting extends StatelessWidget {
   const ManualSpeedSetting({super.key});
