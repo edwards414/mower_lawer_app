@@ -21,6 +21,36 @@ enum RobotCompatibility {
   appTooOld,
 }
 
+/// What the 設定 page's version card tells the operator: one state, from the
+/// robot's own report, instead of the raw versions.
+enum VersionStatus {
+  /// No fresh `/robot/info`: nothing to say about versions.
+  offline,
+
+  /// The robot's API is older / newer than this app supports.
+  robotTooOld,
+  appTooOld,
+
+  /// The robot is pulling / restarting for an update.
+  updating,
+  updateFailed,
+  firmwareFailed,
+
+  /// The STM32 runs other firmware than the image bundles, with no flash error
+  /// (a restart syncs it).
+  firmwareMismatch,
+
+  /// A newer image is published on the robot's channel.
+  newerAvailable,
+  upToDate,
+
+  /// The robot could not reach the registry for its last check.
+  checkFailed,
+
+  /// No check has run yet (or the robot predates the check, API 1).
+  notChecked,
+}
+
 /// Build identity of one component as reported by `/robot/info`.
 class ComponentVersion {
   const ComponentVersion({
@@ -65,11 +95,25 @@ class ComponentVersion {
 /// Host-side update progress (`update` in `/robot/info`), written by
 /// deploy/host/mower-update.sh on the robot.
 class UpdateStatus {
-  const UpdateStatus({this.state = '', this.message = '', this.time});
+  const UpdateStatus({
+    this.state = '',
+    this.message = '',
+    this.time,
+    this.available,
+    this.checkError = '',
+  });
 
   final String state;
   final String message;
   final int? time;
+
+  /// A newer image than the running one is published on the robot's channel
+  /// (the robot's own registry check, every 5 minutes; API 2). Null until the
+  /// first check has run.
+  final bool? available;
+
+  /// Why the last registry check failed; empty when it did not.
+  final String checkError;
 
   bool get inProgress =>
       state == 'pulling' || state == 'restarting' || state == 'rebooting';
@@ -81,6 +125,8 @@ class UpdateStatus {
       state: j['state']?.toString() ?? '',
       message: j['message']?.toString() ?? '',
       time: (j['time'] as num?)?.toInt(),
+      available: j['available'] is bool ? j['available'] as bool : null,
+      checkError: j['check_error']?.toString() ?? '',
     );
   }
 }

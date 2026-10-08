@@ -9,6 +9,7 @@ import 'package:mower_stdio/main.dart';
 import 'package:mower_stdio/models/weather_snapshot.dart';
 import 'package:mower_stdio/services/weather_service.dart';
 import 'package:mower_stdio/widgets/execution_control_sheet.dart';
+import 'package:mower_stdio/widgets/mission_mode_bar.dart';
 
 void main() {
   testWidgets('shows self check then dashboard shell and map tab', (
@@ -28,14 +29,15 @@ void main() {
     expect(find.text('我的割草機'), findsOneWidget);
     expect(find.text('首頁'), findsOneWidget);
     expect(find.text('地圖'), findsOneWidget);
-    expect(find.text('手動控制'), findsOneWidget);
-    expect(find.text('更多'), findsOneWidget);
+    // Manual mode is part of the map page, not a tab of its own.
+    expect(find.text('手動控制'), findsNothing);
+    expect(find.text('設定'), findsOneWidget);
     // The schedule tab was placeholder data only; it must not come back
     // until scheduling is real.
     expect(find.text('排程'), findsNothing);
     expect(find.text('尚未配對機器人'), findsOneWidget);
 
-    // The robot name in the header opens 我的機器人, which lives on the 更多
+    // The robot name in the header opens 我的機器人, which lives on the 設定
     // tab (the one settings page), not on a page of its own.
     await tester.tap(find.text('尚未配對機器人'));
     await tester.pump();
@@ -73,7 +75,7 @@ void main() {
     expect(find.text('執行'), findsOneWidget);
     expect(find.text('日誌'), findsOneWidget);
 
-    await tester.tap(find.byIcon(AppIcons.ellipsis));
+    await tester.tap(find.text('設定'));
     await tester.pump(const Duration(milliseconds: 100));
 
     // Layers live on the map only. Robot settings are right on this page;
@@ -95,15 +97,43 @@ void main() {
           .ancestor(of: find.text('我的機器人'), matching: find.byType(Scrollable))
           .first,
     );
+    // Built does not mean on screen: it can still sit under the tab bar.
+    await tester.ensureVisible(find.text('進階'));
+    await tester.pump();
     await tester.tap(find.text('進階'));
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('Demo 模式'), findsOneWidget);
 
-    await tester.tap(find.text('手動控制').last);
-    await tester.pump(const Duration(milliseconds: 100));
+    // Manual mode lives on the map page: one tap puts the joysticks and the
+    // camera over the same map, and the panel and tab bar step aside.
+    await tester.tap(find.text('地圖'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(NavigationBar), findsOneWidget);
+    await tester.tap(find.text('手動模式'));
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('前鏡頭'), findsOneWidget);
     expect(find.text('機器人未就緒'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(find.byType(ExecutionControlSheet), findsNothing);
+    expect(find.byType(MissionModeBar), findsNothing);
+
+    // ✕ brings the map page back as it was.
+    await tester.tap(find.byTooltip('退出手動模式'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('前鏡頭'), findsNothing);
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byType(MissionModeBar), findsOneWidget);
+
+    // Back leaves manual mode before it leaves the app.
+    await tester.tap(find.text('手動模式'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(NavigationBar), findsNothing);
+    // ignore: invalid_use_of_protected_member
+    await tester.binding.handlePopRoute();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('前鏡頭'), findsNothing);
+    expect(find.byType(NavigationBar), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
   });

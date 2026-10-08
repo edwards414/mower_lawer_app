@@ -55,7 +55,7 @@ void main() {
     },
   );
 
-  testWidgets('更多 slider: one labelled tick under each 0.05 m/s stop', (
+  testWidgets('設定 slider: one labelled tick under each 0.05 m/s stop', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({'mock_data_enabled': false});

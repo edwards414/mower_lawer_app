@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import '../utils/app_icons.dart';
 
 class BreathingMarker extends StatefulWidget {
-  const BreathingMarker({super.key});
+  const BreathingMarker({super.key, this.animate = true});
+
+  /// Pulses while true. A still marker schedules no frames.
+  final bool animate;
 
   @override
   State<BreathingMarker> createState() => _BreathingMarkerState();
@@ -19,12 +22,26 @@ class _BreathingMarkerState extends State<BreathingMarker>
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
+    );
+    if (widget.animate) _controller.repeat(reverse: true);
     // Animate the shadow spread/blur or size
     _animation = Tween<double>(
       begin: 0.0,
       end: 10.0,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  }
+
+  @override
+  void didUpdateWidget(BreathingMarker oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.animate == oldWidget.animate) return;
+    if (widget.animate) {
+      _controller.repeat(reverse: true);
+    } else {
+      _controller
+        ..stop()
+        ..value = 0;
+    }
   }
 
   @override

@@ -25,6 +25,9 @@ class SatelliteMapView extends StatefulWidget {
     this.phoneAccuracyM,
     this.followRobot = false,
     this.onFollowRobotChanged,
+    this.lockPan = false,
+    this.bottomInset = 0,
+    this.animateMarker = true,
     this.aiEnhance = false,
     this.aiService,
   });
@@ -40,6 +43,19 @@ class SatelliteMapView extends StatefulWidget {
   /// following; a one-finger drag reports `false` to [onFollowRobotChanged].
   final bool followRobot;
   final ValueChanged<bool>? onFollowRobotChanged;
+
+  /// Zoom only: no one-finger pan, so a thumb brushing the map while driving
+  /// cannot pull it off the robot.
+  final bool lockPan;
+
+  /// Height of the controls drawn over the map's bottom edge (the manual
+  /// joysticks). The attribution and the AI progress chip sit above it, where
+  /// a thumb is not on them.
+  final double bottomInset;
+
+  /// Whether the robot marker pulses. A pulse repaints the map every frame, so
+  /// it is off while driving, when the controls and a video are what matter.
+  final bool animateMarker;
 
   /// Overlay the content area with AI-sharpened (x4) tiles.
   final bool aiEnhance;
@@ -78,6 +94,21 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
   final Map<SrTile, ui.Image> _aiTiles = {};
   final Set<SrTile> _aiLoading = {};
   Set<SrTile> _aiWanted = const {};
+
+  // The mission layers are kept as built widgets. A pose tick then hands
+  // flutter_map the very same instances, which it skips: it drops a layer's
+  // projection and simplification caches whenever the layer *widget* is
+  // replaced, whatever lists that holds. Each layer is rebuilt only when its
+  // own data was replaced (the provider assigns new lists / layers, it never
+  // edits them in place); zones are compared by their points, since a zone
+  // summary swaps in equal copies twice a second.
+  GeoAnchor? _layersAnchor;
+  MapGridLayer? _freeLayer, _channelLayer, _riskLayer;
+  Widget? _gridLayer;
+  List<List<MapPoint>>? _coverageSrc;
+  Widget? _coverageLayer;
+  List<List<MapPoint>> _zonePoints = const [];
+  Widget? _zoneLayer;
 
   MissionMockProvider get mission => widget.mission;
   GeoAnchor get anchor => widget.anchor;
@@ -245,37 +276,129 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
     );
   }
 
+  /// Rebuilds the mission layers whose data was replaced since the last build
+  /// (all of them when the geo anchor was).
+  void _syncLayers() {
+    final anchorChanged = !identical(_layersAnchor, anchor);
+    _layersAnchor = anchor;
+
+    if (anchorChanged ||
+        !identical(_freeLayer, mission.freeSpaceLayer) ||
+        !identical(_channelLayer, mission.channelMapLayer) ||
+        !identical(_riskLayer, mission.riskMapLayer)) {
+      _freeLayer = mission.freeSpaceLayer;
+      _channelLayer = mission.channelMapLayer;
+      _riskLayer = mission.riskMapLayer;
+      final overlays = <RotatedOverlayImage?>[
+        // Drawn bottom→top: freespace, then channel, then risk on top.
+        _gridOverlay(_freeLayer, 0.55),
+        _gridOverlay(_channelLayer, 0.6),
+        _gridOverlay(_riskLayer, 0.6),
+      ].whereType<RotatedOverlayImage>().toList();
+      _gridLayer = overlays.isEmpty
+          ? null
+          : OverlayImageLayer(
+              key: const ValueKey('grid-layers'),
+              overlayImages: overlays,
+            );
+    }
+
+    if (anchorChanged || !identical(_coverageSrc, mission.coverageRows)) {
+      _coverageSrc = mission.coverageRows;
+      final lines = <Polyline>[
+        for (final row in _coverageSrc!)
+          if (row.length >= 2)
+            Polyline(
+              points: row.map(_ll).toList(),
+              strokeWidth: 2.5,
+              color: const Color(0xFF2EC86E),
+            ),
+      ];
+      _coverageLayer = lines.isEmpty
+          ? null
+          : PolylineLayer(key: const ValueKey('coverage'), polylines: lines);
+    }
+
+    final zones = mission.zones;
+    if (anchorChanged || !_samePoints(_zonePoints, zones)) {
+      _zonePoints = [for (final z in zones) z.points];
+      final polygons = <Polygon>[
+        for (final z in zones)
+          if (z.points.length >= 3)
+            Polygon(
+              points: z.points.map(_ll).toList(),
+              color: const Color(0x332DA653),
+              borderColor: const Color(0xFF2DA653),
+              borderStrokeWidth: 2,
+            ),
+      ];
+      _zoneLayer = polygons.isEmpty
+          ? null
+          : PolygonLayer(key: const ValueKey('zones'), polygons: polygons);
+    }
+  }
+
+  static bool _samePoints(List<List<MapPoint>> known, List<MissionZone> zones) {
+    if (known.length != zones.length) return false;
+    for (var i = 0; i < zones.length; i++) {
+      if (!identical(known[i], zones[i].points)) return false;
+    }
+    return true;
+  }
+
+  /// The path being driven for a recording, as the schematic map draws it: a
+  /// line (a translucent closing polygon for zones and no-go areas), a white
+  /// start anchor and the live head. Empty when nothing is being recorded.
+  List<Widget> _trailLayers() {
+    final type = mission.recordingType;
+    final trail = mission.recordTrail;
+    if (type == null || trail.isEmpty) return const [];
+    final color = switch (type) {
+      RecordObjectType.zone => const Color(0xFF35B861),
+      RecordObjectType.risk => const Color(0xFFE55353),
+      RecordObjectType.channel => const Color(0xFF25AFC6),
+    };
+    final isArea = type != RecordObjectType.channel;
+    final points = [for (final p in trail) _ll(p)];
+    return [
+      if (isArea && points.length >= 3)
+        PolygonLayer(
+          key: const ValueKey('record-trail'),
+          polygons: [
+            Polygon(
+              points: points,
+              color: color.withValues(alpha: 0.16),
+              borderColor: color,
+              borderStrokeWidth: 4,
+            ),
+          ],
+        )
+      else if (points.length >= 2)
+        PolylineLayer(
+          key: const ValueKey('record-trail'),
+          polylines: [Polyline(points: points, strokeWidth: 4, color: color)],
+        ),
+      CircleLayer(
+        key: const ValueKey('record-ends'),
+        circles: [
+          CircleMarker(
+            point: points.first,
+            radius: 6,
+            color: Colors.white,
+            borderColor: color,
+            borderStrokeWidth: 2.5,
+          ),
+          CircleMarker(point: points.last, radius: 4.5, color: color),
+        ],
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final phonePosition = widget.phonePosition;
     final phoneAccuracyM = widget.phoneAccuracyM;
-    final gridOverlays = <RotatedOverlayImage?>[
-      // Drawn bottom→top: freespace, then channel, then risk on top.
-      _gridOverlay(mission.freeSpaceLayer, 0.55),
-      _gridOverlay(mission.channelMapLayer, 0.6),
-      _gridOverlay(mission.riskMapLayer, 0.6),
-    ].whereType<RotatedOverlayImage>().toList();
-
-    final coveragePolylines = <Polyline>[
-      for (final row in mission.coverageRows)
-        if (row.length >= 2)
-          Polyline(
-            points: row.map(_ll).toList(),
-            strokeWidth: 2.5,
-            color: const Color(0xFF2EC86E),
-          ),
-    ];
-
-    final zonePolygons = <Polygon>[
-      for (final z in mission.zones)
-        if (z.points.length >= 3)
-          Polygon(
-            points: z.points.map(_ll).toList(),
-            color: const Color(0x332DA653),
-            borderColor: const Color(0xFF2DA653),
-            borderStrokeWidth: 2,
-          ),
-    ];
+    _syncLayers();
 
     final bounds = _contentBounds();
     _syncAiTiles(bounds);
@@ -308,9 +431,14 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
         minZoom: 16,
         maxZoom: 22,
         // Enable all gestures incl. mouse-wheel / trackpad zoom (works in
-        // the desktop-run iOS sim); rotation off to keep north up.
-        interactionOptions: const InteractionOptions(
-          flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+        // the desktop-run iOS sim); rotation off to keep north up. Locked
+        // to zoom-only while driving.
+        interactionOptions: InteractionOptions(
+          flags: widget.lockPan
+              ? InteractiveFlag.pinchZoom |
+                    InteractiveFlag.doubleTapZoom |
+                    InteractiveFlag.scrollWheelZoom
+              : InteractiveFlag.all & ~InteractiveFlag.rotate,
         ),
       ),
       children: [
@@ -320,11 +448,10 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
           maxNativeZoom: SatelliteMapView.nlscMaxNativeZoom,
         ),
         if (aiOverlays.isNotEmpty) OverlayImageLayer(overlayImages: aiOverlays),
-        if (gridOverlays.isNotEmpty)
-          OverlayImageLayer(overlayImages: gridOverlays),
-        if (zonePolygons.isNotEmpty) PolygonLayer(polygons: zonePolygons),
-        if (coveragePolylines.isNotEmpty)
-          PolylineLayer(polylines: coveragePolylines),
+        if (_gridLayer != null) _gridLayer!,
+        if (_zoneLayer != null) _zoneLayer!,
+        if (_coverageLayer != null) _coverageLayer!,
+        ..._trailLayers(),
         if (phonePosition != null && (phoneAccuracyM ?? 0) > 0)
           CircleLayer(
             circles: [
@@ -344,7 +471,11 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
               point: _ll(mission.robotPosition),
               width: 40,
               height: 40,
-              child: const BreathingMarker(),
+              child: _RobotMarker(
+                // Map-frame heading -> clockwise from up on the north-up map.
+                headingRad: anchor.bearingRad - mission.robotHeadingRad,
+                animate: widget.animateMarker,
+              ),
             ),
             if (phonePosition != null)
               Marker(
@@ -359,23 +490,91 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
           Align(
             alignment: Alignment.bottomLeft,
             child: Padding(
-              padding: const EdgeInsets.all(12),
+              // Not inside a SafeArea like the attribution: add the inset.
+              padding: EdgeInsets.fromLTRB(
+                12,
+                12,
+                12,
+                12 + widget.bottomInset + MediaQuery.paddingOf(context).bottom,
+              ),
               child: _AiLoadingChip(
                 done: _aiWanted.where(_aiTiles.containsKey).length,
                 total: _aiWanted.length,
               ),
             ),
           ),
-        RichAttributionWidget(
-          attributions: [
-            const TextSourceAttribution('© 內政部國土測繪中心'),
-            if (widget.aiEnhance)
-              const TextSourceAttribution('AI 強化影像，細節僅供參考'),
-          ],
+        Padding(
+          padding: EdgeInsets.only(bottom: widget.bottomInset),
+          child: RichAttributionWidget(
+            attributions: [
+              const TextSourceAttribution('© 內政部國土測繪中心'),
+              if (widget.aiEnhance)
+                const TextSourceAttribution('AI 強化影像，細節僅供參考'),
+            ],
+          ),
         ),
       ],
     );
   }
+}
+
+/// The robot on the satellite map: the pulsing tractor, with a wedge on its
+/// rim pointing the way it faces ([headingRad], clockwise from up).
+class _RobotMarker extends StatelessWidget {
+  const _RobotMarker({required this.headingRad, required this.animate});
+
+  final double headingRad;
+  final bool animate;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      clipBehavior: Clip.none,
+      children: [
+        Transform.rotate(
+          key: const ValueKey('robot-heading'),
+          angle: headingRad,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Transform.translate(
+              offset: const Offset(0, -9),
+              child: const CustomPaint(
+                size: Size(14, 10),
+                painter: _WedgePainter(),
+              ),
+            ),
+          ),
+        ),
+        BreathingMarker(animate: animate),
+      ],
+    );
+  }
+}
+
+class _WedgePainter extends CustomPainter {
+  const _WedgePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = ui.Path()
+      ..moveTo(size.width / 2, 0)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, Paint()..color = const Color(0xFFE65100));
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _WedgePainter oldDelegate) => false;
 }
 
 class _AiLoadingChip extends StatelessWidget {

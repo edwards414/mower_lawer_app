@@ -9,7 +9,7 @@ class AddObjectSheet extends StatefulWidget {
   const AddObjectSheet({super.key, this.onRecordingStarted});
 
   /// Called once the robot has accepted a zone / risk / channel recording, so
-  /// the caller can take the user to where the robot is driven.
+  /// the caller can put the user in manual mode to drive it.
   final VoidCallback? onRecordingStarted;
 
   @override
@@ -102,7 +102,7 @@ class _AddObjectSheetState extends State<AddObjectSheet> {
             const Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                '工作區、禁入區、通道：選擇後切到手動控制，開車沿邊界或路徑記錄。',
+                '工作區、禁入區、通道：選擇後直接進入手動模式，開車沿邊界或路徑記錄。',
                 style: TextStyle(
                   color: Color(0xFF78909C),
                   fontSize: 12,

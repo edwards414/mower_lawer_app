@@ -86,7 +86,47 @@ void main() {
     mission.dispose();
   });
 
-  testWidgets('full forward stick sends the 更多 page speed', (tester) async {
+  testWidgets('a stick moved after the gate closed stops the robot at once', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'mock_data_enabled': false});
+    final mission = _ManualMissionSpy();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ManualControlOverlay(mission: mission, onExit: () {}),
+        ),
+      ),
+    );
+
+    final joystick = find
+        .byWidgetPredicate(
+          (widget) => widget.runtimeType.toString() == '_ManualJoystick',
+        )
+        .first;
+    final gesture = await tester.startGesture(tester.getCenter(joystick));
+    await gesture.moveBy(const Offset(0, -40));
+    await tester.pump();
+    expect(mission.velocities.last.$1.abs(), greaterThan(0.001));
+
+    // The gate closes, and the thumb moves before the 100 ms timer ticks: this
+    // event is the first to notice, and the timer it cancels would have been
+    // the one to say stop.
+    mission.driveEnabled = false;
+    await gesture.moveBy(const Offset(0, -2));
+    await tester.pump();
+    expect(mission.velocities.last, (0.0, 0.0));
+    // Nothing runs on after that.
+    final sent = mission.velocities.length;
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(mission.velocities.length, sent);
+
+    await gesture.up();
+    await tester.pumpWidget(const SizedBox.shrink());
+    mission.dispose();
+  });
+
+  testWidgets('full forward stick sends the 設定 page speed', (tester) async {
     SharedPreferences.setMockInitialValues({'mock_data_enabled': false});
     final mission = _ManualMissionSpy();
     await tester.pumpWidget(

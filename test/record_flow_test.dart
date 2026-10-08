@@ -56,7 +56,7 @@ void main() {
     expect(find.text('儲存'), findsOneWidget);
     expect(find.text('取消'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('前往手動控制'));
+    await tester.tap(find.byTooltip('進入手動模式'));
     expect(manualOpened, 1);
 
     await tester.tap(find.text('儲存'));

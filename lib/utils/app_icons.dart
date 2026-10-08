@@ -70,6 +70,7 @@ class AppIcons {
   static const IconData mapPin = LucideIcons.mapPin300;
   static const IconData mapPinPen = LucideIcons.mapPinPen300;
   static const IconData maximize2 = LucideIcons.maximize2300;
+  static const IconData minimize2 = LucideIcons.minimize2300;
   static const IconData minus = LucideIcons.minus300;
   static const IconData move = LucideIcons.move300;
   static const IconData network = LucideIcons.network300;

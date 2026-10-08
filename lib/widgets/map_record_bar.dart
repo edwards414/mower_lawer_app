@@ -63,25 +63,41 @@ Future<void> retrySaveWithFeedback(
   }
 }
 
-/// Map-side controls for an object recording, so the way to finish (save or
-/// cancel) or retry a failed save is visible where the trail is drawn and not
-/// only on the manual-control page.
+/// Controls for an object recording: the one place to finish (save or cancel)
+/// it or retry a failed save, on the map and in manual mode alike.
 ///
 /// Renders nothing when there is no recording and no unsaved one.
 class MapRecordBar extends StatelessWidget {
-  const MapRecordBar({super.key, required this.onOpenManual});
+  const MapRecordBar({
+    super.key,
+    this.mission,
+    this.onOpenManual,
+    this.clearBottom,
+  });
 
-  /// Takes the user to the manual-control page, where the robot is driven.
-  final VoidCallback onOpenManual;
+  /// The mission to show. Defaults to the one in the widget tree; manual mode
+  /// passes its own (and rebuilds this bar itself when it changes).
+  final MissionMockProvider? mission;
+
+  /// Enters manual mode, where the robot is driven. Null hides the button
+  /// (already there).
+  final VoidCallback? onOpenManual;
+
+  /// Floats snackbars above this height so they never cover the joysticks.
+  final double? clearBottom;
 
   @override
   Widget build(BuildContext context) {
-    final mission = context.watch<MissionMockProvider>();
+    final mission = this.mission ?? context.watch<MissionMockProvider>();
     final Widget content;
     if (mission.hasPendingRecordSave) {
-      content = _PendingSaveBar(mission: mission);
+      content = _PendingSaveBar(mission: mission, clearBottom: clearBottom);
     } else if (mission.recordingType != null) {
-      content = _RecordingBar(mission: mission, onOpenManual: onOpenManual);
+      content = _RecordingBar(
+        mission: mission,
+        onOpenManual: onOpenManual,
+        clearBottom: clearBottom,
+      );
     } else {
       return const SizedBox.shrink();
     }
@@ -96,10 +112,15 @@ class MapRecordBar extends StatelessWidget {
 }
 
 class _RecordingBar extends StatelessWidget {
-  const _RecordingBar({required this.mission, required this.onOpenManual});
+  const _RecordingBar({
+    required this.mission,
+    required this.onOpenManual,
+    required this.clearBottom,
+  });
 
   final MissionMockProvider mission;
-  final VoidCallback onOpenManual;
+  final VoidCallback? onOpenManual;
+  final double? clearBottom;
 
   @override
   Widget build(BuildContext context) {
@@ -109,6 +130,10 @@ class _RecordingBar extends StatelessWidget {
       minimumSize: Size.zero,
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
+    final elapsed = mission.recordingElapsed;
+    // Minutes keep counting past 59: a long recording reads 75:10, not 15:10.
+    final minutes = elapsed.inMinutes.toString().padLeft(2, '0');
+    final seconds = elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
     return Material(
       color: Colors.black.withValues(alpha: 0.78),
       borderRadius: BorderRadius.circular(18),
@@ -120,7 +145,8 @@ class _RecordingBar extends StatelessWidget {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                '${mission.recordingTitle} · ${mission.recordPointCount} 點',
+                '${mission.recordingTitle} · $minutes:$seconds · '
+                '${mission.recordPointCount} 點',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
@@ -130,18 +156,19 @@ class _RecordingBar extends StatelessWidget {
                 ),
               ),
             ),
-            IconButton(
-              tooltip: '前往手動控制',
-              onPressed: onOpenManual,
-              visualDensity: VisualDensity.compact,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              padding: EdgeInsets.zero,
-              icon: const Icon(
-                AppIcons.gamepad2,
-                color: Colors.white70,
-                size: 20,
+            if (onOpenManual != null)
+              IconButton(
+                tooltip: '進入手動模式',
+                onPressed: onOpenManual,
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                padding: EdgeInsets.zero,
+                icon: const Icon(
+                  AppIcons.gamepad2,
+                  color: Colors.white70,
+                  size: 20,
+                ),
               ),
-            ),
             TextButton(
               onPressed: busy
                   ? null
@@ -150,6 +177,7 @@ class _RecordingBar extends StatelessWidget {
                         context,
                         mission,
                         save: false,
+                        clearBottom: clearBottom,
                       ),
                     ),
               style: compact.copyWith(
@@ -166,7 +194,12 @@ class _RecordingBar extends StatelessWidget {
               onPressed: busy
                   ? null
                   : () => unawaited(
-                      finishRecordingWithFeedback(context, mission, save: true),
+                      finishRecordingWithFeedback(
+                        context,
+                        mission,
+                        save: true,
+                        clearBottom: clearBottom,
+                      ),
                     ),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -183,9 +216,10 @@ class _RecordingBar extends StatelessWidget {
 }
 
 class _PendingSaveBar extends StatelessWidget {
-  const _PendingSaveBar({required this.mission});
+  const _PendingSaveBar({required this.mission, required this.clearBottom});
 
   final MissionMockProvider mission;
+  final double? clearBottom;
 
   @override
   Widget build(BuildContext context) {
@@ -215,7 +249,13 @@ class _PendingSaveBar extends StatelessWidget {
             FilledButton.icon(
               onPressed: busy
                   ? null
-                  : () => unawaited(retrySaveWithFeedback(context, mission)),
+                  : () => unawaited(
+                      retrySaveWithFeedback(
+                        context,
+                        mission,
+                        clearBottom: clearBottom,
+                      ),
+                    ),
               style: FilledButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: const Color(0xFFE65100),

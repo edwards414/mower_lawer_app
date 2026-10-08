@@ -1,5 +1,5 @@
-// On-device smoke test for the front camera: pair with a real robot, open
-// the manual page and report what the WHEP camera view does.
+// On-device smoke test for the front camera: pair with a real robot, enter
+// manual mode on the map page and report what the WHEP camera view does.
 //
 //   flutter test integration_test/camera_smoke_test.dart -d <simulator> \
 //     --dart-define=PAIR_URL='https://mower.fxrbindi.com/pair?v=1&id=MW-…&s=…&l=…'
@@ -23,7 +23,7 @@ const _watchSeconds = int.fromEnvironment('WATCH_SECONDS', defaultValue: 25);
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('front camera on the manual page', (tester) async {
+  testWidgets('front camera in manual mode', (tester) async {
     expect(_pairUrl, isNotEmpty, reason: 'pass --dart-define=PAIR_URL=…');
     app.main();
     await tester.pump(const Duration(seconds: 2));
@@ -65,7 +65,10 @@ void main() {
       debugPrint('[camera-smoke] no NavigationBar; visible texts: $texts');
       return;
     }
-    await tester.tap(find.byType(NavigationDestination).at(2));
+    // Manual mode is part of the map page: open the map, then the button.
+    await tester.tap(find.byType(NavigationDestination).at(1));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('手動模式'));
     await tester.pump(const Duration(seconds: 1));
 
     String? last;

@@ -19,6 +19,7 @@ class WebrtcCameraView extends StatefulWidget {
     this.authHeaders,
     this.iceServersUrl = '',
     this.noUrlDetail = '尚未設定機器人 IP',
+    this.showStats = true,
   });
 
   final CameraFeed feed;
@@ -35,6 +36,11 @@ class WebrtcCameraView extends StatefulWidget {
 
   /// Shown in the placeholder while [whepUrl] is empty.
   final String noUrlDetail;
+
+  /// Shows the frame-rate number. Off while the view is a small
+  /// picture-in-picture, where only a stalled stream still shows (停格): a
+  /// frozen last frame must not pass for live video.
+  final bool showStats;
 
   @override
   State<WebrtcCameraView> createState() => _WebrtcCameraViewState();
@@ -182,7 +188,11 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
             ),
           ),
           if (_fps != null)
-            Positioned(left: 10, bottom: 10, child: _FpsBadge(fps: _fps!)),
+            Positioned(
+              left: widget.showStats ? 10 : 6,
+              bottom: widget.showStats ? 10 : 6,
+              child: CameraRateBadge(fps: _fps!, compact: !widget.showStats),
+            ),
         ],
       );
     }
@@ -197,25 +207,33 @@ class _WebrtcCameraViewState extends State<WebrtcCameraView> {
 }
 
 /// Received camera frame rate, e.g. "15 Hz"; red when the stream has stalled.
-class _FpsBadge extends StatelessWidget {
-  const _FpsBadge({required this.fps});
+/// [compact] (a small view) leaves the number out and shows only a stall, as
+/// 停格, so a frozen last frame is never mistaken for live video.
+class CameraRateBadge extends StatelessWidget {
+  const CameraRateBadge({super.key, required this.fps, this.compact = false});
 
   final double fps;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final stalled = fps < 1;
+    if (compact && !stalled) {
+      return const SizedBox.shrink();
+    }
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 8, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
+        color: compact
+            ? const Color(0xE6D32F2F)
+            : Colors.black.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Text(
-        '${fps.toStringAsFixed(fps < 10 ? 1 : 0)} Hz',
+        compact ? '停格' : '${fps.toStringAsFixed(fps < 10 ? 1 : 0)} Hz',
         style: TextStyle(
-          color: stalled ? const Color(0xFFFF6B6B) : Colors.white,
-          fontSize: 12,
+          color: stalled && !compact ? const Color(0xFFFF6B6B) : Colors.white,
+          fontSize: compact ? 11 : 12,
           fontWeight: FontWeight.w800,
           fontFeatures: const [FontFeature.tabularFigures()],
         ),
@@ -250,34 +268,41 @@ class _CameraPlaceholder extends StatelessWidget {
     return DecoratedBox(
       decoration: const BoxDecoration(color: Color(0xFF111827)),
       child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              AppIcons.videoOff,
-              color: Color(0xFFECEFF1),
-              size: 48,
+        // Shrinks to fit when the view is a small picture-in-picture.
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  AppIcons.videoOff,
+                  color: Color(0xFFECEFF1),
+                  size: 48,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  detail,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFFB0BEC5),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              detail,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Color(0xFFB0BEC5),
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

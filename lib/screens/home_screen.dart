@@ -82,8 +82,15 @@ class _MowerDashboardShell extends StatefulWidget {
 }
 
 class _MowerDashboardShellState extends State<_MowerDashboardShell> {
+  static const _mapTab = 1;
+  static const _settingsTab = 2;
+
   int _selectedIndex = 0;
   final _mapKey = GlobalKey<_MissionMapScreenState>();
+
+  /// Manual mode of the map page (joysticks and camera over the map). Held
+  /// here so the navigation bar can step aside while it is on.
+  final _driveMode = ValueNotifier<bool>(false);
   MissionMockProvider? _mission;
 
   @override
@@ -94,103 +101,90 @@ class _MowerDashboardShellState extends State<_MowerDashboardShell> {
 
   @override
   void dispose() {
-    if (_selectedIndex == 2) {
+    if (_driveMode.value) {
       _mission?.stopManualControl();
     }
+    _driveMode.dispose();
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    // Manual-control tab goes full-screen in landscape: hide the bottom nav
-    // (the in-page ✕ button still exits, so the user is never trapped).
-    final hideNav =
-        MediaQuery.of(context).orientation == Orientation.landscape &&
-        _selectedIndex == 2;
-    return Scaffold(
-      backgroundColor: const Color(0xFFF6F7F8),
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: [
-          _DashboardHomePage(
-            onShowVersions: () => setState(() => _selectedIndex = 3),
-            onOpenSettings: () => setState(() => _selectedIndex = 3),
-            onOpenRun: () {
-              context.read<MissionMockProvider>().selectMode(MissionMode.run);
-              // A panel the operator collapsed earlier would hide the run
-              // controls this button promises.
-              _mapKey.currentState?.revealPanel();
-              setState(() => _selectedIndex = 1);
-            },
-          ),
-          // Operating pages are blocked while the robot's API version is
-          // outside what this app supports (see RobotInfoProvider).
-          CompatibilityGate(
-            onShowVersions: () => setState(() => _selectedIndex = 3),
-            child: MissionMapScreen(
-              key: _mapKey,
-              onOpenManual: () => setState(() => _selectedIndex = 2),
-            ),
-          ),
-          CompatibilityGate(
-            onShowVersions: () => setState(() => _selectedIndex = 3),
-            child: _ManualControlTab(
-              onGoHome: () {
-                context.read<MissionMockProvider>().stopManualControl();
-                setState(() => _selectedIndex = 0);
-              },
-            ),
-          ),
-          _MoreTab(visible: _selectedIndex == 3),
-        ],
-      ),
-      bottomNavigationBar: hideNav
-          ? null
-          : NavigationBar(
-              height: 70,
-              selectedIndex: _selectedIndex,
-              labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-              indicatorColor: const Color(0xFFE3F5EA),
-              onDestinationSelected: (index) {
-                if (_selectedIndex == 2 && index != 2) {
-                  context.read<MissionMockProvider>().stopManualControl();
-                }
-                setState(() => _selectedIndex = index);
-              },
-              destinations: const [
-                NavigationDestination(icon: Icon(AppIcons.house), label: '首頁'),
-                NavigationDestination(icon: Icon(AppIcons.map), label: '地圖'),
-                NavigationDestination(
-                  icon: Icon(AppIcons.gamepad2),
-                  label: '手動控制',
-                ),
-                NavigationDestination(
-                  icon: Icon(AppIcons.ellipsis),
-                  label: '更多',
-                ),
-              ],
-            ),
-    );
+  /// Ends manual mode: the robot is told to stop first, then the page drops
+  /// the controls.
+  void _leaveManualMode() {
+    if (!_driveMode.value) return;
+    _mission?.stopManualControl();
+    _driveMode.value = false;
   }
-}
 
-class _ManualControlTab extends StatefulWidget {
-  const _ManualControlTab({required this.onGoHome});
+  /// Switches tab. Leaving the map ends manual mode.
+  void _selectTab(int index) {
+    if (index != _mapTab) _leaveManualMode();
+    setState(() => _selectedIndex = index);
+  }
 
-  final VoidCallback onGoHome;
-
-  @override
-  State<_ManualControlTab> createState() => _ManualControlTabState();
-}
-
-class _ManualControlTabState extends State<_ManualControlTab> {
   @override
   Widget build(BuildContext context) {
-    return Consumer<MissionMockProvider>(
-      builder: (context, mission, _) => ManualControlOverlay(
-        mission: mission,
-        onExit: widget.onGoHome,
-        recorder: context.read<RecorderProvider>(),
+    // Manual mode is full-screen: the bottom nav steps aside (the in-page ✕
+    // button still exits, so the user is never trapped).
+    return ValueListenableBuilder<bool>(
+      valueListenable: _driveMode,
+      // Back leaves manual mode before it leaves the app.
+      builder: (context, driving, _) => PopScope(
+        canPop: !driving,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) _leaveManualMode();
+        },
+        child: Scaffold(
+          backgroundColor: const Color(0xFFF6F7F8),
+          body: IndexedStack(
+            index: _selectedIndex,
+            children: [
+              _DashboardHomePage(
+                onShowVersions: () => _selectTab(_settingsTab),
+                onOpenSettings: () => _selectTab(_settingsTab),
+                onOpenRun: () {
+                  context.read<MissionMockProvider>().selectMode(
+                    MissionMode.run,
+                  );
+                  // A panel the operator collapsed earlier would hide the run
+                  // controls this button promises.
+                  _mapKey.currentState?.revealPanel();
+                  _selectTab(_mapTab);
+                },
+              ),
+              // Operating pages are blocked while the robot's API version is
+              // outside what this app supports (see RobotInfoProvider).
+              CompatibilityGate(
+                onShowVersions: () => _selectTab(_settingsTab),
+                child: MissionMapScreen(key: _mapKey, driveMode: _driveMode),
+              ),
+              _SettingsTab(visible: _selectedIndex == _settingsTab),
+            ],
+          ),
+          bottomNavigationBar: driving
+              ? null
+              : NavigationBar(
+                  height: 70,
+                  selectedIndex: _selectedIndex,
+                  labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+                  indicatorColor: const Color(0xFFE3F5EA),
+                  onDestinationSelected: _selectTab,
+                  destinations: const [
+                    NavigationDestination(
+                      icon: Icon(AppIcons.house),
+                      label: '首頁',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(AppIcons.map),
+                      label: '地圖',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(AppIcons.settings),
+                      label: '設定',
+                    ),
+                  ],
+                ),
+        ),
       ),
     );
   }
@@ -205,7 +199,7 @@ class _DashboardHomePage extends StatelessWidget {
 
   final VoidCallback? onShowVersions;
 
-  /// Switches to the 更多 tab, where the robot settings live.
+  /// Switches to the 設定 tab, where the robot settings live.
   final VoidCallback? onOpenSettings;
 
   /// Opens the map on its run panel (navigation only; never sends a command).
@@ -793,8 +787,8 @@ class _VerticalDivider extends StatelessWidget {
   }
 }
 
-class _MoreTab extends StatelessWidget {
-  const _MoreTab({required this.visible});
+class _SettingsTab extends StatelessWidget {
+  const _SettingsTab({required this.visible});
 
   /// This tab is on screen (the shell keeps every tab alive).
   final bool visible;
@@ -813,7 +807,7 @@ class _MoreTab extends StatelessWidget {
           physics: const BouncingScrollPhysics(),
           children: [
             const Text(
-              '更多',
+              '設定',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 16),
@@ -822,7 +816,7 @@ class _MoreTab extends StatelessWidget {
             const _DashboardCard(child: ManualSpeedSetting()),
             const SizedBox(height: 10),
             _DashboardCard(
-              child: _MoreActionRow(
+              child: _SettingsActionRow(
                 icon: AppIcons.video,
                 title: '錄製 / Bag',
                 detail: '錄製狀態、清單、上傳 R2',
@@ -907,8 +901,8 @@ class _AdvancedSection extends StatelessWidget {
   }
 }
 
-class _MoreActionRow extends StatelessWidget {
-  const _MoreActionRow({
+class _SettingsActionRow extends StatelessWidget {
+  const _SettingsActionRow({
     required this.icon,
     required this.title,
     required this.detail,
@@ -960,10 +954,12 @@ class _MoreActionRow extends StatelessWidget {
 }
 
 class MissionMapScreen extends StatefulWidget {
-  const MissionMapScreen({super.key, required this.onOpenManual});
+  const MissionMapScreen({super.key, required this.driveMode});
 
-  /// Switches to the manual-control page, where a recording is driven.
-  final VoidCallback onOpenManual;
+  /// Whether the page is in manual mode: the joysticks and the live camera
+  /// over this same map, with the bottom panel and the navigation bar out of
+  /// the way. Owned by the shell, which hides the bar while it is on.
+  final ValueNotifier<bool> driveMode;
 
   @override
   State<MissionMapScreen> createState() => _MissionMapScreenState();
@@ -978,6 +974,30 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
   /// Keep the map centred on the robot. Toggled by the follow button; dragging
   /// the satellite map also turns it off.
   bool _followRobot = true;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.driveMode.addListener(_onDriveModeChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.driveMode.removeListener(_onDriveModeChanged);
+    super.dispose();
+  }
+
+  void _onDriveModeChanged() => setState(() {});
+
+  /// Manual mode: joysticks and the live camera over this same map.
+  void _enterDrive() {
+    if (widget.driveMode.value) return;
+    if (_popupOffset != null) _dismissPopup();
+    widget.driveMode.value = true;
+  }
+
+  /// Leaves manual mode (the controls stop the robot themselves when they go).
+  void _exitDrive() => widget.driveMode.value = false;
 
   /// Expands the bottom panel (used when another tab sends the user to it).
   void revealPanel() {
@@ -1029,10 +1049,8 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     }
   }
 
-  void _openAddObject() => _showAppSheet(
-    context,
-    AddObjectSheet(onRecordingStarted: widget.onOpenManual),
-  );
+  void _openAddObject() =>
+      _showAppSheet(context, AddObjectSheet(onRecordingStarted: _enterDrive));
 
   Future<void> _togglePhoneLocation() async {
     final phone = context.read<PhoneLocationProvider>();
@@ -1093,6 +1111,7 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
         ? math.min(size.height * 0.5, 220.0)
         : math.min(size.height * 0.43, 370.0);
 
+    final driving = widget.driveMode.value;
     final collapsedH = 48.0 + media.padding.bottom;
     // Collapse the panel during draw / vertex-edit so more map is reachable.
     final collapsed =
@@ -1103,24 +1122,45 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
         (!collapsed && !isLandscape && MissionNextStep.of(mission) != null)
         ? kNextStepBannerExtent
         : 0.0;
-    final effectivePanelH = collapsed ? collapsedH : panelHeight + bannerExtra;
+    // Manual mode has no panel at all: the map gets the whole page.
+    final effectivePanelH = driving
+        ? 0.0
+        : collapsed
+        ? collapsedH
+        : panelHeight + bannerExtra;
+    // Going into manual mode swaps the layout at once; coming back lets the
+    // map ease down to the panel.
+    final layoutMotion = driving
+        ? Duration.zero
+        : const Duration(milliseconds: 300);
 
     // Paused while drawing / editing vertices so the map holds still under
-    // the finger.
+    // the finger. Manual mode always follows: the robot is what you steer.
     final following =
-        _followRobot &&
+        (_followRobot || driving) &&
         mission.shouldShowRobot &&
         !mission.drawMode &&
         !mission.editVertexMode;
 
     final selectedRobot = fleet.selectedRobot;
-    final popupOrigin = (_popupOffset != null && selectedRobot != null)
+    final popupOrigin =
+        (!driving && _popupOffset != null && selectedRobot != null)
         ? _clampedPopupOrigin(_popupOffset!, size)
         : null;
 
+    // The idle slot above the panel, taken by whichever bar owns the guidance
+    // (drawing, vertex editing, a recording) and otherwise by the way into
+    // manual mode.
+    final showManualEntry =
+        !mission.drawMode &&
+        !mission.editVertexMode &&
+        mission.recordingType == null &&
+        !mission.hasPendingRecordSave;
+
     return Scaffold(
       body: GestureDetector(
-        onLongPressStart: _onLongPress,
+        // Taps and long-presses on the map select things; not while driving.
+        onLongPressStart: driving ? null : _onLongPress,
         // Pan handlers exist ONLY in vertex-edit mode; otherwise they are null
         // so the PanGestureRecognizer doesn't compete with the panel's scroll.
         onPanStart: mission.editVertexMode
@@ -1146,52 +1186,61 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                 }
               }
             : null,
-        onTapUp: (details) {
-          // Drawing takes precedence over robot-popup dismissal / selection,
-          // so the first tap after entering draw mode drops a vertex.
-          if (mission.drawMode) {
-            if (details.localPosition.dy > size.height - effectivePanelH) {
-              return;
-            }
-            final proj = _canvasKey.currentState?.lastProjection;
-            if (proj != null) {
-              mission.addDraftVertex(proj.unproject(details.localPosition));
-            }
-            return;
-          }
-          // In vertex-edit a tap must not re-run selection; only dismiss a popup.
-          if (mission.editVertexMode) {
-            if (fleet.selectedRobotId != null) _dismissPopup();
-            return;
-          }
-          if (fleet.selectedRobotId != null) {
-            _dismissPopup();
-            return;
-          }
-          // Ignore taps that land on the bottom panel.
-          if (details.localPosition.dy > size.height - effectivePanelH) {
-            return;
-          }
-          final proj = _canvasKey.currentState?.lastProjection;
-          if (proj == null) return;
-          final world = proj.unproject(details.localPosition);
-          final wRight = proj.unproject(
-            details.localPosition + const Offset(22, 0),
-          );
-          final tol = math
-              .sqrt(
-                math.pow(wRight.x - world.x, 2) +
-                    math.pow(wRight.y - world.y, 2),
-              )
-              .toDouble();
-          if (!mission.selectObjectAt(world, channelTol: tol)) {
-            mission.clearObjectSelection();
-          }
-        },
+        onTapUp: driving
+            ? null
+            : (details) {
+                // Drawing takes precedence over robot-popup dismissal /
+                // selection, so the first tap after entering draw mode drops a
+                // vertex.
+                if (mission.drawMode) {
+                  if (details.localPosition.dy >
+                      size.height - effectivePanelH) {
+                    return;
+                  }
+                  final proj = _canvasKey.currentState?.lastProjection;
+                  if (proj != null) {
+                    mission.addDraftVertex(
+                      proj.unproject(details.localPosition),
+                    );
+                  }
+                  return;
+                }
+                // In vertex-edit a tap must not re-run selection; only dismiss
+                // a popup.
+                if (mission.editVertexMode) {
+                  if (fleet.selectedRobotId != null) _dismissPopup();
+                  return;
+                }
+                if (fleet.selectedRobotId != null) {
+                  _dismissPopup();
+                  return;
+                }
+                // Ignore taps that land on the bottom panel.
+                if (details.localPosition.dy > size.height - effectivePanelH) {
+                  return;
+                }
+                final proj = _canvasKey.currentState?.lastProjection;
+                if (proj == null) return;
+                final world = proj.unproject(details.localPosition);
+                final wRight = proj.unproject(
+                  details.localPosition + const Offset(22, 0),
+                );
+                final tol = math
+                    .sqrt(
+                      math.pow(wRight.x - world.x, 2) +
+                          math.pow(wRight.y - world.y, 2),
+                    )
+                    .toDouble();
+                if (!mission.selectObjectAt(world, channelTol: tol)) {
+                  mission.clearObjectSelection();
+                }
+              },
         child: Stack(
           children: [
-            // While drawing, force the vector canvas (it owns the projection
-            // that tap-to-vertex needs); satellite has no projection yet.
+            // The one map, in its own layer so nothing drawn above it (the
+            // joysticks, the camera) repaints it. While drawing, force the
+            // vector canvas (it owns the projection that tap-to-vertex
+            // needs); satellite has no projection yet.
             if (mission.satelliteBaseMap &&
                 mission.mapGeoAnchor != null &&
                 !mission.drawMode &&
@@ -1200,133 +1249,164 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
               // corners, resizing with it) so the framing and the followed
               // robot are centred in what is visible.
               AnimatedPositioned(
-                duration: const Duration(milliseconds: 300),
+                duration: layoutMotion,
                 curve: Curves.easeInOut,
                 left: 0,
                 top: 0,
                 right: 0,
-                bottom: effectivePanelH - 28,
-                child: SatelliteMapView(
-                  mission: mission,
-                  anchor: mission.mapGeoAnchor!,
-                  phonePosition: phone.position,
-                  phoneAccuracyM: phone.accuracyM,
-                  followRobot: following,
-                  onFollowRobotChanged: (on) =>
-                      setState(() => _followRobot = on),
-                  aiEnhance: mission.aiBaseMap,
+                bottom: driving ? 0 : effectivePanelH - 28,
+                child: RepaintBoundary(
+                  child: SatelliteMapView(
+                    mission: mission,
+                    anchor: mission.mapGeoAnchor!,
+                    phonePosition: phone.position,
+                    phoneAccuracyM: phone.accuracyM,
+                    followRobot: following,
+                    onFollowRobotChanged: (on) =>
+                        setState(() => _followRobot = on),
+                    lockPan: driving,
+                    bottomInset: driving
+                        ? ManualControlOverlay.controlsClearance(size)
+                        : 0,
+                    animateMarker: !driving,
+                    aiEnhance: mission.aiBaseMap,
+                  ),
                 ),
               )
             else
               Positioned.fill(
-                child: MissionMapCanvas(
-                  key: _canvasKey,
-                  mission: mission,
-                  robots: fleet.robots,
-                  selectedRobotId: fleet.selectedRobotId,
-                  bottomInset: effectivePanelH,
-                  phonePosition: phoneWorld,
-                  phoneAccuracyM: phone.accuracyM,
-                  centerOn: following ? mission.robotPosition : null,
+                child: RepaintBoundary(
+                  child: MissionMapCanvas(
+                    key: _canvasKey,
+                    mission: mission,
+                    robots: fleet.robots,
+                    selectedRobotId: fleet.selectedRobotId,
+                    bottomInset: effectivePanelH,
+                    // Its corner is where the left joystick sits.
+                    showScalePill: !driving,
+                    phonePosition: phoneWorld,
+                    phoneAccuracyM: phone.accuracyM,
+                    centerOn: following ? mission.robotPosition : null,
+                  ),
                 ),
               ),
-            Positioned(
-              top: media.padding.top + 10,
-              left: 12,
-              right: 12,
-              child: const Center(child: TopStatusPill()),
-            ),
-            Positioned(
-              top: media.padding.top + 78,
-              left: 12,
-              child: _SatelliteToggle(
-                on: mission.satelliteBaseMap,
-                enabled: mission.mapGeoAnchor != null,
-                onTap: mission.toggleSatelliteBaseMap,
-              ),
-            ),
-            Positioned(
-              top: media.padding.top + 78 + 56,
-              left: 12,
-              child: _PhoneLocationToggle(
-                on: phone.enabled,
-                statusText: !phone.enabled
-                    ? null
-                    : phone.position == null
-                    ? '定位中…'
-                    : mission.mapGeoAnchor == null
-                    ? '地圖尚未對應 GPS，無法標示'
-                    : mission.shouldShowRobot
-                    ? '距割草機 ${_formatDistance(phoneWorld!, mission.robotPosition)}'
-                    : null,
-                onTap: _togglePhoneLocation,
-              ),
-            ),
-            Positioned(
-              top: media.padding.top + 78 + 112,
-              left: 12,
-              child: _FollowRobotToggle(
-                on: _followRobot,
-                enabled: mission.shouldShowRobot,
-                onTap: () => setState(() => _followRobot = !_followRobot),
-              ),
-            ),
-            Positioned(
-              top: media.padding.top + 78,
-              right: 12,
-              child: _MapActionRail(
-                onAdd: _openAddObject,
-                onSites: () => _showAppSheet(context, const SiteLibrarySheet()),
-                onLayers: () =>
-                    _showAppSheet(context, const _LayerToggleSheet()),
-              ),
-            ),
-            if (mission.drawMode)
+            if (!driving) ...[
               Positioned(
+                top: media.padding.top + 10,
                 left: 12,
                 right: 12,
-                bottom: effectivePanelH + 12,
-                child: _DrawControlBar(
-                  count: mission.draftPolygon.length,
-                  onUndo: mission.undoDraftVertex,
-                  onCancel: mission.cancelDraw,
-                  onCommit: mission.commitDraw,
-                ),
+                child: const Center(child: TopStatusPill()),
               ),
-            if (mission.editVertexMode)
               Positioned(
+                top: media.padding.top + 78,
                 left: 12,
-                right: 12,
-                bottom: effectivePanelH + 12,
-                child: _VertexEditBar(
-                  count: mission.editPolygon.length,
-                  onCancel: mission.cancelVertexEdit,
-                  onCommit: mission.commitVertexEdit,
+                child: _SatelliteToggle(
+                  on: mission.satelliteBaseMap,
+                  enabled: mission.mapGeoAnchor != null,
+                  onTap: mission.toggleSatelliteBaseMap,
                 ),
               ),
-            if (mission.recordingType != null || mission.hasPendingRecordSave)
               Positioned(
+                top: media.padding.top + 78 + 56,
                 left: 12,
-                right: 12,
-                bottom: effectivePanelH + 12,
-                child: MapRecordBar(onOpenManual: widget.onOpenManual),
-              ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-                height: effectivePanelH,
-                child: _MissionBottomPanel(
-                  isCollapsed: collapsed,
-                  onToggle: () =>
-                      setState(() => _panelCollapsed = !_panelCollapsed),
-                  onAddObject: _openAddObject,
+                child: _PhoneLocationToggle(
+                  on: phone.enabled,
+                  statusText: !phone.enabled
+                      ? null
+                      : phone.position == null
+                      ? '定位中…'
+                      : mission.mapGeoAnchor == null
+                      ? '地圖尚未對應 GPS，無法標示'
+                      : mission.shouldShowRobot
+                      ? '距割草機 ${_formatDistance(phoneWorld!, mission.robotPosition)}'
+                      : null,
+                  onTap: _togglePhoneLocation,
                 ),
               ),
-            ),
+              Positioned(
+                top: media.padding.top + 78 + 112,
+                left: 12,
+                child: _FollowRobotToggle(
+                  on: _followRobot,
+                  enabled: mission.shouldShowRobot,
+                  onTap: () => setState(() => _followRobot = !_followRobot),
+                ),
+              ),
+              Positioned(
+                top: media.padding.top + 78,
+                right: 12,
+                child: _MapActionRail(
+                  onAdd: _openAddObject,
+                  onSites: () =>
+                      _showAppSheet(context, const SiteLibrarySheet()),
+                  onLayers: () =>
+                      _showAppSheet(context, const _LayerToggleSheet()),
+                ),
+              ),
+              if (mission.drawMode)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: effectivePanelH + 12,
+                  child: _DrawControlBar(
+                    count: mission.draftPolygon.length,
+                    onUndo: mission.undoDraftVertex,
+                    onCancel: mission.cancelDraw,
+                    onCommit: mission.commitDraw,
+                  ),
+                ),
+              if (mission.editVertexMode)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: effectivePanelH + 12,
+                  child: _VertexEditBar(
+                    count: mission.editPolygon.length,
+                    onCancel: mission.cancelVertexEdit,
+                    onCommit: mission.commitVertexEdit,
+                  ),
+                ),
+              if (mission.recordingType != null || mission.hasPendingRecordSave)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: effectivePanelH + 12,
+                  child: MapRecordBar(onOpenManual: _enterDrive),
+                ),
+              // Portrait: centred above the panel (the tool columns sit at
+              // both sides of the map). Landscape leaves hardly any map above
+              // the panel, so it takes the top-right corner rather than
+              // cover the robot.
+              if (showManualEntry)
+                AnimatedPositioned(
+                  duration: layoutMotion,
+                  curve: Curves.easeInOut,
+                  left: isLandscape ? null : 0,
+                  right: isLandscape ? math.max(12.0, media.padding.right) : 0,
+                  top: isLandscape ? media.padding.top + 10 : null,
+                  bottom: isLandscape ? null : effectivePanelH + 12,
+                  child: isLandscape
+                      ? _ManualModeButton(onTap: _enterDrive)
+                      : Center(child: _ManualModeButton(onTap: _enterDrive)),
+                ),
+              // The bottom panel is not built at all in manual mode.
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  height: effectivePanelH,
+                  child: _MissionBottomPanel(
+                    isCollapsed: collapsed,
+                    onToggle: () =>
+                        setState(() => _panelCollapsed = !_panelCollapsed),
+                    onAddObject: _openAddObject,
+                  ),
+                ),
+              ),
+            ],
             if (popupOrigin != null && selectedRobot != null)
               Positioned(
                 left: popupOrigin.dx,
@@ -1337,7 +1417,55 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                   onClose: _dismissPopup,
                 ),
               ),
+            // Manual mode: the joysticks, the camera and the recording
+            // controls float over the same map; only they take touches.
+            if (driving)
+              Positioned.fill(
+                child: ManualControlOverlay(
+                  mission: mission,
+                  recorder: context.read<RecorderProvider>(),
+                  onExit: _exitDrive,
+                ),
+              ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The way into manual mode, floating just above the bottom panel.
+class _ManualModeButton extends StatelessWidget {
+  const _ManualModeButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFF167A4A),
+      shape: const StadiumBorder(),
+      elevation: 6,
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(AppIcons.gamepad2, color: Colors.white, size: 22),
+              SizedBox(width: 8),
+              Text(
+                '手動模式',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

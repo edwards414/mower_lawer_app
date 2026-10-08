@@ -149,6 +149,82 @@ void main() {
     await sentSub.cancel();
   });
 
+  test('the robot\'s own update check is parsed (API 2)', () {
+    // Not looked up yet (or an API 1 robot): the fields are absent.
+    final fresh = RobotInfo.tryParse(jsonEncode(_sample))!;
+    expect(fresh.update.available, isNull);
+    expect(fresh.update.checkError, '');
+
+    final current = RobotInfo.tryParse(
+      jsonEncode({
+        ..._sample,
+        'api_version': 2,
+        'update': {
+          'state': 'idle',
+          'available': false,
+          'remote_digest': 'sha256:abc',
+          'checked_at': 1791449795,
+          'check_error': null,
+        },
+      }),
+    )!;
+    expect(current.update.available, isFalse);
+    expect(current.update.checkError, '');
+
+    final newer = RobotInfo.tryParse(
+      jsonEncode({
+        ..._sample,
+        'update': {'state': 'idle', 'available': true},
+      }),
+    )!;
+    expect(newer.update.available, isTrue);
+
+    final offline = RobotInfo.tryParse(
+      jsonEncode({
+        ..._sample,
+        'update': {'state': 'idle', 'check_error': 'registry unreachable'},
+      }),
+    )!;
+    expect(offline.update.available, isNull);
+    expect(offline.update.checkError, 'registry unreachable');
+  });
+
+  test('requestCheckUpdate asks the robot to look the channel up now', () async {
+    final channel = _FakeWebSocketChannel();
+    final sent = <Map<String, dynamic>>[];
+    final sentSub = channel.sent.stream.cast<String>().listen(
+      (s) => sent.add(jsonDecode(s) as Map<String, dynamic>),
+    );
+    final service = RosbridgeService(
+      url: 'ws://robot.test:9090',
+      connector: (_, {headers = const <String, dynamic>{}, protocols = const <String>[]}) => channel,
+    );
+    final provider = RobotInfoProvider(rosbridge: service);
+    service.connect();
+    channel.markReady();
+    await _flushEvents();
+
+    final future = provider.requestCheckUpdate();
+    await _flushEvents();
+    final call = sent.firstWhere((m) => m['op'] == 'call_service');
+    expect(call['service'], '/system/check_update');
+    channel.addIncoming(
+      jsonEncode({
+        'op': 'service_response',
+        'id': call['id'],
+        'service': '/system/check_update',
+        'result': true,
+        'values': {'success': true, 'message': 'checking'},
+      }),
+    );
+    expect((await future).success, isTrue);
+    expect(provider.lastActionResult, contains('檢查更新'));
+
+    provider.dispose();
+    service.dispose();
+    await sentSub.cancel();
+  });
+
   test('requestUpdate calls /system/update and reports the answer', () async {
     final channel = _FakeWebSocketChannel();
     final sent = <Map<String, dynamic>>[];

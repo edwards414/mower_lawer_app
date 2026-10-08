@@ -239,7 +239,25 @@ class MissionMapCanvasState extends State<MissionMapCanvas>
     _breatheController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
-    )..repeat(reverse: true);
+    );
+    _syncBreathing();
+  }
+
+  @override
+  void didUpdateWidget(MissionMapCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncBreathing();
+  }
+
+  /// The pulse only shows on the selected fleet robot and its rows. With none
+  /// selected nothing reads it, so it stays off instead of repainting the
+  /// whole map every frame.
+  void _syncBreathing() {
+    if (widget.selectedRobotId == null) {
+      _breatheController.stop();
+    } else if (!_breatheController.isAnimating) {
+      _breatheController.repeat(reverse: true);
+    }
   }
 
   @override
@@ -250,38 +268,37 @@ class MissionMapCanvasState extends State<MissionMapCanvas>
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _breatheController,
-      builder: (context, _) => CustomPaint(
-        painter: _MissionMapPainter(
-          mission: widget.mission,
-          bottomInset: widget.bottomInset,
-          showScalePill: widget.showScalePill,
-          robots: widget.robots,
-          selectedRobotId: widget.selectedRobotId,
-          breatheValue: _breatheController.value,
-          onRobotPositionsPainted: _onRobotPositionsPainted,
-          alignmentOverlay: widget.alignmentOverlay,
-          worldBoundsOverride: widget.worldBoundsOverride,
-          onProjectionPainted: _onProjectionPainted,
-          phonePosition: widget.phonePosition,
-          phoneAccuracyM: widget.phoneAccuracyM,
-          centerOn: widget.centerOn,
-        ),
-        child: const SizedBox.expand(),
+    return CustomPaint(
+      painter: _MissionMapPainter(
+        mission: widget.mission,
+        bottomInset: widget.bottomInset,
+        showScalePill: widget.showScalePill,
+        robots: widget.robots,
+        selectedRobotId: widget.selectedRobotId,
+        breathe: _breatheController,
+        onRobotPositionsPainted: _onRobotPositionsPainted,
+        alignmentOverlay: widget.alignmentOverlay,
+        worldBoundsOverride: widget.worldBoundsOverride,
+        onProjectionPainted: _onProjectionPainted,
+        phonePosition: widget.phonePosition,
+        phoneAccuracyM: widget.phoneAccuracyM,
+        centerOn: widget.centerOn,
       ),
+      child: const SizedBox.expand(),
     );
   }
 }
 
 class _MissionMapPainter extends CustomPainter {
+  // Repaints whenever the mission changes or (while it runs) the pulse ticks,
+  // without the widget being rebuilt for either.
   _MissionMapPainter({
     required this.mission,
     required this.bottomInset,
     required this.showScalePill,
     required this.robots,
     required this.selectedRobotId,
-    required this.breatheValue,
+    required this.breathe,
     required this.onRobotPositionsPainted,
     this.alignmentOverlay,
     this.worldBoundsOverride,
@@ -289,14 +306,14 @@ class _MissionMapPainter extends CustomPainter {
     this.phonePosition,
     this.phoneAccuracyM,
     this.centerOn,
-  });
+  }) : super(repaint: Listenable.merge([mission, breathe]));
 
   final MissionMockProvider mission;
   final double bottomInset;
   final bool showScalePill;
   final List<RobotAgent> robots;
   final int? selectedRobotId;
-  final double breatheValue;
+  final Animation<double> breathe;
   final void Function(Map<int, Offset>) onRobotPositionsPainted;
   final ImageAlignmentOverlay? alignmentOverlay;
   final Rect? worldBoundsOverride;
@@ -436,7 +453,7 @@ class _MissionMapPainter extends CustomPainter {
         final drawColor = robot.online ? robot.color : _desaturate(robot.color);
         final isSelected = robot.id == selectedRobotId;
         if (isSelected && selectedRobotId != null && robot.online) {
-          _drawRobotGlow(canvas, screenPos, robot.color, breatheValue);
+          _drawRobotGlow(canvas, screenPos, robot.color, breathe.value);
         }
         _drawRobotWithColor(canvas, screenPos, robot.headingRad, drawColor);
         _drawRobotLabel(canvas, robot.name, screenPos, drawColor);
@@ -500,7 +517,7 @@ class _MissionMapPainter extends CustomPainter {
         double opacity;
         if (isAnySelected) {
           // Breathing pulse for selected robot; dim others
-          opacity = isSelected ? (0.35 + 0.65 * breatheValue) : 0.28;
+          opacity = isSelected ? (0.35 + 0.65 * breathe.value) : 0.28;
         } else {
           opacity = 0.75;
         }
