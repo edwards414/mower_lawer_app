@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show SynchronousFuture;
+import 'package:flutter/foundation.dart' show SynchronousFuture, setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -9,9 +9,10 @@ import 'package:latlong2/latlong.dart';
 import '../models/geo_anchor.dart';
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
+import '../services/ai_basemap_service.dart';
 import 'breathing_marker.dart';
 
-/// Satellite base-map view: Mapbox satellite tiles with the mission overlays
+/// Satellite base-map view: NLSC aerial orthophoto tiles with the mission overlays
 /// (freespace / risk / channel grids, zones, coverage path, robot) projected
 /// from the local map frame onto real-world lat/lon via [GeoAnchor]. The
 /// alternative to the schematic [MissionMapCanvas] when satellite mode is on.
@@ -24,6 +25,8 @@ class SatelliteMapView extends StatefulWidget {
     this.phoneAccuracyM,
     this.followRobot = false,
     this.onFollowRobotChanged,
+    this.aiEnhance = false,
+    this.aiService,
   });
 
   final MissionMockProvider mission;
@@ -38,10 +41,22 @@ class SatelliteMapView extends StatefulWidget {
   final bool followRobot;
   final ValueChanged<bool>? onFollowRobotChanged;
 
-  /// Inject at build/run time with `--dart-define=MAPBOX_TOKEN=...` or a
-  /// gitignored `--dart-define-from-file`. Never keep a fallback token in the
-  /// source tree: even a Mapbox public token should be scoped and rotatable.
-  static const String _mapboxToken = String.fromEnvironment('MAPBOX_TOKEN');
+  /// Overlay the content area with AI-sharpened (x4) tiles.
+  final bool aiEnhance;
+
+  /// Injected for tests; by default one is created on first use.
+  final AiBaseMapService? aiService;
+
+  /// NLSC (內政部國土測繪中心) PHOTO2 orthophoto: free under the Open
+  /// Government Data License (attribution required), no token, Taiwan only.
+  /// Note the {y}/{x} order.
+  static const String nlscTileUrl =
+      'https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/{z}/{y}/{x}';
+
+  /// The imagery is ~27 cm/px, i.e. native up to z19. Deeper zooms scale the
+  /// z19 tiles up instead of fetching server-upscaled tiles with no extra
+  /// detail.
+  static const int nlscMaxNativeZoom = 19;
 
   @override
   State<SatelliteMapView> createState() => _SatelliteMapViewState();
@@ -53,6 +68,16 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
   /// A pinch or double-tap zoom is running; recentring now would fight it.
   bool _zooming = false;
   bool _recentreScheduled = false;
+
+  AiBaseMapService? _ownAi;
+  AiBaseMapService get _ai =>
+      widget.aiService ?? (_ownAi ??= AiBaseMapService());
+
+  /// AI tiles for the current content area, the ones still loading, and the
+  /// area they were computed for.
+  final Map<SrTile, ui.Image> _aiTiles = {};
+  final Set<SrTile> _aiLoading = {};
+  Set<SrTile> _aiWanted = const {};
 
   MissionMockProvider get mission => widget.mission;
   GeoAnchor get anchor => widget.anchor;
@@ -66,7 +91,57 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
   @override
   void dispose() {
     _mapController.dispose();
+    for (final image in _aiTiles.values) {
+      image.dispose();
+    }
+    _ownAi?.close();
     super.dispose();
+  }
+
+  /// Brings the AI tiles in line with [bounds]: drops the ones that left it
+  /// and starts loading the missing ones (after this frame; never mid-build).
+  void _syncAiTiles(LatLngBounds bounds) {
+    final wanted = widget.aiEnhance
+        ? SrTile.covering(bounds).toSet()
+        : const <SrTile>{};
+    if (setEquals(wanted, _aiWanted)) return;
+    _aiWanted = wanted;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !setEquals(wanted, _aiWanted)) return;
+      final gone = _aiTiles.keys.where((t) => !wanted.contains(t)).toList();
+      if (gone.isNotEmpty) {
+        setState(() {
+          for (final t in gone) {
+            _aiTiles.remove(t)?.dispose();
+          }
+        });
+      }
+      for (final t in wanted) {
+        if (!_aiTiles.containsKey(t) && !_aiLoading.contains(t)) {
+          _loadAiTile(t);
+        }
+      }
+    });
+  }
+
+  Future<void> _loadAiTile(SrTile tile) async {
+    setState(() => _aiLoading.add(tile));
+    try {
+      final result = await _ai.load(tile);
+      if (result == null) return;
+      if (!mounted || !_aiWanted.contains(tile)) {
+        result.image.dispose();
+        return;
+      }
+      setState(() {
+        _aiTiles.remove(tile)?.dispose();
+        _aiTiles[tile] = result.image;
+      });
+    } catch (e) {
+      debugPrint('AI tile $tile failed: $e');
+    } finally {
+      if (mounted) setState(() => _aiLoading.remove(tile));
+    }
   }
 
   /// Puts the robot at the centre of the map, keeping the zoom. Runs after the
@@ -203,91 +278,135 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
     ];
 
     final bounds = _contentBounds();
-
-    return Stack(
-      children: [
-        FlutterMap(
-          mapController: _mapController,
-          options: MapOptions(
-            // Open framed on the content; keep the map CENTRE locked to it (so
-            // you can't pan away to arbitrary places), but allow zooming out to
-            // see the surroundings (z16–z22, ~6 levels).
-            initialCameraFit: CameraFit.bounds(
-              bounds: widget.followRobot
-                  ? _contentBounds(centreOnRobot: true)
-                  : bounds,
-              padding: const EdgeInsets.all(24),
-            ),
-            // Until the fit applies, start inside the constraint (the
-            // controller asserts this when it is handed the options).
-            initialCenter: bounds.center,
-            cameraConstraint: CameraConstraint.containCenter(bounds: bounds),
-            onMapEvent: _onMapEvent,
-            minZoom: 16,
-            maxZoom: 22,
-            // Enable all gestures incl. mouse-wheel / trackpad zoom (works in
-            // the desktop-run iOS sim); rotation off to keep north up.
-            interactionOptions: const InteractionOptions(
-              flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-            ),
+    _syncAiTiles(bounds);
+    final aiOverlays = [
+      for (final e in _aiTiles.entries)
+        if (_aiWanted.contains(e.key))
+          OverlayImage(
+            bounds: e.key.bounds,
+            imageProvider: _UiImageProvider(e.value),
           ),
-          children: [
-            if (SatelliteMapView._mapboxToken.isNotEmpty)
-              TileLayer(
-                urlTemplate:
-                    'https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90'
-                    '?access_token=${SatelliteMapView._mapboxToken}',
-                userAgentPackageName: 'com.example.mower_stdio',
-                maxNativeZoom: 22,
+    ];
+
+    return FlutterMap(
+      mapController: _mapController,
+      options: MapOptions(
+        // Open framed on the content; keep the map CENTRE locked to it (so
+        // you can't pan away to arbitrary places), but allow zooming out to
+        // see the surroundings (z16–z22, ~6 levels).
+        initialCameraFit: CameraFit.bounds(
+          bounds: widget.followRobot
+              ? _contentBounds(centreOnRobot: true)
+              : bounds,
+          padding: const EdgeInsets.all(24),
+        ),
+        // Until the fit applies, start inside the constraint (the
+        // controller asserts this when it is handed the options).
+        initialCenter: bounds.center,
+        cameraConstraint: CameraConstraint.containCenter(bounds: bounds),
+        onMapEvent: _onMapEvent,
+        minZoom: 16,
+        maxZoom: 22,
+        // Enable all gestures incl. mouse-wheel / trackpad zoom (works in
+        // the desktop-run iOS sim); rotation off to keep north up.
+        interactionOptions: const InteractionOptions(
+          flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+        ),
+      ),
+      children: [
+        TileLayer(
+          urlTemplate: SatelliteMapView.nlscTileUrl,
+          userAgentPackageName: 'com.example.mower_stdio',
+          maxNativeZoom: SatelliteMapView.nlscMaxNativeZoom,
+        ),
+        if (aiOverlays.isNotEmpty) OverlayImageLayer(overlayImages: aiOverlays),
+        if (gridOverlays.isNotEmpty)
+          OverlayImageLayer(overlayImages: gridOverlays),
+        if (zonePolygons.isNotEmpty) PolygonLayer(polygons: zonePolygons),
+        if (coveragePolylines.isNotEmpty)
+          PolylineLayer(polylines: coveragePolylines),
+        if (phonePosition != null && (phoneAccuracyM ?? 0) > 0)
+          CircleLayer(
+            circles: [
+              CircleMarker(
+                point: phonePosition,
+                radius: phoneAccuracyM!,
+                useRadiusInMeter: true,
+                color: const Color(0x261A73E8),
+                borderColor: const Color(0x661A73E8),
+                borderStrokeWidth: 1,
               ),
-            if (gridOverlays.isNotEmpty)
-              OverlayImageLayer(overlayImages: gridOverlays),
-            if (zonePolygons.isNotEmpty) PolygonLayer(polygons: zonePolygons),
-            if (coveragePolylines.isNotEmpty)
-              PolylineLayer(polylines: coveragePolylines),
-            if (phonePosition != null && (phoneAccuracyM ?? 0) > 0)
-              CircleLayer(
-                circles: [
-                  CircleMarker(
-                    point: phonePosition,
-                    radius: phoneAccuracyM!,
-                    useRadiusInMeter: true,
-                    color: const Color(0x261A73E8),
-                    borderColor: const Color(0x661A73E8),
-                    borderStrokeWidth: 1,
-                  ),
-                ],
+            ],
+          ),
+        MarkerLayer(
+          markers: [
+            Marker(
+              point: _ll(mission.robotPosition),
+              width: 40,
+              height: 40,
+              child: const BreathingMarker(),
+            ),
+            if (phonePosition != null)
+              Marker(
+                point: phonePosition,
+                width: 22,
+                height: 22,
+                child: const PhoneLocationDot(),
               ),
-            MarkerLayer(
-              markers: [
-                Marker(
-                  point: _ll(mission.robotPosition),
-                  width: 40,
-                  height: 40,
-                  child: const BreathingMarker(),
-                ),
-                if (phonePosition != null)
-                  Marker(
-                    point: phonePosition,
-                    width: 22,
-                    height: 22,
-                    child: const PhoneLocationDot(),
-                  ),
-              ],
-            ),
-            const RichAttributionWidget(
-              attributions: [TextSourceAttribution('© Mapbox © Maxar')],
-            ),
           ],
         ),
-        if (SatelliteMapView._mapboxToken.isEmpty)
-          const Positioned(
-            left: 16,
-            right: 16,
-            top: 16,
-            child: _NoTokenBanner(),
+        if (widget.aiEnhance && _aiLoading.isNotEmpty)
+          Align(
+            alignment: Alignment.bottomLeft,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: _AiLoadingChip(
+                done: _aiWanted.where(_aiTiles.containsKey).length,
+                total: _aiWanted.length,
+              ),
+            ),
           ),
+        RichAttributionWidget(
+          attributions: [
+            const TextSourceAttribution('© 內政部國土測繪中心'),
+            if (widget.aiEnhance)
+              const TextSourceAttribution('AI 強化影像，細節僅供參考'),
+          ],
+        ),
       ],
+    );
+  }
+}
+
+class _AiLoadingChip extends StatelessWidget {
+  const _AiLoadingChip({required this.done, required this.total});
+
+  final int done;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'AI 強化中 $done/$total',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -321,25 +440,6 @@ class _UiImageProvider extends ImageProvider<_UiImageProvider> {
 
   @override
   int get hashCode => image.hashCode;
-}
-
-class _NoTokenBanner extends StatelessWidget {
-  const _NoTokenBanner();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: const Text(
-        '缺少 Mapbox token：請用 flutter run --dart-define-from-file=.env 啟動',
-        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-      ),
-    );
-  }
 }
 
 /// "You are here" marker for the phone's own position: a blue dot with a white

@@ -92,7 +92,7 @@ void main() {
     await tester.pump();
     expect(robot(), offsetMoreOrLessEquals(_centre, epsilon: 0.5));
 
-    // Low on the map: without a Mapbox token a banner covers the top.
+    // A one-finger drag stops following.
     await tester.dragFrom(const Offset(200, 560), const Offset(120, 0));
     await tester.pump();
     expect(follow, isFalse);

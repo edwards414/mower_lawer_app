@@ -51,6 +51,7 @@ dependencies:
   mobile_scanner: ^7.4.2
   lucide_icons_flutter: ^3.1.20
   geolocator: ^14.1.1
+  tflite_flutter: ^0.12.1
 
 dev_dependencies:
   flutter_test:
@@ -92,6 +93,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    # On-device AI base-map model (built by tools/sr/).
+    - assets/models/sr_compact_nlsc_x4.tflite
 
   # To add assets to your application, add an assets section, like this:
   # assets:
