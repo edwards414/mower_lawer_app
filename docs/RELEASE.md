@@ -4,10 +4,11 @@
 git tag v1.1.0 && git push origin v1.1.0
         │
         ▼  .github/workflows/ios-testflight.yml（macOS runner，public repo 免費）
-flutter analyze / test ──► xcodebuild archive（API key 自動簽章）──► export .ipa ──► altool 上傳 TestFlight
+flutter analyze / test ──► xcodebuild archive（不簽章）──► export .ipa（API key 自動簽章）──► altool 上傳 TestFlight
 ```
 
 - **版本號**：tag `v1.1.0` → CFBundleShortVersionString `1.1.0`；build number = workflow run number（每次遞增，TestFlight 要求）。`pubspec.yaml` 的 `version:` 只是本機開發用的預設。
+- 簽章：archive 不簽章，export 時才用 API key 簽 Apple Distribution（沒匯入 .p12 時用雲端管理的憑證）。以前 archive 也簽，每台新的 runner 都會建一張「Apple Development: Created via API」憑證，2026-10-07 撞到 Apple 的憑證上限；那些舊憑證可以在 developer.apple.com → Certificates 撤銷。
 - 手動觸發：Actions → iOS TestFlight → Run workflow（可填 build name）。
 - 產出的 `.ipa` 也會留在 run 的 artifacts。
 
