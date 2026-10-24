@@ -801,6 +801,81 @@ void main() {
     await ros.close();
   });
 
+  test('base station: the robot fix minus relpos, on the map', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    ros.emitState(RosbridgeConnectionState.connected);
+    // datum at the rover, map +X north (so +Y is west)
+    ros.emit('/adapter/map_datum', {
+      'data': jsonEncode({
+        'origin_lat': 25.033,
+        'origin_lon': 121.5654,
+        'bearing_rad': 0.0,
+        'source': 'navsat',
+      }),
+    });
+    final status = {
+      'data': jsonEncode({
+        'fix_type': 3,
+        'carrier_solution': 'fixed',
+        'relpos': {
+          'ref_station_id': 0,
+          'valid': true,
+          'carrier_solution': 'fixed',
+          'n_m': 12.0,
+          'e_m': -4.0,
+          'acc_n_m': 0.012,
+          'acc_e_m': 0.011,
+          'is_moving': false,
+          'ref_pos_miss': false,
+          'ref_obs_miss': false,
+        },
+      }),
+    };
+
+    // no /fix to pair it with yet
+    ros.emit('/gps/status', status);
+    expect(provider.baseStationPosition, isNull);
+
+    for (var i = 0; i < 3; i++) {
+      ros.emit('/fix', _rtkFix(25.033, 121.5654));
+      ros.emit('/gps/status', status);
+    }
+    final base = provider.baseStationPosition!;
+    // 12 m south and 4 m west of the rover; GeoAnchor's flat-earth metres
+    // are within 0.5 % of the ellipsoid's
+    expect(base.x, closeTo(-12.0, 0.08));
+    expect(base.y, closeTo(-4.0, 0.03));
+
+    // an RTK dropout leaves the dock where it was
+    ros.emit('/fix', {
+      ..._rtkFix(25.033, 121.5654),
+      'status': {'status': -1},
+    });
+    ros.emit('/gps/status', status);
+    expect(provider.baseStationPosition!.x, base.x);
+
+    // another robot: its own base
+    expect(await provider.updateRobotIp('10.0.0.2'), isNull);
+    expect(provider.baseStationPosition, isNull);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test('demo mode shows a demo base station', () async {
+    SharedPreferences.setMockInitialValues({'mock_data_enabled': true});
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    expect(provider.mockDataEnabled, isTrue);
+    expect(provider.baseStationPosition, isNotNull);
+
+    provider.dispose();
+    await ros.close();
+  });
+
   test(
     'GPS requires nonzero coordinates and known precise covariance',
     () async {
@@ -1676,6 +1751,17 @@ Future<void> _endWidgetTest(
   provider.dispose();
   await tester.runAsync(ros.close);
 }
+
+Map<String, dynamic> _rtkFix(double latitude, double longitude) => {
+  'header': {
+    'stamp': {'sec': 122, 'nanosec': 800000000},
+  },
+  'status': {'status': 2},
+  'latitude': latitude,
+  'longitude': longitude,
+  'position_covariance_type': 2,
+  'position_covariance': [0.0002, 0.0, 0.0, 0.0, 0.0002, 0.0, 0.0, 0.0, 0.0004],
+};
 
 Future<void> _flushEvents() async {
   await Future<void>.delayed(Duration.zero);

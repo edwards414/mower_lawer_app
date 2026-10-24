@@ -7,6 +7,7 @@ import '../models/image_mission_draft.dart';
 import '../models/mission_mock.dart';
 import '../models/robot_fleet.dart';
 import '../providers/mission_mock_provider.dart';
+import 'base_station_marker.dart';
 
 /// Screen positions of the 4 corner handles (TL, TR, BR, BL).
 List<Offset> alignmentCornerScreens(
@@ -443,6 +444,12 @@ class _MissionMapPainter extends CustomPainter {
       _drawDraft(canvas, project);
     }
 
+    // Under the robots: a docked robot is drawn on top of its dock.
+    final baseStation = mission.baseStationPosition;
+    if (baseStation != null) {
+      _drawBaseStation(canvas, project(baseStation));
+    }
+
     // Draw fleet robots; fall back to single robot if fleet is empty.
     final Map<int, Offset> robotPositions = {};
     if (robots.isNotEmpty) {
@@ -570,6 +577,7 @@ class _MissionMapPainter extends CustomPainter {
     final points = <MapPoint>[
       if (mission.shouldShowRobot && robots.isEmpty) mission.robotPosition,
       for (final robot in robots) robot.position,
+      ?mission.baseStationPosition,
       for (final zone in mission.zones) ...zone.points,
       for (final risk in mission.riskZones) ...risk.points,
       for (final channel in mission.channels) ...channel.points,
@@ -1038,6 +1046,74 @@ class _MissionMapPainter extends CustomPainter {
       Paint()..color = const Color(0xFF46D28B),
     );
     canvas.restore();
+  }
+
+  /// The base station / charging dock: [BaseStationMarker]'s tile, with its
+  /// name above it (below is where a robot's label goes).
+  void _drawBaseStation(Canvas canvas, Offset center) {
+    const half = BaseStationMarker.size / 2;
+    final tile = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: center,
+        width: BaseStationMarker.size,
+        height: BaseStationMarker.size,
+      ),
+      const Radius.circular(8),
+    );
+    canvas.drawRRect(
+      tile.shift(const Offset(0, 1)),
+      Paint()
+        ..color = const Color(0x55000000)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+    );
+    canvas.drawRRect(tile, Paint()..color = Colors.white);
+    canvas.drawRRect(
+      tile.deflate(1),
+      Paint()
+        ..color = BaseStationMarker.color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    const icon = BaseStationMarker.icon;
+    final glyph = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          fontSize: 18,
+          color: BaseStationMarker.color,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    glyph.paint(canvas, center - Offset(glyph.width / 2, glyph.height / 2));
+
+    final name = TextPainter(
+      text: const TextSpan(
+        text: BaseStationMarker.label,
+        style: TextStyle(
+          color: BaseStationMarker.color,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final anchor = center.translate(-(name.width / 2), -half - 6 - name.height);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          anchor.dx - 5,
+          anchor.dy - 2,
+          name.width + 10,
+          name.height + 4,
+        ),
+        const Radius.circular(8),
+      ),
+      Paint()..color = Colors.white.withValues(alpha: 0.88),
+    );
+    name.paint(canvas, anchor);
   }
 
   /// Phone "you are here": accuracy halo + blue dot with a white ring.

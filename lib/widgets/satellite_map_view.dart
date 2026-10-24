@@ -10,6 +10,7 @@ import '../models/geo_anchor.dart';
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 import '../services/ai_basemap_service.dart';
+import 'base_station_marker.dart';
 import 'breathing_marker.dart';
 
 /// Satellite base-map view: NLSC aerial orthophoto tiles with the mission overlays
@@ -237,6 +238,8 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
       }
     }
     add(mission.robotPosition.x, mission.robotPosition.y);
+    final base = mission.baseStationPosition;
+    if (base != null) add(base.x, base.y);
 
     final robot = mission.robotPosition;
     final cx = centreOnRobot ? robot.x : (minX! + maxX!) / 2;
@@ -467,6 +470,14 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
           ),
         MarkerLayer(
           markers: [
+            // Under the robot: a docked robot is drawn on top of its dock.
+            if (mission.baseStationPosition case final base?)
+              Marker(
+                point: _ll(base),
+                width: BaseStationMarker.size,
+                height: BaseStationMarker.size,
+                child: const BaseStationMarker(),
+              ),
             Marker(
               point: _ll(mission.robotPosition),
               width: 40,
