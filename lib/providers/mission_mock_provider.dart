@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/base_station.dart';
 import '../models/geo_anchor.dart';
 import '../models/image_mission_draft.dart';
 import '../models/mission_mock.dart';
@@ -184,6 +185,16 @@ class MissionMockProvider extends ChangeNotifier {
     'GPS_FIX_TOPIC',
     defaultValue: '/fix',
   );
+  static const _gpsStatusTopic = '/gps/status';
+
+  /// The newest `/fix` with a usable position, taken as it comes (unlike
+  /// [_gpsLatitude], it does not wait on the manual command clock); the
+  /// rover half of a [_baseStation] sample.
+  ({double lat, double lon, double sigmaM, DateTime at})? _roverFix;
+
+  /// A `/gps/status` relpos is paired with a fix at most this old.
+  static const Duration _roverFixMaxAge = Duration(seconds: 1);
+  final BaseStationEstimator _baseStation = BaseStationEstimator();
 
   ImageMissionDraft? imageMissionDraft;
 
@@ -451,6 +462,19 @@ class MissionMockProvider extends ChangeNotifier {
   double? get gpsHorizontalSigmaM =>
       hasFreshGpsFix ? _gpsHorizontalSigmaM : null;
 
+  /// The RTK base station in the map frame, which in the current design is
+  /// also the charging dock. Live it is measured from the robot's GNSS (see
+  /// [BaseStationEstimator]) and needs the map's geo anchor; the base does
+  /// not move, so the last estimate stays while RTK drops out.
+  MapPoint? get baseStationPosition {
+    if (mockDataEnabled) return _demoBaseStation;
+    final position = _baseStation.position;
+    final anchor = mapGeoAnchor;
+    return position == null || anchor == null
+        ? null
+        : anchor.latLngToWorld(position);
+  }
+
   /// Whether a real `/adapter/robot_pose` has been received (the default robot
   /// has a live pose). Consumed by [RobotFleetProvider.syncFromMission].
   bool get hasLiveRobotPose => _hasLiveRobotPose;
@@ -624,6 +648,12 @@ class MissionMockProvider extends ChangeNotifier {
       _gpsFixTopic,
       type: 'sensor_msgs/msg/NavSatFix',
       throttleRateMs: 100,
+      qos: const {'durability': 'volatile', 'reliability': 'best_effort'},
+    );
+    _rosbridge.subscribe(
+      _gpsStatusTopic,
+      type: 'std_msgs/msg/String',
+      throttleRateMs: 1000,
       qos: const {'durability': 'volatile', 'reliability': 'best_effort'},
     );
     _rosbridge.subscribe(
@@ -890,7 +920,11 @@ class MissionMockProvider extends ChangeNotifier {
           _applyBatteryState(event.message);
           break;
         case _gpsFixTopic:
+          _noteRoverFix(event.message);
           _applyGpsFix(event.message);
+          break;
+        case _gpsStatusTopic:
+          _applyGpsStatus(event.message);
           break;
         case _manualCommandClockTopic:
           _applyManualCommandClock(event.message);
@@ -974,6 +1008,46 @@ class MissionMockProvider extends ChangeNotifier {
         .toDouble();
     _lastBatteryAt = DateTime.now();
     notifyListeners();
+  }
+
+  void _noteRoverFix(Map<String, dynamic> message) {
+    final status = message['status'];
+    final code = status is Map ? _asEnumInt(status['status']) : null;
+    final latitude = _asDouble(message['latitude']);
+    final longitude = _asDouble(message['longitude']);
+    final sigma = _horizontalCovarianceSigma(message['position_covariance']);
+    final usable =
+        code != null &&
+        code >= 0 &&
+        latitude != null &&
+        longitude != null &&
+        latitude.isFinite &&
+        longitude.isFinite &&
+        !(latitude.abs() < 1e-9 && longitude.abs() < 1e-9) &&
+        sigma != null;
+    _roverFix = usable
+        ? (lat: latitude, lon: longitude, sigmaM: sigma, at: DateTime.now())
+        : null;
+  }
+
+  void _applyGpsStatus(Map<String, dynamic> message) {
+    final dto = _decodeStringMessage(message);
+    final rover = _roverFix;
+    if (dto is! Map<String, dynamic> ||
+        rover == null ||
+        DateTime.now().difference(rover.at) > _roverFixMaxAge) {
+      return;
+    }
+    final before = _baseStation.position;
+    _baseStation.add(
+      relpos: dto['relpos'],
+      roverLat: rover.lat,
+      roverLon: rover.lon,
+      roverSigmaM: rover.sigmaM,
+    );
+    if (_baseStation.position != before) {
+      notifyListeners();
+    }
   }
 
   void _applyGpsFix(Map<String, dynamic> message) {
@@ -3984,6 +4058,7 @@ class MissionMockProvider extends ChangeNotifier {
     _batteryPercent = null;
     _lastBatteryAt = null;
     _clearGpsFix(resetSourceHighWater: true);
+    _roverFix = null;
     _clearManualCommandClock();
     _hasLiveRobotPose = false;
     _lastRobotPoseAt = null;
@@ -4005,6 +4080,7 @@ class MissionMockProvider extends ChangeNotifier {
     invalidSegments = const <InvalidSegment>[];
     _zoneCoverageById.clear();
     mapGeoAnchor = null;
+    _baseStation.clear();
     sites = const <SiteInfo>[];
     activeSiteName = null;
     freeSpaceLayer?.dispose();
@@ -4313,6 +4389,9 @@ const _demoCoverageRows = [
   [MapPoint(70, 96), MapPoint(25, 107)],
   [MapPoint(31, 117), MapPoint(66, 110)],
 ];
+
+/// The demo dock, where the demo channel starts.
+const _demoBaseStation = MapPoint(6, 134);
 
 const _demoInvalidSegments = [
   InvalidSegment(id: 1, points: [MapPoint(52, 76), MapPoint(65, 74)]),
