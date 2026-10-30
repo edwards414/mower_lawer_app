@@ -7,19 +7,21 @@ import '../utils/app_icons.dart';
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 import '../providers/recorder_provider.dart';
+import '../services/screen_wake.dart';
 import 'map_record_bar.dart';
 import 'webrtc_camera_view.dart';
 
-/// Manual mode, laid over the map page: the two joysticks, the live front
-/// camera and the recording controls. It draws no map of its own (the page
-/// underneath stays the one map), and only its controls take touches, so the
-/// map still answers everywhere else.
+/// Manual mode, laid over the map page: the two joysticks and cruise (定速),
+/// the live front camera and the recording controls. It draws no map of its
+/// own (the page underneath stays the one map), and only its controls take
+/// touches, so the map still answers everywhere else.
 class ManualControlOverlay extends StatefulWidget {
   const ManualControlOverlay({
     super.key,
     required this.mission,
     required this.onExit,
     this.recorder,
+    this.screenWake = const PlatformScreenWake(),
   });
 
   final MissionMockProvider mission;
@@ -27,6 +29,9 @@ class ManualControlOverlay extends StatefulWidget {
 
   /// Topic (rosbag) recorder; null hides the record button.
   final RecorderProvider? recorder;
+
+  /// Holds the screen on while cruising (定速), and only then.
+  final ScreenWake screenWake;
 
   // How far the joysticks sit from the screen's edges, and their size.
   static const double _stickMargin = 18;
@@ -53,12 +58,22 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
   static const _layoutMotion = Duration(milliseconds: 220);
   // Height of the exit button, the tallest thing in the top-left row.
   static const _exitRow = 44.0;
+  // The 定速 button, and its gap to the right stick.
+  static const _cruiseSize = 56.0;
+  static const _cruiseGap = 12.0;
 
   Timer? _publishTimer;
   double _linearX = 0.0;
   double _angularZ = 0.0;
   // Read by the status pill alone, so a stick move never rebuilds the page.
   final _moving = ValueNotifier<bool>(false);
+  // Cruise (定速): the locked forward speed in m/s, or null. While it is set,
+  // _linearX holds it and the left stick no longer writes there. Read by the
+  // pill and the 定速 button alone, like _moving.
+  final _cruise = ValueNotifier<double?>(null);
+  late final _pillState = Listenable.merge([_moving, _cruise]);
+  // Whether this overlay asked for the screen to stay on.
+  bool _screenKeptOn = false;
   // The camera starts as a small picture-in-picture; a tap enlarges it.
   bool _cameraExpanded = false;
   // The zone / no-go / channel picker is tucked behind one button.
@@ -66,6 +81,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
   int _joystickResetEpoch = 0;
 
   bool get _hasMotion => _linearX.abs() > 0.001 || _angularZ.abs() > 0.001;
+  bool get _cruising => _cruise.value != null;
 
   @override
   void initState() {
@@ -88,6 +104,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
     WidgetsBinding.instance.removeObserver(this);
     _stopAll(rebuild: false);
     _moving.dispose();
+    _cruise.dispose();
     super.dispose();
   }
 
@@ -119,6 +136,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
     // Held off the sides a notch or a rounded corner takes (landscape).
     final sideL = math.max(12.0, pad.left);
     final sideR = math.max(12.0, pad.right);
+    final stickRight = math.max(ManualControlOverlay._stickMargin, pad.right);
 
     final camera = _cameraRect(size, topInset, sideR, isPortrait);
     // The recording controls sit under the exit row; in portrait they run the
@@ -167,11 +185,12 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
                 onPressed: _exitManual,
               ),
               const SizedBox(width: 8),
-              ValueListenableBuilder<bool>(
-                valueListenable: _moving,
-                builder: (context, moving, _) => _ManualStatusPill(
+              ListenableBuilder(
+                listenable: _pillState,
+                builder: (context, _) => _ManualStatusPill(
                   connected: canDrive,
-                  moving: moving,
+                  moving: _moving.value,
+                  cruiseSpeed: _cruise.value,
                   battery: mission.batteryPercent,
                 ),
               ),
@@ -228,12 +247,13 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
               size: joystickSize,
               axis: _JoystickAxis.vertical,
               enabled: canDrive,
+              onStart: _onLinearStickTouched,
               onChanged: _setLinearAxis,
             ),
           ),
         ),
         Positioned(
-          right: math.max(ManualControlOverlay._stickMargin, pad.right),
+          right: stickRight,
           bottom: bottom,
           child: RepaintBoundary(
             child: _ManualJoystick(
@@ -242,6 +262,24 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
               axis: _JoystickAxis.horizontal,
               enabled: canDrive,
               onChanged: _setAngularAxis,
+            ),
+          ),
+        ),
+        // Cruise (定速), just inside the right stick: the right thumb reaches
+        // it while the left one holds the stick forward.
+        Positioned(
+          right: stickRight + joystickSize + _cruiseGap,
+          bottom: bottom + (joystickSize - _cruiseSize) / 2,
+          child: RepaintBoundary(
+            child: ValueListenableBuilder<double?>(
+              valueListenable: _cruise,
+              builder: (context, speed, _) => _CruiseButton(
+                size: _cruiseSize,
+                cruising: speed != null,
+                // Cancelling is never blocked.
+                enabled: canDrive || speed != null,
+                onPressed: () => _toggleCruise(snackClearance),
+              ),
             ),
           ),
         ),
@@ -268,8 +306,73 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
   }
 
   void _setLinearAxis(Offset value) {
+    // Cruising, the touch that set the speed may still be on the stick: its
+    // moves and its release leave the locked speed alone. Only a new touch
+    // ends the cruise (_onLinearStickTouched).
+    if (_cruising) return;
     _linearX = _scaleAxis(-value.dy, widget.mission.manualLinearSpeed);
     _publishCurrent();
+  }
+
+  /// A new touch on the left stick takes the speed back: the cruise ends with
+  /// a stop, and from there the stick drives as usual.
+  void _onLinearStickTouched() {
+    if (_cruising) _cancelCruise();
+  }
+
+  /// The 定速 button: locks the forward speed the left stick holds right now,
+  /// or ends the cruise.
+  void _toggleCruise(double clearBottom) {
+    if (_cruising) {
+      _cancelCruise();
+      return;
+    }
+    if (!widget.mission.canDriveManually) return;
+    // Forward only: past the deadband, never in reverse.
+    if (_linearX <= 0.001) {
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: const Text('先把左搖桿往前推，再按定速'),
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.fromLTRB(16, 0, 16, clearBottom),
+          ),
+        );
+      return;
+    }
+    // The publish timer is already running for the held stick; from here it
+    // sends this speed until something ends the cruise.
+    _cruise.value = _linearX;
+    _keepScreenOn(true);
+  }
+
+  /// Ends the cruise and stops the way a released left stick does: linear goes
+  /// to zero (a held right stick keeps turning), and stop is sent.
+  void _cancelCruise() {
+    _endCruise();
+    if (!widget.mission.canDriveManually) {
+      // The gate closed before the timer saw it: stop outright, as its tick
+      // would have.
+      _stopAll();
+      return;
+    }
+    _linearX = 0.0;
+    _publishCurrent();
+  }
+
+  /// Clears the cruise and lets the screen sleep again. The caller zeroes the
+  /// speed and says stop.
+  void _endCruise() {
+    _cruise.value = null;
+    _keepScreenOn(false);
+  }
+
+  void _keepScreenOn(bool on) {
+    if (_screenKeptOn == on) return;
+    _screenKeptOn = on;
+    unawaited(widget.screenWake.keepOn(on));
   }
 
   void _setAngularAxis(Offset value) {
@@ -290,6 +393,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
       // tick (which would stop it) and cancels that timer, so say stop here
       // rather than leave the last command to run out on the robot's side.
       final wasMoving = _hasMotion;
+      _endCruise();
       _linearX = 0.0;
       _angularZ = 0.0;
       _stopTimer();
@@ -324,7 +428,10 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
     _publishTimer = null;
   }
 
+  /// Every way out of driving (backgrounding, the gate closing, ✕, dispose)
+  /// lands here, so each one also ends a cruise.
   void _stopAll({bool rebuild = true}) {
+    _endCruise();
     _linearX = 0.0;
     _angularZ = 0.0;
     _joystickResetEpoch += 1;
@@ -750,12 +857,16 @@ class _ManualJoystick extends StatefulWidget {
     required this.axis,
     required this.enabled,
     required this.onChanged,
+    this.onStart,
   });
 
   final double size;
   final _JoystickAxis axis;
   final bool enabled;
   final ValueChanged<Offset> onChanged;
+
+  /// A new touch begins, before its first [onChanged].
+  final VoidCallback? onStart;
 
   @override
   State<_ManualJoystick> createState() => _ManualJoystickState();
@@ -842,6 +953,7 @@ class _ManualJoystickState extends State<_ManualJoystick> {
   }
 
   void _handlePanStart(DragStartDetails details) {
+    widget.onStart?.call();
     _dragging = true;
     _setFromLocalPosition(details.localPosition);
   }
@@ -875,23 +987,91 @@ class _ManualJoystickState extends State<_ManualJoystick> {
   }
 }
 
+/// Cruise (定速): locks the left stick's forward speed. Lit while cruising,
+/// when a press ends it.
+class _CruiseButton extends StatelessWidget {
+  const _CruiseButton({
+    required this.size,
+    required this.cruising,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  final double size;
+  final bool cruising;
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    const green = Color(0xFF46D28B);
+    final fg = cruising ? const Color(0xFF0B2A18) : Colors.white;
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(18),
+      side: BorderSide(
+        color: cruising ? Colors.white : Colors.white.withValues(alpha: 0.36),
+        width: 1.4,
+      ),
+    );
+    return Tooltip(
+      message: cruising ? '取消定速' : '定速：鎖定左搖桿目前的前進速度',
+      child: Opacity(
+        opacity: enabled ? 1.0 : 0.48,
+        child: Material(
+          color: cruising ? green : Colors.black.withValues(alpha: 0.5),
+          shape: shape,
+          child: InkWell(
+            customBorder: shape,
+            onTap: enabled ? onPressed : null,
+            child: SizedBox.square(
+              dimension: size,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(AppIcons.gauge, color: cruising ? fg : green, size: 22),
+                  const SizedBox(height: 2),
+                  Text(
+                    '定速',
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ManualStatusPill extends StatelessWidget {
   const _ManualStatusPill({
     required this.connected,
     required this.moving,
+    this.cruiseSpeed,
     this.battery,
   });
 
   final bool connected;
   final bool moving;
 
+  /// The locked speed while cruising (定速), in m/s.
+  final double? cruiseSpeed;
+
   /// Battery percent, when known: still worth seeing while driving.
   final double? battery;
 
   @override
   Widget build(BuildContext context) {
+    final cruise = connected ? cruiseSpeed : null;
     final label = connected
-        ? moving
+        ? cruise != null
+              ? '定速 ${cruise.toStringAsFixed(2)} m/s'
+              : moving
               ? '手動輸出中'
               : '手動待命'
         : '機器人未就緒';
@@ -907,7 +1087,11 @@ class _ManualStatusPill extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              connected ? AppIcons.circleDot : AppIcons.wifiOff,
+              !connected
+                  ? AppIcons.wifiOff
+                  : cruise != null
+                  ? AppIcons.gauge
+                  : AppIcons.circleDot,
               color: color,
               size: 18,
             ),

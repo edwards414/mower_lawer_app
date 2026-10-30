@@ -52,6 +52,7 @@ class AppIcons {
   static const IconData flaskConical = LucideIcons.flaskConical300;
   static const IconData folder = LucideIcons.folder300;
   static const IconData gamepad2 = LucideIcons.gamepad2300;
+  static const IconData gauge = LucideIcons.gauge300;
   static const IconData hand = LucideIcons.hand300;
   static const IconData hardDrive = LucideIcons.hardDrive300;
   static const IconData hourglass = LucideIcons.hourglass300;
