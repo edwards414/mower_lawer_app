@@ -52,6 +52,9 @@ dependencies:
   lucide_icons_flutter: ^3.1.20
   geolocator: ^14.1.1
   tflite_flutter: ^0.12.1
+  # Keeps the screen on while manual mode cruises (定速). Pinned: 1.8.x needs
+  # Flutter 3.44.
+  wakelock_plus: 1.7.0
 
 dev_dependencies:
   flutter_test:
