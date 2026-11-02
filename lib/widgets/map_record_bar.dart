@@ -134,7 +134,7 @@ class _RecordingBar extends StatelessWidget {
     // Minutes keep counting past 59: a long recording reads 75:10, not 15:10.
     final minutes = elapsed.inMinutes.toString().padLeft(2, '0');
     final seconds = elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return Material(
+    final bar = Material(
       color: Colors.black.withValues(alpha: 0.78),
       borderRadius: BorderRadius.circular(18),
       child: Padding(
@@ -209,6 +209,83 @@ class _RecordingBar extends StatelessWidget {
               child: Text(busy ? '處理中' : '儲存'),
             ),
           ],
+        ),
+      ),
+    );
+    final rtkWarning = mission.recordingRtkWarning;
+    if (rtkWarning == null) {
+      return bar;
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        bar,
+        const SizedBox(height: 6),
+        _RtkPauseNotice(warning: rtkWarning, reason: mission.rtkNotFixedReason),
+      ],
+    );
+  }
+}
+
+/// Stays under the recording bar for as long as the robot skips samples for
+/// want of RTK fixed, and goes when fixed returns.
+class _RtkPauseNotice extends StatelessWidget {
+  const _RtkPauseNotice({required this.warning, required this.reason});
+
+  final String warning;
+  final String? reason;
+
+  @override
+  Widget build(BuildContext context) {
+    final reason = this.reason;
+    return Semantics(
+      liveRegion: true,
+      child: Material(
+        key: const ValueKey('record-rtk-pause'),
+        color: const Color(0xFFFFB300),
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 1),
+                child: Icon(
+                  AppIcons.triangleAlert,
+                  color: Color(0xFF3E2723),
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      warning,
+                      style: const TextStyle(
+                        color: Color(0xFF3E2723),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    if (reason != null)
+                      Text(
+                        reason,
+                        style: const TextStyle(
+                          color: Color(0xFF4E342E),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

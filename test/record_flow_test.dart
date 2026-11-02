@@ -55,6 +55,8 @@ void main() {
     expect(find.textContaining('工作區記錄中'), findsOneWidget);
     expect(find.text('儲存'), findsOneWidget);
     expect(find.text('取消'), findsOneWidget);
+    // Demo has no RTK to lose.
+    expect(find.byKey(const ValueKey('record-rtk-pause')), findsNothing);
 
     await tester.tap(find.byTooltip('進入手動模式'));
     expect(manualOpened, 1);

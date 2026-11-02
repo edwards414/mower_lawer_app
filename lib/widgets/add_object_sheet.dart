@@ -67,6 +67,10 @@ class _AddObjectSheetState extends State<AddObjectSheet> {
   @override
   Widget build(BuildContext context) {
     final idle = !_starting;
+    // Rebuilds only when the hint changes, not on every robot message.
+    final rtkHint = context.select<MissionMockProvider, String?>(
+      (mission) => mission.recordStartRtkHint,
+    );
 
     return SafeArea(
       // Scrolls so the extra rows never overflow a landscape phone.
@@ -126,6 +130,32 @@ class _AddObjectSheetState extends State<AddObjectSheet> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+              ),
+            ],
+            // Advance notice only: the robot answers the start itself.
+            if (rtkHint != null && !_starting) ...[
+              const SizedBox(height: 12),
+              Row(
+                key: const ValueKey('record-start-rtk-hint'),
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    AppIcons.triangleAlert,
+                    size: 16,
+                    color: Color(0xFFB26A00),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      rtkHint,
+                      style: const TextStyle(
+                        color: Color(0xFFB26A00),
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
             if (_error != null) ...[
