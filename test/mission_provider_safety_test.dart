@@ -510,7 +510,8 @@ void main() {
     const rtk = 'RTK 尚未 fixed，無法開始 zone 記錄（GPS status=0，RTK fixed 為 2）';
     ros.handlers['/record_zone_start'] = () =>
         _response('/record_zone_start', success: false, message: rtk);
-    expect(await provider.startRecording(RecordObjectType.zone), '無法開始記錄：$rtk');
+    // it already says 「無法開始」: shown as is, no prefix
+    expect(await provider.startRecording(RecordObjectType.zone), rtk);
     expect(provider.recordingType, isNull);
     expect(provider.recordCommandPending, isFalse);
     // The log keeps the robot's answer too.
@@ -524,7 +525,7 @@ void main() {
         _response('/risk_zone_start', success: false, message: datum);
     expect(
       await provider.startRecording(RecordObjectType.risk),
-      '無法開始記錄：$datum',
+      datum,
     );
 
     const stale = 'RTK 尚未 fixed，無法開始 channel 記錄（GPS /fix 已 1.1 s 未更新）';
@@ -532,7 +533,7 @@ void main() {
         _response('/channel_record_start', success: false, message: stale);
     expect(
       await provider.startRecording(RecordObjectType.channel),
-      '無法開始記錄：$stale',
+      stale,
     );
 
     // No reason from the robot: the generic text, pointing at the log.
@@ -697,7 +698,7 @@ void main() {
     await tester.tap(find.text('工作區'));
     await tester.pumpAndSettle();
     expect(ros.callCount['/record_zone_start'], 1);
-    expect(find.text('無法開始記錄：$rtk'), findsOneWidget);
+    expect(find.text(rtk), findsOneWidget);
     expect(find.text('新增地圖物件'), findsOneWidget);
     expect(provider.recordingType, isNull);
 

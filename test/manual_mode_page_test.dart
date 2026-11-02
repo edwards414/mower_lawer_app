@@ -354,7 +354,7 @@ void main() {
     tester,
   ) async {
     const hint = 'RTK 尚未 fixed，機器人會拒絕開始記錄（GPS 無定位）';
-    const refusal = '無法開始記錄：RTK 尚未 fixed，無法開始 zone 記錄（GPS 無定位）';
+    const refusal = 'RTK 尚未 fixed，無法開始 zone 記錄（GPS 無定位）';
     final mission = _DriveSpy()
       ..rtkHint = hint
       ..startError = refusal;

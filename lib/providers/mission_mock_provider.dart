@@ -1751,8 +1751,10 @@ class MissionMockProvider extends ChangeNotifier {
     if (!answer.accepted) {
       notifyListeners();
       // The robot says why (e.g. RTK not fixed); the log keeps it as well.
+      // Its reasons mostly say 「無法開始」 already: no prefix then.
       final reason = answer.message.trim();
-      return reason.isEmpty ? '機器人沒有接受開始記錄，詳見日誌' : '無法開始記錄：$reason';
+      if (reason.isEmpty) return '機器人沒有接受開始記錄，詳見日誌';
+      return reason.contains('無法開始') ? reason : '無法開始記錄：$reason';
     }
 
     // Only enter recording UI after the backend acknowledged *_start.
