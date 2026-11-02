@@ -465,13 +465,10 @@ void main() {
     _emitLivePrerequisites(ros);
     await _flushEvents();
 
-    // The robot refuses: recording UI stays off and the caller is told.
+    // The robot refuses: recording UI stays off and the caller is told why.
     ros.handlers['/record_zone_start'] = () =>
         _response('/record_zone_start', success: false, message: 'busy');
-    expect(
-      await provider.startRecording(RecordObjectType.zone),
-      '機器人沒有接受開始記錄，詳見日誌',
-    );
+    expect(await provider.startRecording(RecordObjectType.zone), '無法開始記錄：busy');
     expect(provider.recordingType, isNull);
 
     // Accepted: null means started; a second start explains it is running.
@@ -497,6 +494,152 @@ void main() {
       contains('尚未持久化'),
     );
     expect(ros.callCount['/channel_record_start'], isNull);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test('a refused record start shows the robot\'s own reason', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+
+    // mower_record's RTK gate (all three kinds), and the datum gate.
+    const rtk = 'RTK 尚未 fixed，無法開始 zone 記錄（GPS status=0，RTK fixed 為 2）';
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: false, message: rtk);
+    expect(await provider.startRecording(RecordObjectType.zone), '無法開始記錄：$rtk');
+    expect(provider.recordingType, isNull);
+    expect(provider.recordCommandPending, isFalse);
+    // The log keeps the robot's answer too.
+    expect(
+      provider.logs.where((e) => e.level == 'ERROR' && e.message == rtk),
+      hasLength(1),
+    );
+
+    const datum = 'datum 尚未鎖定（等待 RTK fixed），無法開始 risk 記錄';
+    ros.handlers['/risk_zone_start'] = () =>
+        _response('/risk_zone_start', success: false, message: datum);
+    expect(
+      await provider.startRecording(RecordObjectType.risk),
+      '無法開始記錄：$datum',
+    );
+
+    const stale = 'RTK 尚未 fixed，無法開始 channel 記錄（GPS /fix 已 1.1 s 未更新）';
+    ros.handlers['/channel_record_start'] = () =>
+        _response('/channel_record_start', success: false, message: stale);
+    expect(
+      await provider.startRecording(RecordObjectType.channel),
+      '無法開始記錄：$stale',
+    );
+
+    // No reason from the robot: the generic text, pointing at the log.
+    for (final message in ['', '  ']) {
+      ros.handlers['/record_zone_start'] = () =>
+          _response('/record_zone_start', success: false, message: message);
+      expect(
+        await provider.startRecording(RecordObjectType.zone),
+        '機器人沒有接受開始記錄，詳見日誌',
+      );
+    }
+    expect(provider.recordingType, isNull);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test(
+    'RTK fixed is read from /fix the way the robot recorder reads it',
+    () async {
+      final ros = _FakeRosbridgeService();
+      final provider = MissionMockProvider(rosbridge: ros);
+      await _flushEvents();
+
+      // Offline: nothing is known, so nothing is claimed.
+      expect(provider.recordStartRtkHint, isNull);
+      expect(provider.recordingRtkWarning, isNull);
+
+      // Connected, no /fix yet.
+      ros.emitState(RosbridgeConnectionState.connected);
+      expect(provider.rtkNotFixedReason, '尚未收到 GPS /fix');
+      expect(
+        provider.recordStartRtkHint,
+        'RTK 尚未 fixed，機器人會拒絕開始記錄（尚未收到 GPS /fix）',
+      );
+
+      // _emitLivePrerequisites' fix is status 0: RTK float or a plain fix.
+      _emitLivePrerequisites(ros);
+      await _flushEvents();
+      expect(provider.rtkNotFixedReason, 'GPS status=0，RTK float 或一般定位');
+      ros.emit('/fix', _fixWithStatus(-1));
+      expect(provider.rtkNotFixedReason, 'GPS 無定位');
+      // A status the phone cannot read never counts as fixed.
+      ros.emit('/fix', {'latitude': 25.0});
+      expect(provider.rtkNotFixedReason, 'GPS 無定位');
+      ros.emit('/fix', _fixWithStatus(2));
+      expect(provider.rtkNotFixedReason, isNull);
+      expect(provider.recordStartRtkHint, isNull);
+
+      // Live zone recording: no warning while fixed.
+      ros.handlers['/record_zone_start'] = () =>
+          _response('/record_zone_start', success: true);
+      expect(await provider.startRecording(RecordObjectType.zone), isNull);
+      expect(provider.recordingRtkWarning, isNull);
+
+      // Fixed lost: the warning shows, and listeners hear of it at once.
+      var notified = 0;
+      provider.addListener(() => notified++);
+      ros.emit('/fix', _fixWithStatus(0));
+      expect(notified, greaterThan(0));
+      expect(provider.recordingRtkWarning, 'RTK 未 fixed，暫停取點（邊界會以直線連接）');
+      expect(provider.recordStartRtkHint, isNull, reason: 'already recording');
+
+      // Fixed again: cleared.
+      ros.emit('/fix', _fixWithStatus(2));
+      expect(provider.recordingRtkWarning, isNull);
+
+      // /fix stops arriving: after the phone's 2 s it counts as not fixed.
+      await Future<void>.delayed(const Duration(milliseconds: 2100));
+      expect(provider.rtkNotFixedReason, '超過 2 秒沒有收到 GPS /fix');
+      expect(provider.recordingRtkWarning, isNotNull);
+
+      // rosbridge down: unknown, so no claim either way.
+      ros.emitState(RosbridgeConnectionState.disconnected);
+      expect(provider.recordingRtkWarning, isNull);
+
+      provider.dispose();
+      await ros.close();
+    },
+  );
+
+  test('a channel recording warns that its path is joined', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+    ros.handlers['/channel_record_start'] = () =>
+        _response('/channel_record_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.channel), isNull);
+    expect(provider.recordingRtkWarning, 'RTK 未 fixed，暫停取點（路徑會以直線連接）');
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test('demo mode never claims RTK is missing', () async {
+    SharedPreferences.setMockInitialValues({'mock_data_enabled': true});
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    expect(provider.mockDataEnabled, isTrue);
+    ros.emitState(RosbridgeConnectionState.connected);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+    expect(provider.rtkNotFixedReason, isNull);
+    expect(provider.recordStartRtkHint, isNull);
+    expect(provider.recordingRtkWarning, isNull);
 
     provider.dispose();
     await ros.close();
@@ -528,6 +671,88 @@ void main() {
 
     provider.dispose();
     await ros.close();
+  });
+
+  testWidgets('live: add-object sheet warns of no RTK fixed, shows the '
+      'robot\'s refusal', (tester) async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await tester.runAsync(_flushEvents);
+    await tester.pumpWidget(_sheetHost(provider, onRecordingStarted: () {}));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    // A status 0 fix: the hint is there before any tap.
+    _emitLivePrerequisites(ros);
+    await tester.pump();
+    expect(
+      find.text('RTK 尚未 fixed，機器人會拒絕開始記錄（GPS status=0，RTK float 或一般定位）'),
+      findsOneWidget,
+    );
+
+    // The start stays enabled; the robot answers and its reason is shown.
+    const rtk = 'RTK 尚未 fixed，無法開始 zone 記錄（GPS status=0，RTK fixed 為 2）';
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: false, message: rtk);
+    await tester.tap(find.text('工作區'));
+    await tester.pumpAndSettle();
+    expect(ros.callCount['/record_zone_start'], 1);
+    expect(find.text('無法開始記錄：$rtk'), findsOneWidget);
+    expect(find.text('新增地圖物件'), findsOneWidget);
+    expect(provider.recordingType, isNull);
+
+    // RTK fixed arrives: the hint goes.
+    ros.emit('/fix', _fixWithStatus(2));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('record-start-rtk-hint')), findsNothing);
+
+    await _endWidgetTest(tester, provider, ros);
+  });
+
+  testWidgets('live: the recording bar warns while RTK is not fixed', (
+    tester,
+  ) async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await tester.runAsync(_flushEvents);
+    _emitLivePrerequisites(ros);
+    await tester.pump();
+    await tester.pump();
+    ros.emit('/fix', _fixWithStatus(2));
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<MissionMockProvider>.value(
+        value: provider,
+        child: MaterialApp(
+          home: Scaffold(body: MapRecordBar(onOpenManual: () {})),
+        ),
+      ),
+    );
+    const warning = 'RTK 未 fixed，暫停取點（邊界會以直線連接）';
+    expect(find.text(warning), findsNothing);
+
+    ros.emit('/fix', _fixWithStatus(0));
+    await tester.pump();
+    expect(find.text(warning), findsOneWidget);
+    expect(find.text('GPS status=0，RTK float 或一般定位'), findsOneWidget);
+    // The recording itself goes on: its bar and buttons stay.
+    expect(find.textContaining('工作區記錄中'), findsOneWidget);
+    expect(find.text('儲存'), findsOneWidget);
+
+    ros.emit('/fix', _fixWithStatus(-1));
+    await tester.pump();
+    expect(find.text(warning), findsOneWidget);
+    expect(find.text('GPS 無定位'), findsOneWidget);
+
+    ros.emit('/fix', _fixWithStatus(2));
+    await tester.pump();
+    expect(find.text(warning), findsNothing);
+    expect(find.byKey(const ValueKey('record-rtk-pause')), findsNothing);
+
+    await _endWidgetTest(tester, provider, ros);
   });
 
   testWidgets('live: add-object sheet hands off once the robot accepts', (
@@ -1761,6 +1986,13 @@ Map<String, dynamic> _rtkFix(double latitude, double longitude) => {
   'longitude': longitude,
   'position_covariance_type': 2,
   'position_covariance': [0.0002, 0.0, 0.0, 0.0, 0.0002, 0.0, 0.0, 0.0, 0.0004],
+};
+
+/// A `/fix` with NavSatStatus [status] (2 = RTK fixed, 0 = float or a plain
+/// fix, -1 = none).
+Map<String, dynamic> _fixWithStatus(int status) => {
+  ..._rtkFix(25.033, 121.5654),
+  'status': {'status': status},
 };
 
 Future<void> _flushEvents() async {

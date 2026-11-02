@@ -153,6 +153,7 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
         : _recordPickerOpen
         ? _RecordTypeBar(
             enabled: canDrive && !mission.recordCommandPending,
+            rtkHint: mission.recordStartRtkHint,
             onPick: (type) => unawaited(_startRecording(type, snackClearance)),
           )
         : null;
@@ -692,9 +693,17 @@ class _BagRecordButton extends StatelessWidget {
 
 /// Pre-record picker: pick what to trace, then drive the perimeter.
 class _RecordTypeBar extends StatelessWidget {
-  const _RecordTypeBar({required this.enabled, required this.onPick});
+  const _RecordTypeBar({
+    required this.enabled,
+    required this.rtkHint,
+    required this.onPick,
+  });
 
   final bool enabled;
+
+  /// Why the robot will refuse a start for want of RTK fixed, as the phone
+  /// sees it now; advance notice only, the chips stay enabled.
+  final String? rtkHint;
   final ValueChanged<RecordObjectType> onPick;
 
   @override
@@ -721,6 +730,32 @@ class _RecordTypeBar extends StatelessWidget {
                   ),
                 ),
               ),
+              if (rtkHint case final hint?)
+                Padding(
+                  key: const ValueKey('record-start-rtk-hint'),
+                  padding: const EdgeInsets.only(left: 4, right: 4, bottom: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        AppIcons.triangleAlert,
+                        size: 14,
+                        color: Color(0xFFFFC107),
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          hint,
+                          style: const TextStyle(
+                            color: Color(0xFFFFC107),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               Row(
                 children: [
                   Expanded(

@@ -226,6 +226,34 @@ void main() {
         await h.dispose(tester);
       });
 
+      testWidgets('a recording without RTK fixed warns on the map and in '
+          'manual mode', (tester) async {
+        final h = await _Harness.pump(tester, size);
+        const warning = 'RTK 未 fixed，暫停取點（邊界會以直線連接）';
+        h.mission
+          ..recording = RecordObjectType.zone
+          ..rtkWarning = warning;
+        h.mission.poke();
+        await _settle(tester);
+        expect(find.text(warning), findsOneWidget);
+        // The detail line: this spy never had a /fix.
+        expect(find.text('尚未收到 GPS /fix'), findsOneWidget);
+
+        await tester.tap(find.byTooltip('進入手動模式'));
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(h.driveMode.value, isTrue);
+        expect(find.text(warning), findsOneWidget);
+
+        // Fixed again: the warning goes, the recording goes on.
+        h.mission.rtkWarning = null;
+        h.mission.poke();
+        await tester.pump();
+        expect(find.text(warning), findsNothing);
+        expect(find.textContaining('工作區記錄中'), findsOneWidget);
+
+        await h.dispose(tester);
+      });
+
       testWidgets('moving a stick repaints the stick, not the map', (
         tester,
       ) async {
@@ -320,6 +348,44 @@ void main() {
     expect(find.textContaining('工作區記錄中'), findsOneWidget);
 
     await h.dispose(tester);
+  });
+
+  testWidgets('the record picker warns of no RTK fixed but still asks', (
+    tester,
+  ) async {
+    const hint = 'RTK 尚未 fixed，機器人會拒絕開始記錄（GPS 無定位）';
+    const refusal = '無法開始記錄：RTK 尚未 fixed，無法開始 zone 記錄（GPS 無定位）';
+    final mission = _DriveSpy()
+      ..rtkHint = hint
+      ..startError = refusal;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ManualControlOverlay(mission: mission, onExit: () {}),
+        ),
+      ),
+    );
+    await tester.tap(find.text('記錄邊界'));
+    await tester.pump();
+    expect(find.text(hint), findsOneWidget);
+
+    // Advance notice only: the chip still asks the robot, and the robot's
+    // refusal is what the snackbar says. The picker stays for a retry.
+    await tester.tap(find.text('工作區'));
+    await tester.pump();
+    await tester.pump();
+    expect(mission.started, [RecordObjectType.zone]);
+    expect(find.text(refusal), findsOneWidget);
+    expect(find.text('工作區'), findsOneWidget);
+
+    // RTK fixed: the hint goes.
+    mission.rtkHint = null;
+    mission.poke();
+    await tester.pump();
+    expect(find.text(hint), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    mission.dispose();
   });
 
   testWidgets('a long recording keeps counting minutes', (tester) async {
@@ -481,6 +547,19 @@ class _DriveSpy extends MissionMockProvider {
   /// Stands in for a recording the robot accepted.
   RecordObjectType? recording;
 
+  /// Stand in for what `/fix` would say about RTK fixed.
+  String? rtkWarning;
+  String? rtkHint;
+
+  /// What [startRecording] answers; null = the robot accepted.
+  String? startError;
+
+  @override
+  String? get recordingRtkWarning => rtkWarning;
+
+  @override
+  String? get recordStartRtkHint => rtkHint;
+
   /// How long it has been going, when the test needs a particular time.
   Duration? elapsed;
 
@@ -514,7 +593,7 @@ class _DriveSpy extends MissionMockProvider {
   @override
   Future<String?> startRecording(RecordObjectType type) async {
     started.add(type);
-    return null;
+    return startError;
   }
 
   @override

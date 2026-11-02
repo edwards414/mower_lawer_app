@@ -196,6 +196,19 @@ class MissionMockProvider extends ChangeNotifier {
   static const Duration _roverFixMaxAge = Duration(seconds: 1);
   final BaseStationEstimator _baseStation = BaseStationEstimator();
 
+  /// The newest `/fix` status and when it arrived, taken as it comes (like
+  /// the robot's recorder, by arrival); see [rtkNotFixedReason].
+  int? _rtkFixStatus;
+  DateTime? _rtkFixAt;
+
+  /// `NavSatStatus.STATUS_GBAS_FIX`: the robot's `/fix` status while the
+  /// carrier solution is fixed. RTK float and a plain 3D fix are 0, no fix -1.
+  static const int _navSatStatusRtkFixed = 2;
+
+  /// The robot's recorder counts a `/fix` up to 1 s old
+  /// (`rtk_fix_max_age_s`); the phone adds a second for the link.
+  static const Duration _rtkFixMaxAge = Duration(seconds: 2);
+
   ImageMissionDraft? imageMissionDraft;
 
   MapGridLayer? freeSpaceLayer;
@@ -565,6 +578,58 @@ class MissionMockProvider extends ChangeNotifier {
     return DateTime.now().difference(startedAt);
   }
 
+  /// Why the robot would not take a zone, risk-zone or channel sample now,
+  /// judged from `/fix` the way its recorder judges it (status 2 = RTK
+  /// fixed, and recent); null while RTK is fixed, and always in demo. The
+  /// robot stays the authority: this only tells the user early.
+  String? get rtkNotFixedReason {
+    if (mockDataEnabled) {
+      return null;
+    }
+    final status = _rtkFixStatus;
+    final receivedAt = _rtkFixAt;
+    if (status == null || receivedAt == null) {
+      return '尚未收到 GPS /fix';
+    }
+    if (!_receiptIsFresh(receivedAt, _rtkFixMaxAge)) {
+      return '超過 ${_rtkFixMaxAge.inSeconds} 秒沒有收到 GPS /fix';
+    }
+    if (status < 0) {
+      return 'GPS 無定位';
+    }
+    if (status != _navSatStatusRtkFixed) {
+      return 'GPS status=$status，RTK float 或一般定位';
+    }
+    return null;
+  }
+
+  /// While a live recording runs without RTK fixed the robot skips samples
+  /// but keeps recording, so the saved outline joins the points on either
+  /// side of the gap with a straight line. Null while RTK is fixed, in demo,
+  /// and while rosbridge is down (nothing is known then).
+  String? get recordingRtkWarning {
+    final type = recordingType;
+    if (type == null ||
+        !_recordingViaRos ||
+        !rosConnected ||
+        rtkNotFixedReason == null) {
+      return null;
+    }
+    final outline = type == RecordObjectType.channel ? '路徑' : '邊界';
+    return 'RTK 未 fixed，暫停取點（$outline會以直線連接）';
+  }
+
+  /// Shown where a recording is started while the phone already sees no RTK
+  /// fixed. Advisory only: the start stays enabled and the robot decides
+  /// (its gate can be off, and the phone's view lags the robot's).
+  String? get recordStartRtkHint {
+    if (!rosConnected || recordingType != null) {
+      return null;
+    }
+    final reason = rtkNotFixedReason;
+    return reason == null ? null : 'RTK 尚未 fixed，機器人會拒絕開始記錄（$reason）';
+  }
+
   String get recordingTitle {
     switch (recordingType) {
       case RecordObjectType.zone:
@@ -920,6 +985,7 @@ class MissionMockProvider extends ChangeNotifier {
           _applyBatteryState(event.message);
           break;
         case _gpsFixTopic:
+          _noteRtkFix(event.message);
           _noteRoverFix(event.message);
           _applyGpsFix(event.message);
           break;
@@ -1008,6 +1074,17 @@ class MissionMockProvider extends ChangeNotifier {
         .toDouble();
     _lastBatteryAt = DateTime.now();
     notifyListeners();
+  }
+
+  void _noteRtkFix(Map<String, dynamic> message) {
+    final before = rtkNotFixedReason;
+    final status = message['status'];
+    // A status the phone cannot read counts as no fix, never as fixed.
+    _rtkFixStatus = (status is Map ? _asEnumInt(status['status']) : null) ?? -1;
+    _rtkFixAt = DateTime.now();
+    if (rtkNotFixedReason != before) {
+      notifyListeners();
+    }
   }
 
   void _noteRoverFix(Map<String, dynamic> message) {
@@ -1669,11 +1746,13 @@ class MissionMockProvider extends ChangeNotifier {
     }
     _recordCommandPending = true;
     notifyListeners();
-    final accepted = await _callRecordService(_recordStartService(type));
+    final answer = await _requestRecordService(_recordStartService(type));
     _recordCommandPending = false;
-    if (!accepted) {
+    if (!answer.accepted) {
       notifyListeners();
-      return '機器人沒有接受開始記錄，詳見日誌';
+      // The robot says why (e.g. RTK not fixed); the log keeps it as well.
+      final reason = answer.message.trim();
+      return reason.isEmpty ? '機器人沒有接受開始記錄，詳見日誌' : '無法開始記錄：$reason';
     }
 
     // Only enter recording UI after the backend acknowledged *_start.
@@ -1812,7 +1891,13 @@ class MissionMockProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> _callRecordService(String service) async {
+  Future<bool> _callRecordService(String service) async =>
+      (await _requestRecordService(service)).accepted;
+
+  /// Calls a recorder [service], logs the robot's answer, and returns it.
+  Future<({bool accepted, String message})> _requestRecordService(
+    String service,
+  ) async {
     _addLog('INFO', '呼叫 $service');
     final response = await _rosbridge.callService(service);
     final message = response.message;
@@ -1828,7 +1913,7 @@ class MissionMockProvider extends ChangeNotifier {
           ? '$message（未視為完整持久化）'
           : message,
     );
-    return accepted;
+    return (accepted: accepted, message: message);
   }
 
   void updateLayer({
@@ -4059,6 +4144,8 @@ class MissionMockProvider extends ChangeNotifier {
     _lastBatteryAt = null;
     _clearGpsFix(resetSourceHighWater: true);
     _roverFix = null;
+    _rtkFixStatus = null;
+    _rtkFixAt = null;
     _clearManualCommandClock();
     _hasLiveRobotPose = false;
     _lastRobotPoseAt = null;
