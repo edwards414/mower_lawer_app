@@ -157,10 +157,14 @@ class ExecutionControlSheet extends StatelessWidget {
               child: FilledButton.icon(
                 onPressed: runAll
                     ? mission.canStartZoneSequence
-                          ? mission.startZoneSequence
+                          ? () => _startNew(
+                              context,
+                              mission,
+                              mission.startZoneSequence,
+                            )
                           : null
                     : mission.canStartMission
-                    ? mission.startExecution
+                    ? () => _startNew(context, mission, mission.startExecution)
                     : null,
                 icon: const Icon(AppIcons.play),
                 label: Text(runAll ? '依序開始' : '開始'),
@@ -178,6 +182,45 @@ class ExecutionControlSheet extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// 開始 / 依序開始: a new start replaces a checkpoint the robot could still
+/// continue, so the person is asked first when there is one. With none, this
+/// starts at once, as these buttons always did.
+Future<void> _startNew(
+  BuildContext context,
+  MissionMockProvider mission,
+  VoidCallback start,
+) async {
+  final checkpoint = mission.resumableCoverage;
+  if (checkpoint == null) {
+    start();
+    return;
+  }
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('放棄上次的進度？'),
+      content: Text(
+        'Zone ${checkpoint.zoneId} 已割完 '
+        '${checkpoint.completedSegments}/${checkpoint.totalSegments} 段。\n\n'
+        '開始新的任務後，這些進度會被取代，就不能再繼續割草了。',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('保留進度'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('仍要開始'),
+        ),
+      ],
+    ),
+  );
+  if (ok == true) {
+    start();
   }
 }
 

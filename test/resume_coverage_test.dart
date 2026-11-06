@@ -770,6 +770,211 @@ void main() {
     });
   });
 
+  group('a new start while a checkpoint can be continued', () {
+    testWidgets('開始 asks first; keeping the progress sends nothing', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: 8, completed: 2, total: 10);
+      final provider = await _liveSheet(tester, ros);
+
+      await _tapStart(tester, ros, '開始');
+      final dialog = find.byType(AlertDialog);
+      expect(dialog, findsOneWidget);
+      expect(
+        find.descendant(
+          of: dialog,
+          matching: find.textContaining('Zone 8 已割完 2/10 段'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: dialog, matching: find.textContaining('進度會被取代')),
+        findsOneWidget,
+      );
+      expect(ros.callCount['/zone_exec_path'], isNull);
+
+      await tester.tap(find.widgetWithText(TextButton, '保留進度'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(ros.callCount['/zone_exec_path'], isNull);
+      expect(provider.navStatus, NavMockStatus.idle);
+      // The progress is still there to continue.
+      expect(find.byKey(_button), findsOneWidget);
+
+      await _end(tester, provider, ros);
+    });
+
+    testWidgets('開始, confirmed: the normal start of the selected zone', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: 8);
+      final provider = await _liveSheet(tester, ros);
+      expect(provider.selectedZoneId, 7);
+
+      await _tapStart(tester, ros, '開始');
+      await _startAnyway(tester, ros);
+
+      expect(
+        ros.calls.where((c) => c.service == '/zone_exec_path').single.args,
+        {'zone_id': 7},
+      );
+      expect(ros.callCount['/resume_coverage'], isNull);
+      expect(provider.navStatus, NavMockStatus.executing);
+      expect(find.byType(AlertDialog), findsNothing);
+
+      await _end(tester, provider, ros);
+    });
+
+    testWidgets('依序開始 asks first; keeping the progress sends nothing', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: 8, completed: 2, total: 10);
+      final provider = await _liveSheet(tester, ros);
+      _emitChannel(ros);
+      provider.setRunAllZones(true);
+      await tester.pump();
+
+      await _tapStart(tester, ros, '依序開始');
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining('Zone 8 已割完 2/10 段'),
+        ),
+        findsOneWidget,
+      );
+      expect(ros.callCount['/run_zone_sequence'], isNull);
+
+      await tester.tap(find.widgetWithText(TextButton, '保留進度'));
+      await tester.pumpAndSettle();
+
+      expect(ros.callCount['/run_zone_sequence'], isNull);
+      expect(provider.navStatus, NavMockStatus.idle);
+      expect(find.byKey(_button), findsOneWidget);
+
+      await _end(tester, provider, ros);
+    });
+
+    testWidgets('依序開始, confirmed: the normal start of every zone', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: 8);
+      final provider = await _liveSheet(tester, ros);
+      _emitChannel(ros);
+      provider.setRunAllZones(true);
+      await tester.pump();
+
+      await _tapStart(tester, ros, '依序開始');
+      await _startAnyway(tester, ros);
+
+      expect(
+        ros.calls.where((c) => c.service == '/run_zone_sequence').single.args,
+        {
+          'zone_ids': [7, 8],
+          'channel_proximity_m': 1.5,
+        },
+      );
+      expect(ros.callCount['/resume_coverage'], isNull);
+      expect(provider.navStatus, NavMockStatus.executing);
+
+      await _end(tester, provider, ros);
+    });
+
+    for (final (name, setup) in <(String, void Function(_FakeRos))>[
+      ('no checkpoint', (ros) => ros.checkpoint(zone: -1, available: false)),
+      (
+        'a finished mission',
+        (ros) => ros.checkpoint(
+          zone: 8,
+          completed: 10,
+          available: false,
+          statusText: 'succeeded',
+        ),
+      ),
+      (
+        'a channel leg\'s checkpoint, which cannot be continued',
+        (ros) => ros.checkpoint(zone: -1),
+      ),
+    ]) {
+      testWidgets('no dialog with $name: 開始 goes out at once', (tester) async {
+        final ros = _FakeRos();
+        setup(ros);
+        final provider = await _liveSheet(tester, ros);
+
+        await _tapStart(tester, ros, '開始');
+
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(
+          ros.calls.where((c) => c.service == '/zone_exec_path').single.args,
+          {'zone_id': 7},
+        );
+        expect(provider.navStatus, NavMockStatus.executing);
+
+        await _end(tester, provider, ros);
+      });
+
+      testWidgets('no dialog with $name: 依序開始 goes out at once', (
+        tester,
+      ) async {
+        final ros = _FakeRos();
+        setup(ros);
+        final provider = await _liveSheet(tester, ros);
+        _emitChannel(ros);
+        provider.setRunAllZones(true);
+        await tester.pump();
+
+        await _tapStart(tester, ros, '依序開始');
+
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(ros.callCount['/run_zone_sequence'], 1);
+        expect(provider.navStatus, NavMockStatus.executing);
+
+        await _end(tester, provider, ros);
+      });
+    }
+
+    testWidgets(
+      'no dialog once the zone\'s path has changed: nothing to lose',
+      (tester) async {
+        final ros = _FakeRos()..checkpoint(zone: 8);
+        final provider = await _liveSheet(tester, ros);
+        expect(find.byKey(_button), findsOneWidget);
+        ros.emitSummaries(zone8Points: 60);
+        await tester.pump();
+        expect(find.byKey(_button), findsNothing);
+
+        await _tapStart(tester, ros, '開始');
+
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(ros.callCount['/zone_exec_path'], 1);
+
+        await _end(tester, provider, ros);
+      },
+    );
+
+    testWidgets('no dialog in demo mode, which has no robot', (tester) async {
+      SharedPreferences.setMockInitialValues({'mock_data_enabled': true});
+      final ros = _FakeRos()..checkpoint(zone: 8);
+      final provider = MissionMockProvider(rosbridge: ros);
+      await tester.runAsync(_flushEvents);
+      await tester.pumpWidget(_host(provider));
+      await tester.pump();
+      expect(provider.mockDataEnabled, isTrue);
+
+      final start = find.widgetWithText(FilledButton, '開始');
+      await tester.ensureVisible(start);
+      await tester.pump();
+      await tester.tap(start);
+      await tester.pump();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(provider.navStatus, NavMockStatus.executing);
+      expect(ros.callCount['/zone_exec_path'], isNull);
+
+      await _end(tester, provider, ros);
+    });
+  });
+
   group('zone sequences', () {
     testWidgets('says the zones after it will not follow, and runs only it', (
       tester,
@@ -1016,6 +1221,46 @@ Future<void> _confirm(WidgetTester tester, _FakeRos ros) async {
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 400));
   await tester.pump();
+}
+
+/// Taps 開始 or 依序開始, however far down the panel it is.
+Future<void> _tapStart(WidgetTester tester, _FakeRos ros, String label) async {
+  final start = find.widgetWithText(FilledButton, label);
+  await tester.ensureVisible(start);
+  await tester.pump(const Duration(milliseconds: 300));
+  await _freshen(tester, ros);
+  await tester.tap(start);
+  // Not pumpAndSettle: the progress bar of a running mission never settles.
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+  await tester.pump();
+}
+
+Future<void> _startAnyway(WidgetTester tester, _FakeRos ros) async {
+  ros.emitSensors();
+  await tester.tap(find.widgetWithText(FilledButton, '仍要開始'));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+  await tester.pump();
+}
+
+/// A channel from inside zone 7 to inside zone 8, which 依序開始 needs.
+void _emitChannel(_FakeRos ros) {
+  ros.emit('/adapter/marker_layers/channels', {
+    'data': jsonEncode({
+      'name': 'channels',
+      'markers': [
+        {
+          'id': 1,
+          'points': [
+            {'x': 3.5, 'y': 2.0},
+            {'x': 7.0, 'y': 2.0},
+            {'x': 10.5, 'y': 2.0},
+          ],
+        },
+      ],
+    }),
+  });
 }
 
 /// Freshness is on the wall clock (GPS: 300 ms), which goes on while a test
