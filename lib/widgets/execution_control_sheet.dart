@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
+import '../models/coverage_checkpoint.dart';
 import '../models/mission_mock.dart';
 import '../models/zone_sequence.dart';
 import '../providers/mission_mock_provider.dart';
@@ -47,6 +48,11 @@ class ExecutionControlSheet extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
+        if (mission.resumableCoverage != null ||
+            mission.resumeRefusal != null) ...[
+          _ResumeCoverage(mission: mission),
+          const SizedBox(height: 12),
+        ],
         if (sequenceAvailable) ...[
           SizedBox(
             width: double.infinity,
@@ -171,6 +177,144 @@ class ExecutionControlSheet extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// 繼續割草: a stopped mission the robot can continue, for a person to decide
+/// on. It goes on from where the mower stopped, or from the start of the
+/// segment if the mower has been moved, and it only finishes that one zone.
+class _ResumeCoverage extends StatefulWidget {
+  const _ResumeCoverage({required this.mission});
+
+  final MissionMockProvider mission;
+
+  @override
+  State<_ResumeCoverage> createState() => _ResumeCoverageState();
+}
+
+class _ResumeCoverageState extends State<_ResumeCoverage> {
+  @override
+  void initState() {
+    super.initState();
+    // The sheet scrolls, and whoever just pressed 取消 is at the bottom of it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        Scrollable.ensureVisible(
+          context,
+          duration: const Duration(milliseconds: 250),
+        );
+      }
+    });
+  }
+
+  /// Says what will not happen: a sequence does not go on after this zone.
+  /// The last sequence's status stays latched and need not be this mission's,
+  /// so this says nothing about that sequence, only about the zones.
+  static String _scope(MissionMockProvider mission, int zoneId) {
+    final left = mission.zonesLeftBehindByResume;
+    return left.isEmpty
+        ? '只會割完 Zone $zoneId。'
+        : '只會割完 Zone $zoneId；'
+              '${left.map((id) => 'Zone $id').join('、')} 不會接著割，之後要另外開始。';
+  }
+
+  Future<void> _confirm(CoverageCheckpoint checkpoint) async {
+    final mission = widget.mission;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('繼續割草'),
+        content: Text(
+          'Zone ${checkpoint.zoneId} 已割完 '
+          '${checkpoint.completedSegments}/${checkpoint.totalSegments} 段。\n\n'
+          '機器人會開始移動：就在上次停下的位置附近就接著割，否則先開回這一段的起點。\n\n'
+          '${_scope(mission, checkpoint.zoneId)}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('繼續割草'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await mission.resumeCoverage(checkpoint.zoneId);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mission = widget.mission;
+    final checkpoint = mission.resumableCoverage;
+    final refusal = mission.resumeRefusal;
+    const captionStyle = TextStyle(
+      color: Color(0xFF607D8B),
+      fontSize: 12,
+      fontWeight: FontWeight.w700,
+    );
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F6F7),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (checkpoint != null) ...[
+            Text(
+              'Zone ${checkpoint.zoneId} 還沒割完'
+              '（已割完 ${checkpoint.completedSegments}/${checkpoint.totalSegments} 段）',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 4),
+            Text(_scope(mission, checkpoint.zoneId), style: captionStyle),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                key: const ValueKey('resume-coverage'),
+                onPressed: mission.canResumeCoverage
+                    ? () => _confirm(checkpoint)
+                    : null,
+                icon: const Icon(AppIcons.play),
+                label: const Text('繼續割草'),
+              ),
+            ),
+            const SizedBox(height: 6),
+            // Always takes its line: the GPS check flickers on a slow link,
+            // and the sheet must not jump with it.
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 16),
+              child: Text(
+                mission.resumeBlockReason ?? '',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: captionStyle,
+              ),
+            ),
+          ],
+          if (refusal != null) ...[
+            Text(
+              '無法繼續割草：$refusal',
+              style: captionStyle.copyWith(color: const Color(0xFFC62828)),
+            ),
+            // The robot's answer does not say why when the path is the
+            // reason: "goal rejected: busy or a safety precondition failed".
+            if (refusal.contains('goal rejected')) ...[
+              const SizedBox(height: 2),
+              const Text('如果這個區域的路徑重新生成過，就只能重新開始。', style: captionStyle),
+            ],
+          ],
+        ],
+      ),
     );
   }
 }
