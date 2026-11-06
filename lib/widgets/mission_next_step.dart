@@ -46,6 +46,15 @@ class MissionNextStep {
         targetMode: MissionMode.run,
       );
     }
+    // Ahead of 路徑已就緒: a new start would throw this progress away.
+    final unfinished = mission.resumableCoverage;
+    if (unfinished != null) {
+      return MissionNextStep(
+        text: 'Zone ${unfinished.zoneId} 還沒割完，可以繼續割草',
+        actionLabel: mode == MissionMode.run ? null : '前往執行',
+        targetMode: MissionMode.run,
+      );
+    }
     if (mission.zones.isEmpty) {
       return const MissionNextStep(
         text: '第一步：新增工作區，開車繞一圈記錄邊界',

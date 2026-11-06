@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/base_station.dart';
+import '../models/coverage_checkpoint.dart';
 import '../models/geo_anchor.dart';
 import '../models/image_mission_draft.dart';
 import '../models/mission_mock.dart';
@@ -131,6 +132,26 @@ class MissionMockProvider extends ChangeNotifier {
   /// A channel end belongs to a zone within this distance (the robot's
   /// /get_channel_route default).
   static const _channelProximityM = 1.5;
+
+  /// What /coverage_progress_status last said can be continued; null while
+  /// that is unknown (see [_markCheckpointStale]).
+  CoverageCheckpoint? _coverageCheckpoint;
+  bool _checkpointQueryInFlight = false;
+  int _checkpointEpoch = 0;
+
+  /// The [_tickCount] to ask again at (a tick is a second); null = as soon as
+  /// the navigation state is terminal.
+  int? _checkpointDueTick;
+  static const _checkpointRefreshTicks = 30;
+  static const _checkpointRetryTicks = 5;
+  String? _lastNavState;
+
+  /// The checkpoint's zone's path size when that checkpoint was first seen.
+  /// The robot only finds out that a path changed when it refuses the resume.
+  ({String missionId, int? pointCount})? _checkpointPath;
+
+  /// Why the robot did not continue, until the next start.
+  String? resumeRefusal;
 
   MapPoint robotPosition = const MapPoint(0, 0);
   double robotHeadingRad = 0.0;
@@ -300,6 +321,64 @@ class MissionMockProvider extends ChangeNotifier {
       hasFreshGpsFix &&
       coverageReady;
 
+  /// The unfinished mission 繼續割草 would continue, or null when the button
+  /// does not apply. [canResumeCoverage] says whether it can be pressed now.
+  CoverageCheckpoint? get resumableCoverage {
+    final checkpoint = _coverageCheckpoint;
+    if (checkpoint == null ||
+        mockDataEnabled ||
+        !rosConnected ||
+        _connectionSettingsPending ||
+        _navOperationActive ||
+        zoneSequenceRunning ||
+        recordingType != null ||
+        _recordCommandPending ||
+        hasPendingRecordSave ||
+        manualControlActive ||
+        !_zoneHasPlannedPath(checkpoint.zoneId) ||
+        _checkpointPathChanged(checkpoint)) {
+      return null;
+    }
+    return checkpoint;
+  }
+
+  /// The checks of a normal start, for the checkpoint's zone.
+  bool get canResumeCoverage =>
+      resumableCoverage != null && _localStartReady && _liveStartReady;
+
+  /// What keeps 繼續割草 disabled; null when it can be pressed.
+  String? get resumeBlockReason {
+    if (resumableCoverage == null || canResumeCoverage) {
+      return null;
+    }
+    final missing = [
+      if (!canControlRobot) '機器人連線',
+      if (!hasFreshTerminalNavStatus) '導航狀態',
+      if (!_navigationAdmissionReady)
+        _navigationAdmissionBlockReason ?? '導航安全條件',
+      if (!hasFreshRobotPose) '定位',
+      if (!hasFreshGpsFix) 'GPS',
+      if (!coverageReady) '覆蓋路徑',
+    ];
+    return missing.isEmpty ? '機器人尚未就緒' : '機器人尚未就緒：${missing.join('、')}';
+  }
+
+  /// A resume only finishes the checkpoint's zone. These are the zones of the
+  /// stopped /run_zone_sequence after it, which nothing will start any more.
+  List<int> get zonesLeftBehindByResume {
+    final checkpoint = _coverageCheckpoint;
+    final sequence = zoneSequence;
+    if (checkpoint == null ||
+        sequence == null ||
+        (sequence.state != 'failed' && sequence.state != 'canceled') ||
+        sequence.index < 0 ||
+        sequence.index >= sequence.zoneIds.length ||
+        sequence.zoneIds[sequence.index] != checkpoint.zoneId) {
+      return const [];
+    }
+    return sequence.zoneIds.sublist(sequence.index + 1);
+  }
+
   /// Every zone in id order: the order 全部區域依序 mows them in.
   List<int> get sequenceZoneIds => [for (final zone in zones) zone.id]..sort();
 
@@ -392,6 +471,25 @@ class MissionMockProvider extends ChangeNotifier {
   bool get _selectedZoneHasCoveragePath =>
       zones.any((zone) => zone.id == selectedZoneId && zone.hasCoveragePath) ||
       (_imageMissionActive && (_zoneCoverageById[selectedZoneId] ?? false));
+
+  /// As the robot sees it: an image mission's zone is only in the summaries.
+  bool _zoneHasPlannedPath(int zoneId) =>
+      _zoneCoverageById[zoneId] == true ||
+      zones.any((zone) => zone.id == zoneId && zone.hasCoveragePath);
+
+  /// The zone's path has another size than when the checkpoint was first
+  /// seen, so it is another path and the robot would refuse. The same size
+  /// proves nothing; the robot decides then.
+  bool _checkpointPathChanged(CoverageCheckpoint checkpoint) {
+    final path = _checkpointPath;
+    final now = _zonePointCountById[checkpoint.zoneId];
+    return path != null &&
+        path.missionId == checkpoint.missionId &&
+        path.pointCount != null &&
+        now != null &&
+        now != path.pointCount;
+  }
+
   bool get navCommandPending => _navCommandPending;
   bool get cancelRequestInFlight => _cancelRequestInFlight;
   bool get cancelPending => _cancelPending;
@@ -909,6 +1007,7 @@ class MissionMockProvider extends ChangeNotifier {
       return;
     }
     rosConnected = connected;
+    _markCheckpointStale();
     if (connected) {
       _hasLoggedRosFailure = false;
       _hasLoggedManualDisconnected = false;
@@ -1495,16 +1594,25 @@ class MissionMockProvider extends ChangeNotifier {
 
   void _applyZoneSummaries(List<dynamic> summaries) {
     final coverageByZone = <int, bool>{};
+    final pointCounts = <int, int>{};
     for (final item in summaries.whereType<Map>()) {
       final zoneId = _asInt(item['zoneId']);
       if (zoneId == null) {
         continue;
       }
       coverageByZone[zoneId] = item['hasCoveragePath'] == true;
+      final pointCount = _asInt(item['pointCount']);
+      if (pointCount != null && pointCount > 0) {
+        pointCounts[zoneId] = pointCount;
+      }
     }
     _zoneCoverageById
       ..clear()
       ..addAll(coverageByZone);
+    _zonePointCountById
+      ..clear()
+      ..addAll(pointCounts);
+    _noteCheckpointPath();
     zones = zones
         .map(
           (zone) => MissionZone(
@@ -1599,6 +1707,7 @@ class MissionMockProvider extends ChangeNotifier {
   }
 
   final Map<int, bool> _zoneCoverageById = {};
+  final Map<int, int> _zonePointCountById = {};
 
   bool _zoneHasCoveragePath(int zoneId) => _zoneCoverageById[zoneId] ?? false;
 
@@ -3472,15 +3581,56 @@ class MissionMockProvider extends ChangeNotifier {
     );
   }
 
-  Future<void> _startRosNavigation({
+  /// 繼續割草: the robot continues the checkpoint of [zoneId], the zone the
+  /// person confirmed. Naming it, rather than sending -1, makes the robot
+  /// refuse if the checkpoint has moved on to another zone since.
+  ///
+  /// A start like any other from here on. The robot's stop stays latched
+  /// until someone does this; nothing here calls it by itself.
+  Future<void> resumeCoverage(int zoneId) async {
+    if (_navCommandPending) {
+      return;
+    }
+    if (!canResumeCoverage || resumableCoverage?.zoneId != zoneId) {
+      // Things moved while the person was reading the dialog. Nothing is
+      // sent, and they need to see that.
+      final reason = resumeBlockReason ?? '狀態已改變，請重新確認';
+      resumeRefusal = reason;
+      _addLog('WARN', '無法繼續割草：$reason');
+      return;
+    }
+    final response = await _startRosNavigation(
+      service: '/resume_coverage',
+      args: {'zone_id': zoneId},
+      label: 'Zone $zoneId 繼續割草',
+    );
+    if (response == null || _isDisposed) {
+      return;
+    }
+    if (!response.success) {
+      resumeRefusal = response.message.isEmpty
+          ? '機器人沒有回覆結果，詳見日誌'
+          : response.message;
+    } else if (navStatus == NavMockStatus.executing) {
+      // The panel shows the one zone that is running, also after a sequence.
+      selectedZoneId = zoneId;
+      runAllZones = false;
+    }
+    notifyListeners();
+  }
+
+  /// Null when another command is pending, else the robot's answer.
+  Future<RosbridgeServiceResponse?> _startRosNavigation({
     required String service,
     required Map<String, dynamic> args,
     required String label,
     bool sequence = false,
   }) async {
     if (_navCommandPending) {
-      return;
+      return null;
     }
+    resumeRefusal = null;
+    _markCheckpointStale();
     if (sequence) {
       // Set before the call: a stop pressed while the ACK is outstanding
       // must stop the sequence as well.
@@ -3497,7 +3647,7 @@ class MissionMockProvider extends ChangeNotifier {
     notifyListeners();
     final response = await _rosbridge.callService(service, args: args);
     if (_isDisposed) {
-      return;
+      return null;
     }
     final cancelWasRequested = _cancelRequestedDuringStart;
     // Invalidate any status request started before this ACK. An old `idle`
@@ -3570,6 +3720,7 @@ class MissionMockProvider extends ChangeNotifier {
       unawaited(_pollNavStatus());
     }
     notifyListeners();
+    return response;
   }
 
   void cancelExecution() {
@@ -3887,7 +4038,89 @@ class MissionMockProvider extends ChangeNotifier {
           : 'SUCCESS';
       _addLog(level, detail.isEmpty ? '導航狀態：$state' : detail);
     }
+    if (state != _lastNavState) {
+      _lastNavState = state;
+      _markCheckpointStale();
+    }
     notifyListeners();
+    unawaited(_refreshCoverageCheckpoint());
+  }
+
+  /// What is known about the checkpoint no longer holds: the button goes
+  /// until the robot has answered again, and an answer on its way is dropped.
+  void _markCheckpointStale() {
+    _checkpointEpoch += 1;
+    _coverageCheckpoint = null;
+    _checkpointDueTick = null;
+  }
+
+  /// Asks /coverage_progress_status when it is due: once the navigation state
+  /// has settled on a terminal one, and every so often while it stays there.
+  /// Never during a mission, when the button cannot apply anyway.
+  Future<void> _refreshCoverageCheckpoint() async {
+    final dueTick = _checkpointDueTick;
+    if (_checkpointQueryInFlight ||
+        mockDataEnabled ||
+        !rosConnected ||
+        _navOperationActive ||
+        !hasFreshTerminalNavStatus ||
+        (dueTick != null && _tickCount < dueTick)) {
+      return;
+    }
+    final epoch = _checkpointEpoch;
+    _checkpointQueryInFlight = true;
+    late final RosbridgeServiceResponse response;
+    try {
+      response = await _rosbridge.callService(
+        '/coverage_progress_status',
+        timeout: const Duration(seconds: 4),
+      );
+    } catch (_) {
+      _checkpointDueTick = _tickCount + _checkpointRetryTicks;
+      return;
+    } finally {
+      _checkpointQueryInFlight = false;
+    }
+    if (_isDisposed || epoch != _checkpointEpoch) {
+      return;
+    }
+    if (coverageProgressIsActive(response.values['progress'])) {
+      // Not settled yet: again at the next tick.
+      _coverageCheckpoint = null;
+      _checkpointDueTick = null;
+      notifyListeners();
+      return;
+    }
+    if (!response.success) {
+      // A lost answer says nothing about the checkpoint: on a bad link the
+      // button stays as it was, and the robot still decides when it is pressed.
+      _checkpointDueTick = _tickCount + _checkpointRetryTicks;
+      return;
+    }
+    _checkpointDueTick = _tickCount + _checkpointRefreshTicks;
+    _coverageCheckpoint = CoverageCheckpoint.fromJson(
+      response.values['checkpoint'],
+    );
+    _noteCheckpointPath();
+    notifyListeners();
+  }
+
+  /// Remembers the path's size the first time a checkpoint is seen. A path
+  /// cannot be replaced while its mission runs, so if this app was connected
+  /// when the mission stopped this is the size of the path it was mowing.
+  void _noteCheckpointPath() {
+    final checkpoint = _coverageCheckpoint;
+    if (checkpoint == null) {
+      return;
+    }
+    final known = _checkpointPath;
+    if (known?.missionId == checkpoint.missionId && known?.pointCount != null) {
+      return;
+    }
+    _checkpointPath = (
+      missionId: checkpoint.missionId,
+      pointCount: _zonePointCountById[checkpoint.zoneId],
+    );
   }
 
   void _cancelRecordingForExternalNavigation() {
@@ -4080,6 +4313,7 @@ class MissionMockProvider extends ChangeNotifier {
     _syncFastRetry();
     if (!mockDataEnabled && rosConnected) {
       unawaited(_pollNavStatus());
+      unawaited(_refreshCoverageCheckpoint());
     }
     if (mockDataEnabled && !_hasLiveRobotPose) {
       _advanceRobot();
@@ -4159,6 +4393,9 @@ class MissionMockProvider extends ChangeNotifier {
     _cancelRequestedDuringStart = false;
     _clearAmbiguousCancelRetry();
     _loggedRejectedMapDatumSources.clear();
+    _markCheckpointStale();
+    _checkpointPath = null;
+    resumeRefusal = null;
   }
 
   void _clearMissionData() {
@@ -4168,6 +4405,7 @@ class MissionMockProvider extends ChangeNotifier {
     coverageRows = const <List<MapPoint>>[];
     invalidSegments = const <InvalidSegment>[];
     _zoneCoverageById.clear();
+    _zonePointCountById.clear();
     mapGeoAnchor = null;
     _baseStation.clear();
     sites = const <SiteInfo>[];
