@@ -756,6 +756,284 @@ void main() {
     await _endWidgetTest(tester, provider, ros);
   });
 
+  // mower_record refuses to save a recording with an RTK pause over 10 s
+  // (max_rtk_pause_s; owner, 2026-11-07) and discards it.
+  const rtkPaused = 'RTK 未 fixed，暫停取點（邊界會以直線連接）';
+  const rtkNotSaved = 'RTK 已中斷超過 10 秒，這次記錄將無法儲存，請重新記錄';
+  const rtkWasNotSaved = 'RTK 曾中斷超過 10 秒，這次記錄將無法儲存，請重新記錄';
+  const robotDiscarded = '錄製中 RTK 中斷 23.4 秒（超過 10 秒），邊界可能不準，未儲存，請重新記錄';
+
+  test('a pause over 10 s says the recording will not be saved', () async {
+    var now = DateTime(2026, 11, 7, 9);
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros, clock: () => now);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+    ros.emit('/fix', _fixWithStatus(2));
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+    expect(provider.recordingLongestRtkPause, Duration.zero);
+
+    // The pause runs from the first /fix that is not RTK fixed; 10 s is not
+    // over the robot's limit, a moment more is.
+    ros.emit('/fix', _fixWithStatus(0));
+    expect(provider.recordingRtkWarning, rtkPaused);
+    now = now.add(const Duration(seconds: 10));
+    ros.emit('/fix', _fixWithStatus(0));
+    expect(provider.recordingLongestRtkPause, const Duration(seconds: 10));
+    expect(provider.recordingRtkWarning, rtkPaused);
+    now = now.add(const Duration(milliseconds: 100));
+    expect(provider.recordingRtkWarning, rtkNotSaved);
+
+    // RTK fixed again: the robot will still not save this one, so the
+    // notice stays; a new outage says it is going on.
+    ros.emit('/fix', _fixWithStatus(2));
+    expect(provider.rtkNotFixedReason, isNull);
+    expect(provider.recordingRtkWarning, rtkWasNotSaved);
+    now = now.add(const Duration(minutes: 1));
+    expect(
+      provider.recordingLongestRtkPause,
+      const Duration(seconds: 10, milliseconds: 100),
+    );
+    ros.emit('/fix', _fixWithStatus(-1));
+    expect(provider.recordingRtkWarning, rtkNotSaved);
+
+    // Cancelled: the next recording starts with none of it.
+    ros.emit('/fix', _fixWithStatus(2));
+    expect(await provider.stopRecording(save: false), isTrue);
+    expect(provider.recordingRtkWarning, isNull);
+    expect(await provider.startRecording(RecordObjectType.risk), isNull);
+    expect(provider.recordingLongestRtkPause, Duration.zero);
+    expect(provider.recordingRtkWarning, isNull);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test('short RTK pauses are not added up', () async {
+    var now = DateTime(2026, 11, 7, 9);
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros, clock: () => now);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+    ros.emit('/fix', _fixWithStatus(2));
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+
+    // 9 s, 9 s and 9 s going on: 27 s in all, none over 10 s.
+    for (var i = 0; i < 3; i++) {
+      ros.emit('/fix', _fixWithStatus(0));
+      now = now.add(const Duration(seconds: 9));
+      ros.emit('/fix', _fixWithStatus(i < 2 ? 2 : 0));
+      if (i < 2) {
+        expect(provider.recordingRtkWarning, isNull);
+      }
+    }
+    expect(provider.recordingLongestRtkPause, const Duration(seconds: 9));
+    expect(provider.recordingRtkWarning, rtkPaused);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test('an RTK pause is never timed across a rosbridge gap', () async {
+    var now = DateTime(2026, 11, 7, 9);
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros, clock: () => now);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+    ros.emit('/fix', _fixWithStatus(2));
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+
+    ros.emit('/fix', _fixWithStatus(0));
+    now = now.add(const Duration(seconds: 5));
+    ros.emitState(RosbridgeConnectionState.disconnected);
+    expect(provider.recordingRtkWarning, isNull);
+    // 30 s the phone saw nothing of: not counted.
+    now = now.add(const Duration(seconds: 30));
+    ros.emitState(RosbridgeConnectionState.connected);
+    now = now.add(const Duration(seconds: 3));
+    expect(provider.recordingType, RecordObjectType.zone);
+    expect(provider.recordingLongestRtkPause, const Duration(seconds: 5));
+    expect(provider.recordingRtkWarning, rtkPaused);
+    ros.emit('/fix', _fixWithStatus(2));
+    expect(provider.recordingRtkWarning, isNull);
+    expect(provider.recordingLongestRtkPause, const Duration(seconds: 5));
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test('a refused end follows what the robot did with the recording', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+
+    // Refused, the recording kept (too few points): still recording, and
+    // the robot's reason is there for the user.
+    const tooFew = '區域點數不足，至少需要 3 個點';
+    ros.handlers['/record_zone_end'] = () =>
+        _response('/record_zone_end', success: false, message: tooFew);
+    expect(await provider.stopRecording(save: true), isFalse);
+    expect(provider.recordingType, RecordObjectType.zone);
+    expect(provider.recordEndRefusal, tooFew);
+    expect(provider.recordEndDiscarded, isFalse);
+
+    // Refused and discarded (an RTK pause too long): the robot records
+    // nothing now, so neither does the app; nothing to save or retry.
+    ros.handlers['/record_zone_end'] = () =>
+        _response('/record_zone_end', success: false, message: robotDiscarded);
+    expect(await provider.stopRecording(save: true), isFalse);
+    expect(provider.recordingType, isNull);
+    expect(provider.recordCommandPending, isFalse);
+    expect(provider.hasPendingRecordSave, isFalse);
+    expect(provider.recordEndRefusal, robotDiscarded);
+    expect(provider.recordEndDiscarded, isTrue);
+    expect(provider.recordingRtkWarning, isNull);
+    expect(ros.callCount['/save_zone_list'], isNull);
+    expect(ros.callCount['/record_cancel'], isNull);
+    expect(
+      provider.logs.where(
+        (e) => e.level == 'ERROR' && e.message == robotDiscarded,
+      ),
+      hasLength(1),
+    );
+
+    // A new one starts at once. A channel's answer, with the lease warning
+    // the robot appends when the release is unconfirmed, is read the same.
+    ros.handlers['/channel_record_start'] = () =>
+        _response('/channel_record_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.channel), isNull);
+    const channel =
+        '錄製中 RTK 中斷 12.0 秒（超過 10 秒），路徑可能不準，未儲存，請重新記錄'
+        '；操作鎖釋放未確認，導航仍被禁止；請檢查機器後重啟 path_record_node 與 nav_action_server';
+    ros.handlers['/channel_record_end'] = () =>
+        _response('/channel_record_end', success: false, message: channel);
+    expect(await provider.stopRecording(save: true), isFalse);
+    expect(provider.recordingType, isNull);
+    expect(provider.recordEndDiscarded, isTrue);
+
+    // A cancel never reports an end's refusal.
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+    ros.handlers['/record_cancel'] = () =>
+        _response('/record_cancel', success: false, message: 'busy');
+    expect(await provider.stopRecording(save: false), isFalse);
+    expect(provider.recordEndRefusal, isNull);
+    expect(provider.recordEndDiscarded, isFalse);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  testWidgets('live: a refused save shows the robot\'s reason', (tester) async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await tester.runAsync(_flushEvents);
+    _emitLivePrerequisites(ros);
+    await tester.pump();
+    await tester.pump();
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+    await tester.pumpWidget(
+      ChangeNotifierProvider<MissionMockProvider>.value(
+        value: provider,
+        child: MaterialApp(
+          home: Scaffold(body: MapRecordBar(onOpenManual: () {})),
+        ),
+      ),
+    );
+
+    // Kept: the reason, and the bar stays for another try or a cancel.
+    const tooFew = '區域點數不足，至少需要 3 個點';
+    ros.handlers['/record_zone_end'] = () =>
+        _response('/record_zone_end', success: false, message: tooFew);
+    await tester.tap(find.text('儲存'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('儲存沒有成功，記錄仍在進行：$tooFew'), findsOneWidget);
+    expect(find.textContaining('工作區記錄中'), findsOneWidget);
+    tester
+        .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+        .clearSnackBars();
+    await tester.pumpAndSettle();
+
+    // Discarded: the robot's own words, and no recording bar left.
+    ros.handlers['/record_zone_end'] = () =>
+        _response('/record_zone_end', success: false, message: robotDiscarded);
+    await tester.tap(find.text('儲存'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text(robotDiscarded), findsOneWidget);
+    expect(find.textContaining('記錄仍在進行'), findsNothing);
+    expect(find.textContaining('工作區記錄中'), findsNothing);
+    expect(find.text('儲存'), findsNothing);
+    expect(find.text('取消'), findsNothing);
+    // Up long enough to read: still there after the usual 4 s.
+    await tester.pump(const Duration(seconds: 5));
+    expect(find.text(robotDiscarded), findsOneWidget);
+
+    await _endWidgetTest(tester, provider, ros);
+  });
+
+  testWidgets('live: the recording bar says when a recording cannot be saved', (
+    tester,
+  ) async {
+    var now = DateTime(2026, 11, 7, 9);
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros, clock: () => now);
+    await tester.runAsync(_flushEvents);
+    _emitLivePrerequisites(ros);
+    await tester.pump();
+    await tester.pump();
+    ros.emit('/fix', _fixWithStatus(2));
+    ros.handlers['/record_zone_start'] = () =>
+        _response('/record_zone_start', success: true);
+    expect(await provider.startRecording(RecordObjectType.zone), isNull);
+    await tester.pumpWidget(
+      ChangeNotifierProvider<MissionMockProvider>.value(
+        value: provider,
+        child: MaterialApp(
+          home: Scaffold(body: MapRecordBar(onOpenManual: () {})),
+        ),
+      ),
+    );
+
+    ros.emit('/fix', _fixWithStatus(0));
+    await tester.pump();
+    expect(find.text(rtkPaused), findsOneWidget);
+    // 11 s on, with no new /fix status: the bar's own tick redraws it.
+    now = now.add(const Duration(seconds: 11));
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text(rtkPaused), findsNothing);
+    expect(find.text(rtkNotSaved), findsOneWidget);
+    expect(find.text('GPS status=0，RTK float 或一般定位'), findsOneWidget);
+
+    // Fixed again: the notice stays, without a reason line; save and
+    // cancel stay too (the robot decides).
+    ros.emit('/fix', _fixWithStatus(2));
+    await tester.pump();
+    expect(find.text(rtkWasNotSaved), findsOneWidget);
+    expect(find.text('GPS status=0，RTK float 或一般定位'), findsNothing);
+    expect(find.byKey(const ValueKey('record-rtk-pause')), findsOneWidget);
+    expect(find.text('儲存'), findsOneWidget);
+    expect(find.text('取消'), findsOneWidget);
+
+    await _endWidgetTest(tester, provider, ros);
+  });
+
   testWidgets('live: add-object sheet hands off once the robot accepts', (
     tester,
   ) async {

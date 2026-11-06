@@ -10,10 +10,12 @@ void _showRecordSnack(
   ScaffoldMessengerState messenger,
   String text, {
   double? clearBottom,
+  Duration duration = const Duration(seconds: 4),
 }) {
   messenger.showSnackBar(
     SnackBar(
       content: Text(text),
+      duration: duration,
       // Floats above [clearBottom] so it never covers the manual joysticks.
       behavior: clearBottom == null ? null : SnackBarBehavior.floating,
       margin: clearBottom == null
@@ -24,7 +26,8 @@ void _showRecordSnack(
 }
 
 /// Saves or cancels the active recording and, when the robot did not accept,
-/// tells the user what state they are in (still recording vs stopped-unsaved).
+/// tells the user what state they are in (still recording, stopped-unsaved,
+/// or discarded by the robot) and, when the robot said why, its reason.
 Future<void> finishRecordingWithFeedback(
   BuildContext context,
   MissionMockProvider mission, {
@@ -38,8 +41,23 @@ Future<void> finishRecordingWithFeedback(
   }
   // stopRecording(save: true) also returns false when the recorder already
   // stopped and only persisting failed; the retry bar takes over from there.
+  final refusal = save ? mission.recordEndRefusal : null;
+  if (save && mission.recordEndDiscarded && refusal != null) {
+    // The robot refused to save and discarded the recording (an RTK pause
+    // too long); the bar is gone with it, so this is all the user sees: the
+    // robot's own words, long enough to read.
+    _showRecordSnack(
+      messenger,
+      refusal,
+      clearBottom: clearBottom,
+      duration: const Duration(seconds: 8),
+    );
+    return;
+  }
   final text = mission.hasPendingRecordSave
       ? '記錄已停止，但儲存失敗，請按「重試」（詳見日誌）'
+      : save && refusal != null
+      ? '儲存沒有成功，記錄仍在進行：$refusal'
       : save
       ? '儲存沒有成功，記錄仍在進行，請重試（詳見日誌）'
       : '取消沒有成功，請重試（詳見日誌）';
@@ -229,7 +247,9 @@ class _RecordingBar extends StatelessWidget {
 }
 
 /// Stays under the recording bar for as long as the robot skips samples for
-/// want of RTK fixed, and goes when fixed returns.
+/// want of RTK fixed, and goes when fixed returns, unless a pause has already
+/// lasted too long for the robot to save the recording: then it stays, and
+/// says so.
 class _RtkPauseNotice extends StatelessWidget {
   const _RtkPauseNotice({required this.warning, required this.reason});
 

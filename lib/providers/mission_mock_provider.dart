@@ -44,9 +44,12 @@ class MissionMockProvider extends ChangeNotifier {
     defaultValue: '',
   );
 
-  MissionMockProvider({RosbridgeService? rosbridge})
+  /// [clock] is for tests: it times the recording's RTK pauses
+  /// ([recordingLongestRtkPause]) and nothing else.
+  MissionMockProvider({RosbridgeService? rosbridge, DateTime Function()? clock})
     : _rosbridge = rosbridge ?? RosbridgeService(),
-      _ownsRosbridge = rosbridge == null {
+      _ownsRosbridge = rosbridge == null,
+      _now = clock ?? DateTime.now {
     _addLog('INFO', '等待 ROS 真實資料', notify: false);
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
     unawaited(_loadManualLinearSpeedPreference());
@@ -55,6 +58,7 @@ class MissionMockProvider extends ChangeNotifier {
 
   final RosbridgeService _rosbridge;
   final bool _ownsRosbridge;
+  final DateTime Function() _now;
   Timer? _timer;
   Timer? _ambiguousCancelRetryTimer;
   StreamSubscription<RosbridgeTopicMessage>? _rosMessages;
@@ -234,6 +238,26 @@ class MissionMockProvider extends ChangeNotifier {
   /// The robot's recorder counts a `/fix` up to 1 s old
   /// (`rtk_fix_max_age_s`); the phone adds a second for the link.
   static const Duration _rtkFixMaxAge = Duration(seconds: 2);
+
+  /// The robot does not save a recording one of whose RTK pauses lasted
+  /// longer than this: its *_end answers false and the recording is
+  /// discarded (mower_record's `max_rtk_pause_s`, 10.0 in mower_rsd.yaml;
+  /// owner, 2026-11-07). The phone cannot read robot parameters, so the
+  /// number is repeated here; change both together.
+  static const Duration recordingRtkPauseLimit = Duration(seconds: 10);
+
+  /// What a refused *_end says when the robot discarded the recording
+  /// (mower_record's `DISCARDED_ZH`): it records nothing any more.
+  static const String _robotDiscardedRecordingMarker = '未儲存，請重新記錄';
+
+  /// Since when the phone has seen the live recording without RTK fixed
+  /// (the pause going on), and the longest pause of this recording it has
+  /// seen end; see [recordingLongestRtkPause].
+  DateTime? _rtkPauseSince;
+  Duration _rtkLongestPause = Duration.zero;
+
+  String? _recordEndRefusal;
+  bool _recordEndDiscarded = false;
 
   ImageMissionDraft? imageMissionDraft;
 
@@ -708,19 +732,75 @@ class MissionMockProvider extends ChangeNotifier {
 
   /// While a live recording runs without RTK fixed the robot skips samples
   /// but keeps recording, so the saved outline joins the points on either
-  /// side of the gap with a straight line. Null while RTK is fixed, in demo,
-  /// and while rosbridge is down (nothing is known then).
+  /// side of the gap with a straight line. Once a pause has lasted longer
+  /// than [recordingRtkPauseLimit] the robot will not save the recording, and
+  /// the notice says so from then on, RTK fixed again or not. Null while RTK
+  /// is fixed (and no pause was too long), in demo, and while rosbridge is
+  /// down (nothing is known then).
   String? get recordingRtkWarning {
     final type = recordingType;
-    if (type == null ||
-        !_recordingViaRos ||
-        !rosConnected ||
-        rtkNotFixedReason == null) {
+    if (type == null || !_recordingViaRos || !rosConnected) {
+      return null;
+    }
+    final paused = rtkNotFixedReason != null;
+    if (recordingLongestRtkPause > recordingRtkPauseLimit) {
+      final limit = recordingRtkPauseLimit.inSeconds;
+      return paused
+          ? 'RTK 已中斷超過 $limit 秒，這次記錄將無法儲存，請重新記錄'
+          : 'RTK 曾中斷超過 $limit 秒，這次記錄將無法儲存，請重新記錄';
+    }
+    if (!paused) {
       return null;
     }
     final outline = type == RecordObjectType.channel ? '路徑' : '邊界';
     return 'RTK 未 fixed，暫停取點（$outline會以直線連接）';
   }
+
+  /// The longest RTK pause the phone has seen in the live recording, the one
+  /// going on at its length now. Timed by the phone's receipt of `/fix`, so
+  /// approximate (a stopped `/fix` counts from the phone's 2 s, the robot's
+  /// from its 1 s); the robot times its own and decides. Pauses are never
+  /// added up, as the robot does not add them.
+  Duration get recordingLongestRtkPause {
+    final since = _rtkPauseSince;
+    final current = since == null ? Duration.zero : _now().difference(since);
+    return current > _rtkLongestPause ? current : _rtkLongestPause;
+  }
+
+  /// Keeps the pause bookkeeping of [recordingLongestRtkPause]: a pause
+  /// starts when the phone first sees the live recording without RTK fixed,
+  /// and ends when it sees RTK fixed again or can no longer tell (rosbridge
+  /// down, the recording over); the length it saw is kept. After a
+  /// reconnect a pause counts from the reconnect, never across the gap.
+  void _trackRecordingRtkPause() {
+    final live = recordingType != null && _recordingViaRos && rosConnected;
+    if (live && rtkNotFixedReason != null) {
+      _rtkPauseSince ??= _now();
+      return;
+    }
+    final since = _rtkPauseSince;
+    if (since != null) {
+      final length = _now().difference(since);
+      if (length > _rtkLongestPause) {
+        _rtkLongestPause = length;
+      }
+      _rtkPauseSince = null;
+    }
+  }
+
+  void _resetRecordingRtkPauses() {
+    _rtkPauseSince = null;
+    _rtkLongestPause = Duration.zero;
+  }
+
+  /// The robot's answer to the last refused *_end of a recording, for the
+  /// user; null when it said nothing or the end was not refused.
+  String? get recordEndRefusal => _recordEndRefusal;
+
+  /// Whether the robot discarded the recording when it refused the last
+  /// *_end (an RTK pause over [recordingRtkPauseLimit]): the app then left
+  /// its recording state too, and nothing is to be retried.
+  bool get recordEndDiscarded => _recordEndDiscarded;
 
   /// Shown where a recording is started while the phone already sees no RTK
   /// fixed. Advisory only: the start stays enabled and the robot decides
@@ -1013,6 +1093,7 @@ class MissionMockProvider extends ChangeNotifier {
     }
     rosConnected = connected;
     _markCheckpointStale();
+    _trackRecordingRtkPause();
     if (connected) {
       _hasLoggedRosFailure = false;
       _hasLoggedManualDisconnected = false;
@@ -1186,6 +1267,7 @@ class MissionMockProvider extends ChangeNotifier {
     // A status the phone cannot read counts as no fix, never as fixed.
     _rtkFixStatus = (status is Map ? _asEnumInt(status['status']) : null) ?? -1;
     _rtkFixAt = DateTime.now();
+    _trackRecordingRtkPause();
     if (rtkNotFixedReason != before) {
       notifyListeners();
     }
@@ -1878,6 +1960,7 @@ class MissionMockProvider extends ChangeNotifier {
     recordingType = type;
     _recordingViaRos = true;
     _recordingStartedAt = DateTime.now();
+    _resetRecordingRtkPauses();
     recordTrail = _hasLiveRobotPose ? [robotPosition] : const [];
     recordPointCount = recordTrail.length;
     notifyListeners();
@@ -1889,6 +1972,8 @@ class MissionMockProvider extends ChangeNotifier {
     if (type == null || _recordCommandPending) {
       return false;
     }
+    _recordEndRefusal = null;
+    _recordEndDiscarded = false;
 
     if (!_recordingViaRos) {
       _addLog(
@@ -1925,9 +2010,21 @@ class MissionMockProvider extends ChangeNotifier {
       return true;
     }
 
-    final ended = await _callRecordService(_recordEndService(type));
-    if (!ended) {
+    final ended = await _requestRecordService(_recordEndService(type));
+    if (!ended.accepted) {
       _recordCommandPending = false;
+      final reason = ended.message.trim();
+      _recordEndRefusal = reason.isEmpty ? null : reason;
+      if (reason.contains(_robotDiscardedRecordingMarker)) {
+        // Refused and discarded (an RTK pause too long): the robot records
+        // nothing now, its lease is back, and no retry could save it. Leave
+        // the recording state with it, so the user starts a new one.
+        _recordEndDiscarded = true;
+        _addLog('WARN', '${_recordTypeName(type)}未儲存，機器人已捨棄這次記錄，請重新記錄');
+        _resetRecordingState();
+        notifyListeners();
+        return false;
+      }
       _addLog('ERROR', '${_recordTypeName(type)}仍維持記錄中，請重試停止');
       notifyListeners();
       return false;
@@ -1982,6 +2079,7 @@ class MissionMockProvider extends ChangeNotifier {
   void _resetRecordingState() {
     recordingType = null;
     _recordingViaRos = false;
+    _resetRecordingRtkPauses();
     recordPointCount = 0;
     recordTrail = const [];
     _recordingStartedAt = null;
@@ -4335,6 +4433,8 @@ class MissionMockProvider extends ChangeNotifier {
     _tickCount += 1;
     _updateRobotOnline();
     _syncFastRetry();
+    // A /fix that stops coming has no receipt to note: see it go stale here.
+    _trackRecordingRtkPause();
     if (!mockDataEnabled && rosConnected) {
       unawaited(_pollNavStatus());
       unawaited(_refreshCoverageCheckpoint());
