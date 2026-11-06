@@ -146,6 +146,9 @@ class MissionMockProvider extends ChangeNotifier {
   static const _checkpointRetryTicks = 5;
   String? _lastNavState;
 
+  /// The terminal state last logged; null while the state is not terminal.
+  String? _lastTerminalNavLog;
+
   /// The checkpoint's zone's path size when that checkpoint was first seen.
   /// A robot from before its status looked at the path only finds out that a
   /// path changed when it refuses the resume, and the app and the robot do
@@ -4033,10 +4036,15 @@ class MissionMockProvider extends ChangeNotifier {
       _addLog('WARN', '開始結果不確定；持續要求取消直到後端確認終止');
       _scheduleAmbiguousCancelRetry();
     }
-    if (navStatus != previous ||
-        state == 'completed' ||
-        state == 'canceled' ||
-        state == 'failed') {
+    // A terminal state comes back with every poll: log it once.
+    final terminalLog =
+        state == 'completed' || state == 'canceled' || state == 'failed'
+        ? '$state|$detail'
+        : null;
+    final newTerminalLog =
+        terminalLog != null && terminalLog != _lastTerminalNavLog;
+    _lastTerminalNavLog = terminalLog;
+    if (navStatus != previous || newTerminalLog) {
       final level =
           state == 'failed' ||
               state == 'uncertain' ||

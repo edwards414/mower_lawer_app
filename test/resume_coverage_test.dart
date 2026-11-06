@@ -1111,6 +1111,33 @@ void main() {
       await _end(tester, provider, ros);
     });
 
+    testWidgets('a terminal state is logged once, not with every poll', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: 8, progressMessage: trip);
+      ros.handlers['/check_nav_status'] = () =>
+          _navState('canceled', message: trip);
+      final provider = await _liveSheet(tester, ros);
+      int logged() => provider.logs.where((l) => l.message == trip).length;
+      expect(logged(), 1);
+
+      final polls = ros.callCount['/check_nav_status']!;
+      await _triggerNavPoll(tester, ros);
+      await _triggerNavPoll(tester, ros);
+      expect(ros.callCount['/check_nav_status'], greaterThan(polls));
+      expect(logged(), 1);
+
+      // The same stop of a later mission is news again.
+      ros.handlers['/check_nav_status'] = () => _navState('running');
+      await _triggerNavPoll(tester, ros);
+      ros.handlers['/check_nav_status'] = () =>
+          _navState('canceled', message: trip);
+      await _triggerNavPoll(tester, ros);
+      expect(logged(), 2);
+
+      await _end(tester, provider, ros);
+    });
+
     testWidgets('it holds after an app restart: the robot still says it', (
       tester,
     ) async {
