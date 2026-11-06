@@ -157,14 +157,18 @@ class ExecutionControlSheet extends StatelessWidget {
               child: FilledButton.icon(
                 onPressed: runAll
                     ? mission.canStartZoneSequence
-                          ? () => _startNew(
+                          ? () => startNewMission(
                               context,
                               mission,
                               mission.startZoneSequence,
                             )
                           : null
                     : mission.canStartMission
-                    ? () => _startNew(context, mission, mission.startExecution)
+                    ? () => startNewMission(
+                        context,
+                        mission,
+                        mission.startExecution,
+                      )
                     : null,
                 icon: const Icon(AppIcons.play),
                 label: Text(runAll ? '依序開始' : '開始'),
@@ -185,10 +189,10 @@ class ExecutionControlSheet extends StatelessWidget {
   }
 }
 
-/// 開始 / 依序開始: a new start replaces a checkpoint the robot could still
-/// continue, so the person is asked first when there is one. With none, this
-/// starts at once, as these buttons always did.
-Future<void> _startNew(
+/// 開始, 依序開始, 確認後執行: a new start replaces a checkpoint the robot could
+/// still continue, so the person is asked first when there is one. With none,
+/// this starts at once, as these buttons always did.
+Future<void> startNewMission(
   BuildContext context,
   MissionMockProvider mission,
   VoidCallback start,
@@ -317,6 +321,13 @@ class _ResumeCoverageState extends State<_ResumeCoverage> {
               '（已割完 ${checkpoint.completedSegments}/${checkpoint.totalSegments} 段）',
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
             ),
+            if (checkpoint.stopReason != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                checkpoint.stopReason!,
+                style: captionStyle.copyWith(color: const Color(0xFFC62828)),
+              ),
+            ],
             const SizedBox(height: 4),
             Text(_scope(mission, checkpoint.zoneId), style: captionStyle),
             const SizedBox(height: 8),
@@ -349,9 +360,8 @@ class _ResumeCoverageState extends State<_ResumeCoverage> {
               '無法繼續割草：$refusal',
               style: captionStyle.copyWith(color: const Color(0xFFC62828)),
             ),
-            // The robot's answer does not say why when the path is the
-            // reason: "goal rejected: busy or a safety precondition failed".
-            if (refusal.contains('goal rejected')) ...[
+            // A robot from before it said why answers this for a changed path.
+            if (refusal.contains('busy or a safety precondition failed')) ...[
               const SizedBox(height: 2),
               const Text('如果這個區域的路徑重新生成過，就只能重新開始。', style: captionStyle),
             ],

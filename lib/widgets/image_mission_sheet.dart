@@ -10,6 +10,7 @@ import '../models/image_mission_draft.dart';
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 import '../services/image_mission_processor.dart';
+import 'execution_control_sheet.dart';
 import 'image_alignment_page.dart';
 
 class ImageMissionSheet extends StatefulWidget {
@@ -200,10 +201,12 @@ class _ImageMissionSheetState extends State<ImageMissionSheet> {
                     onBack: () => setState(() => _step = 3),
                     onSubmit: mission.submitImageMissionDraft,
                     onExecute: draft.submitted && mission.canStartMission
-                        ? () {
+                        ? () => startNewMission(context, mission, () {
                             mission.startExecution();
-                            Navigator.of(context).pop();
-                          }
+                            if (mounted) {
+                              Navigator.of(context).pop();
+                            }
+                          })
                         : null,
                   ),
               ],
