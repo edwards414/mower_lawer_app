@@ -4,6 +4,7 @@
 // robot's mower_nav and mower_coverage do.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,10 +12,12 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:mower_stdio/models/coverage_checkpoint.dart';
+import 'package:mower_stdio/models/image_mission_draft.dart';
 import 'package:mower_stdio/models/mission_mock.dart';
 import 'package:mower_stdio/providers/mission_mock_provider.dart';
 import 'package:mower_stdio/services/rosbridge_service.dart';
 import 'package:mower_stdio/widgets/execution_control_sheet.dart';
+import 'package:mower_stdio/widgets/image_mission_sheet.dart';
 import 'package:mower_stdio/widgets/mission_next_step.dart';
 
 const _button = ValueKey('resume-coverage');
@@ -247,6 +250,38 @@ void main() {
       await _triggerNavPoll(tester, ros);
       expect(provider.navStatus, NavMockStatus.failed);
       expect(find.text('Zone 7 還沒割完（已割完 3/12 段）'), findsOneWidget);
+
+      await _end(tester, provider, ros);
+    });
+
+    testWidgets('a new plan makes it ask again, also one of the same size', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: 8);
+      final provider = await _liveSheet(tester, ros);
+      expect(find.byKey(_button), findsOneWidget);
+
+      // Another client replanned to a path this side cannot tell apart: only
+      // the robot's answer can take the button away, and at once, not at the
+      // next periodic check.
+      ros.checkpoint(zone: 8, available: false);
+      final asked = ros.callCount['/coverage_progress_status']!;
+      ros.emitCoveragePath();
+      await tester.pump();
+      expect(find.byKey(_button), findsNothing);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      await tester.pump();
+      expect(ros.callCount['/coverage_progress_status'], asked + 1);
+      expect(find.byKey(_button), findsNothing);
+
+      // A plan that is the same path: it comes back with the answer.
+      ros.checkpoint(zone: 8);
+      ros.emitCoveragePath();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(_button), findsOneWidget);
 
       await _end(tester, provider, ros);
     });
@@ -679,13 +714,33 @@ void main() {
       await _end(tester, provider, ros);
     });
 
-    testWidgets('a rejected goal says what the robot does not: a new path', (
+    testWidgets('a refusal for a changed path shows the robot\'s reason alone', (
       tester,
     ) async {
       final ros = _FakeRos()..checkpoint(zone: 8);
       final provider = await _liveSheet(tester, ros);
-      // What mower_coverage answers when mower_nav's admission finds another
-      // path; the reason itself only reaches the robot's log.
+      const reason =
+          'Navigation action goal rejected: cannot resume: coverage path or '
+          'split parameters changed since the checkpoint; regenerate and start '
+          'over';
+      ros.handlers['/resume_coverage'] = () => _refusal(reason);
+
+      await _tapButton(tester, ros);
+      await _confirm(tester, ros);
+      await tester.pump();
+
+      expect(find.text('無法繼續割草：$reason'), findsOneWidget);
+      expect(find.textContaining('重新生成過'), findsNothing);
+
+      await _end(tester, provider, ros);
+    });
+
+    testWidgets('an older robot\'s generic refusal still gets the hint', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: 8);
+      final provider = await _liveSheet(tester, ros);
+      // What mower_coverage answered when only mower_nav's log said why.
       ros.handlers['/resume_coverage'] = () => _refusal(
         'Navigation action goal rejected: busy or a safety precondition failed',
       );
@@ -933,6 +988,61 @@ void main() {
       });
     }
 
+    testWidgets('確認後執行 asks too when the image zone can be continued', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: ImageMissionDraft.defaultZoneId);
+      final provider = await _liveSheet(tester, ros);
+      await _imageMissionSubmitted(tester, ros, provider);
+      await _openImageSheetAtExecute(tester, provider);
+
+      await _freshen(tester, ros);
+      await tester.tap(find.text('確認後執行'));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining('已割完 2/10 段'),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.widgetWithText(TextButton, '保留進度'));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(ros.callCount['/zone_exec_path'], isNull);
+      expect(find.text('確認後執行'), findsOneWidget, reason: 'the sheet stays');
+
+      await _freshen(tester, ros);
+      await tester.tap(find.text('確認後執行'));
+      await tester.pump(const Duration(milliseconds: 400));
+      await _startAnyway(tester, ros);
+      expect(
+        ros.calls.where((c) => c.service == '/zone_exec_path').single.args,
+        {'zone_id': ImageMissionDraft.defaultZoneId},
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('確認後執行'), findsNothing, reason: 'the sheet closed');
+
+      await _end(tester, provider, ros);
+    });
+
+    testWidgets('確認後執行 goes out at once with nothing to lose', (tester) async {
+      final ros = _FakeRos()..checkpoint(zone: -1, available: false);
+      final provider = await _liveSheet(tester, ros);
+      await _imageMissionSubmitted(tester, ros, provider);
+      await _openImageSheetAtExecute(tester, provider);
+
+      await _freshen(tester, ros);
+      await tester.tap(find.text('確認後執行'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(ros.callCount['/zone_exec_path'], 1);
+      expect(find.text('確認後執行'), findsNothing);
+
+      await _end(tester, provider, ros);
+    });
+
     testWidgets(
       'no dialog once the zone\'s path has changed: nothing to lose',
       (tester) async {
@@ -972,6 +1082,148 @@ void main() {
       expect(ros.callCount['/zone_exec_path'], isNull);
 
       await _end(tester, provider, ros);
+    });
+  });
+
+  group('why it stopped', () {
+    const trip =
+        'Follow coverage segment 3 canceled: Navigation safety stop: '
+        'IMU is unavailable or stale';
+
+    testWidgets('a safety stop says so on the card and does not read 待命', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: 8, progressMessage: trip);
+      ros.handlers['/check_nav_status'] = () =>
+          _navState('canceled', message: trip);
+      final provider = await _liveSheet(tester, ros);
+
+      expect(find.text('安全停止：IMU is unavailable or stale'), findsOneWidget);
+      expect(find.text('異常'), findsOneWidget);
+      expect(find.text('待命'), findsNothing);
+      expect(provider.navStatus, NavMockStatus.failed);
+      expect(provider.logs.first.level, 'ERROR');
+      // It stays a stop the person can go on from, or start over after.
+      await _freshen(tester, ros);
+      expect(_enabled(tester), isTrue);
+      expect(provider.canStartMission, isTrue);
+
+      await _end(tester, provider, ros);
+    });
+
+    testWidgets('a terminal state is logged once, not with every poll', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: 8, progressMessage: trip);
+      ros.handlers['/check_nav_status'] = () =>
+          _navState('canceled', message: trip);
+      final provider = await _liveSheet(tester, ros);
+      int logged() => provider.logs.where((l) => l.message == trip).length;
+      expect(logged(), 1);
+
+      final polls = ros.callCount['/check_nav_status']!;
+      await _triggerNavPoll(tester, ros);
+      await _triggerNavPoll(tester, ros);
+      expect(ros.callCount['/check_nav_status'], greaterThan(polls));
+      expect(logged(), 1);
+
+      // The same stop of a later mission is news again.
+      ros.handlers['/check_nav_status'] = () => _navState('running');
+      await _triggerNavPoll(tester, ros);
+      ros.handlers['/check_nav_status'] = () =>
+          _navState('canceled', message: trip);
+      await _triggerNavPoll(tester, ros);
+      expect(logged(), 2);
+
+      await _end(tester, provider, ros);
+    });
+
+    testWidgets('it holds after an app restart: the robot still says it', (
+      tester,
+    ) async {
+      final ros = _FakeRos()..checkpoint(zone: 8, progressMessage: trip);
+      ros.handlers['/check_nav_status'] = () =>
+          _navState('canceled', message: trip);
+      var provider = await _liveSheet(tester, ros);
+      await tester.pumpWidget(const SizedBox.shrink());
+      provider.dispose();
+
+      provider = await _liveSheet(tester, ros);
+      expect(find.text('安全停止：IMU is unavailable or stale'), findsOneWidget);
+
+      await _end(tester, provider, ros);
+    });
+
+    testWidgets('a person\'s stop, or an older robot\'s trip: 待命, no reason', (
+      tester,
+    ) async {
+      const plain = 'Follow coverage segment 3 canceled';
+      final ros = _FakeRos()..checkpoint(zone: 8, progressMessage: plain);
+      ros.handlers['/check_nav_status'] = () =>
+          _navState('canceled', message: plain);
+      final provider = await _liveSheet(tester, ros);
+
+      expect(find.byKey(_button), findsOneWidget);
+      expect(find.textContaining('安全停止'), findsNothing);
+      expect(find.textContaining('任務失敗'), findsNothing);
+      expect(find.text('待命'), findsOneWidget);
+      expect(provider.navStatus, NavMockStatus.idle);
+
+      await _end(tester, provider, ros);
+    });
+
+    testWidgets('a failure says what the robot said', (tester) async {
+      const failed =
+          'Follow coverage segment 4 failed: TaskResult.FAILED, '
+          'Nav2 task error: code=102, msg=""';
+      final ros = _FakeRos()
+        ..checkpoint(
+          zone: 8,
+          statusText: 'failed',
+          progressStatus: 6,
+          progressMessage: failed,
+        );
+      ros.handlers['/check_nav_status'] = () =>
+          _navState('failed', message: failed);
+      final provider = await _liveSheet(tester, ros);
+
+      expect(find.text('任務失敗：$failed'), findsOneWidget);
+      expect(find.text('異常'), findsOneWidget);
+
+      await _end(tester, provider, ros);
+    });
+
+    test('only the checkpoint\'s own execution counts', () {
+      Map<String, Object?> checkpoint() => {
+        'checkpoint_available': true,
+        'zone_id': 8,
+        'completed_segments': 2,
+        'total_segments': 10,
+        'mission_id': 'm1',
+      };
+      expect(
+        CoverageCheckpoint.fromJson(
+          checkpoint(),
+          progress: {'mission_id': 'm1', 'status': 4, 'message': trip},
+        )!.stopReason,
+        '安全停止：IMU is unavailable or stale',
+      );
+      // A later goal that never got a plan left no checkpoint of its own.
+      expect(
+        CoverageCheckpoint.fromJson(
+          checkpoint(),
+          progress: {'mission_id': 'm2', 'status': 6, 'message': 'late'},
+        )!.stopReason,
+        isNull,
+      );
+      expect(CoverageCheckpoint.fromJson(checkpoint())!.stopReason, isNull);
+      expect(
+        CoverageCheckpoint.fromJson(
+          checkpoint(),
+          progress: {'mission_id': 'm1', 'status': 6, 'message': ' '},
+        )!.stopReason,
+        isNull,
+      );
     });
   });
 
@@ -1244,6 +1496,94 @@ Future<void> _startAnyway(WidgetTester tester, _FakeRos ros) async {
   await tester.pump();
 }
 
+/// An image mission the robot has taken and planned, as the sheet leaves it.
+Future<void> _imageMissionSubmitted(
+  WidgetTester tester,
+  _FakeRos ros,
+  MissionMockProvider provider,
+) async {
+  ros.handlers['/boustrophedon_coverage/set_parameters'] = () =>
+      const RosbridgeServiceResponse(
+        service: '/boustrophedon_coverage/set_parameters',
+        result: true,
+        values: {
+          'results': [
+            {'successful': true, 'reason': ''},
+          ],
+        },
+      );
+  provider.imageMissionDraft = ImageMissionDraft(
+    sourceName: 'star.png',
+    width: 2,
+    height: 2,
+    grayscale: Uint8List(4),
+    freeMask: Uint8List.fromList([255, 255, 255, 255]),
+    threshold: 128,
+    startPose: const ImageMissionStartPose(
+      point: MapPoint(0, 0),
+      headingRad: 0,
+    ),
+    placement: const ImageMissionPlacement(mapAnchor: MapPoint(2, 2)),
+  );
+  await tester.runAsync(() async {
+    expect(await provider.submitImageMissionDraft(), isTrue);
+  });
+  ros.emit('/adapter/zone_summaries', {
+    'data': jsonEncode([
+      {'zoneId': 7, 'pointCount': 48, 'hasCoveragePath': true},
+      {
+        'zoneId': ImageMissionDraft.defaultZoneId,
+        'pointCount': 13,
+        'hasCoveragePath': true,
+      },
+    ]),
+  });
+  ros.handlers['/check_nav_status'] = () => _navState('canceled');
+  await _triggerNavPoll(tester, ros);
+  ros.emitCoveragePath();
+  await tester.pump(const Duration(seconds: 1));
+  await tester.pump();
+  await tester.pump();
+}
+
+/// The sheet as a person reopens it: an existing draft starts at its first
+/// step, and 下一步 walks it to the last.
+Future<void> _openImageSheetAtExecute(
+  WidgetTester tester,
+  MissionMockProvider provider,
+) async {
+  await tester.pumpWidget(
+    ChangeNotifierProvider<MissionMockProvider>.value(
+      value: provider,
+      child: MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => const ImageMissionSheet(),
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('open'));
+  await tester.pumpAndSettle();
+  for (var step = 0; step < 3; step++) {
+    final next = find.text('下一步');
+    await tester.ensureVisible(next);
+    await tester.pumpAndSettle();
+    await tester.tap(next);
+    await tester.pumpAndSettle();
+  }
+  await tester.ensureVisible(find.text('確認後執行'));
+  await tester.pumpAndSettle();
+}
+
 /// A channel from inside zone 7 to inside zone 8, which 依序開始 needs.
 void _emitChannel(_FakeRos ros) {
   ros.emit('/adapter/marker_layers/channels', {
@@ -1344,13 +1684,14 @@ RosbridgeServiceResponse _navState(
   String state, {
   bool ready = true,
   String? blockReason,
+  String? message,
 }) => _response(
   '/check_nav_status',
   success: true,
   message: jsonEncode({
     'state': state,
     'task': null,
-    'message': 'Navigation $state',
+    'message': message ?? 'Navigation $state',
     'ready': ready,
     'block_reason': blockReason,
   }),
@@ -1365,6 +1706,7 @@ RosbridgeServiceResponse _status({
   String statusText = 'canceled',
   String mission = 'm1',
   int progressStatus = 4,
+  String progressMessage = '',
 }) {
   return RosbridgeServiceResponse(
     service: '/coverage_progress_status',
@@ -1372,7 +1714,12 @@ RosbridgeServiceResponse _status({
     values: {
       'success': true,
       'message': '',
-      'progress': {'status': progressStatus, 'zone_id': zone},
+      'progress': {
+        'status': progressStatus,
+        'zone_id': zone,
+        'mission_id': mission,
+        'message': progressMessage,
+      },
       'checkpoint': {
         'status_text': statusText,
         'mission_id': mission,
@@ -1411,6 +1758,7 @@ class _FakeRos extends RosbridgeService {
     String statusText = 'canceled',
     String mission = 'm1',
     int progressStatus = 4,
+    String progressMessage = '',
   }) {
     handlers['/coverage_progress_status'] = () => _status(
       zone: zone,
@@ -1420,7 +1768,26 @@ class _FakeRos extends RosbridgeService {
       statusText: statusText,
       mission: mission,
       progressStatus: progressStatus,
+      progressMessage: progressMessage,
     );
+  }
+
+  /// The robot's plan layer, as it arrives for any plan.
+  void emitCoveragePath() {
+    emit('/adapter/marker_layers/coverage_path', {
+      'data': jsonEncode({
+        'name': 'coverage_path',
+        'markers': [
+          {
+            'type': 'line_strip',
+            'points': [
+              {'x': 0.0, 'y': 0.0},
+              {'x': 4.0, 'y': 0.0},
+            ],
+          },
+        ],
+      }),
+    });
   }
 
   void emitSummaries({required int zone8Points, bool zone9 = false}) {

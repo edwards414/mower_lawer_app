@@ -146,8 +146,13 @@ class MissionMockProvider extends ChangeNotifier {
   static const _checkpointRetryTicks = 5;
   String? _lastNavState;
 
+  /// The terminal state last logged; null while the state is not terminal.
+  String? _lastTerminalNavLog;
+
   /// The checkpoint's zone's path size when that checkpoint was first seen.
-  /// The robot only finds out that a path changed when it refuses the resume.
+  /// A robot from before its status looked at the path only finds out that a
+  /// path changed when it refuses the resume, and the app and the robot do
+  /// not update together.
   ({String missionId, int? pointCount})? _checkpointPath;
 
   /// Why the robot did not continue, until the next start.
@@ -1417,6 +1422,9 @@ class MissionMockProvider extends ChangeNotifier {
             .where((points) => points.length >= 2)
             .toList();
         coverageReady = coverageRows.isNotEmpty;
+        // A plan changed, maybe by another client: is the checkpoint still
+        // for it? Only the robot knows, and it is asked at the next tick.
+        _markCheckpointStale();
         currentSegment = coverageRows.isEmpty
             ? 0
             : currentSegment.clamp(1, coverageRows.length).toInt();
@@ -3985,7 +3993,11 @@ class MissionMockProvider extends ChangeNotifier {
       case 'canceled':
         _clearAmbiguousCancelRetry();
         _externalRecordCancelAttempted = false;
-        navStatus = NavMockStatus.idle;
+        // The robot's state is `canceled` for a safety stop too. That is not
+        // a person's stop, so it does not read 待命; the controls are the same.
+        navStatus = _isSafetyStop(detail)
+            ? NavMockStatus.failed
+            : NavMockStatus.idle;
         _cancelPending = false;
         break;
       case 'idle':
@@ -4024,11 +4036,19 @@ class MissionMockProvider extends ChangeNotifier {
       _addLog('WARN', '開始結果不確定；持續要求取消直到後端確認終止');
       _scheduleAmbiguousCancelRetry();
     }
-    if (navStatus != previous ||
-        state == 'completed' ||
-        state == 'canceled' ||
-        state == 'failed') {
-      final level = state == 'failed' || state == 'uncertain'
+    // A terminal state comes back with every poll: log it once.
+    final terminalLog =
+        state == 'completed' || state == 'canceled' || state == 'failed'
+        ? '$state|$detail'
+        : null;
+    final newTerminalLog =
+        terminalLog != null && terminalLog != _lastTerminalNavLog;
+    _lastTerminalNavLog = terminalLog;
+    if (navStatus != previous || newTerminalLog) {
+      final level =
+          state == 'failed' ||
+              state == 'uncertain' ||
+              (state == 'canceled' && _isSafetyStop(detail))
           ? 'ERROR'
           : state == 'pending_confirmation' ||
                 state == 'starting' ||
@@ -4100,6 +4120,7 @@ class MissionMockProvider extends ChangeNotifier {
     _checkpointDueTick = _tickCount + _checkpointRefreshTicks;
     _coverageCheckpoint = CoverageCheckpoint.fromJson(
       response.values['checkpoint'],
+      progress: response.values['progress'],
     );
     _noteCheckpointPath();
     notifyListeners();
@@ -4122,6 +4143,9 @@ class MissionMockProvider extends ChangeNotifier {
       pointCount: _zonePointCountById[checkpoint.zoneId],
     );
   }
+
+  static bool _isSafetyStop(String detail) =>
+      detail.contains(CoverageCheckpoint.safetyStopMarker);
 
   void _cancelRecordingForExternalNavigation() {
     if (recordingType == null ||
