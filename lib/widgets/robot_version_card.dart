@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../utils/app_icons.dart';
+import '../utils/app_style.dart';
 import 'package:provider/provider.dart';
 
 import '../models/robot_info.dart';
@@ -48,9 +49,19 @@ class RobotVersionCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          '版本與更新',
-          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+        const Row(
+          children: [
+            AppIconTile(AppIcons.cloudDownload),
+            SizedBox(width: 12),
+            Text(
+              '版本與更新',
+              style: TextStyle(
+                color: AppStyle.ink,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         _StatusLine(status),
@@ -318,10 +329,15 @@ class CompatibilityGate extends StatelessWidget {
     super.key,
     required this.child,
     this.onShowVersions,
+    this.onHome,
   });
 
   final Widget child;
   final VoidCallback? onShowVersions;
+
+  /// The page under the notice takes no taps: its own way home is blocked
+  /// too, so the notice offers one.
+  final VoidCallback? onHome;
 
   @override
   Widget build(BuildContext context) {
@@ -343,10 +359,24 @@ class CompatibilityGate extends StatelessWidget {
               alignment: Alignment.topCenter,
               child: Padding(
                 padding: const EdgeInsets.all(22),
-                // Robot settings and versions share the 設定 tab.
-                child: mismatch
-                    ? IdentityMismatchNotice(onOpenSettings: onShowVersions)
-                    : CompatibilityNotice(onShowVersions: onShowVersions),
+                // Robot settings and versions share the 設定 page.
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    mismatch
+                        ? IdentityMismatchNotice(onOpenSettings: onShowVersions)
+                        : CompatibilityNotice(onShowVersions: onShowVersions),
+                    if (onHome != null) ...[
+                      const SizedBox(height: 10),
+                      FilledButton.tonalIcon(
+                        onPressed: onHome,
+                        icon: const Icon(AppIcons.house),
+                        label: const Text('回主畫面'),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
           ),

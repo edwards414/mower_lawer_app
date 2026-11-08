@@ -55,7 +55,7 @@ void main() {
     },
   );
 
-  testWidgets('設定 slider: one labelled tick under each 0.05 m/s stop', (
+  testWidgets('設定 slider: a stop every 0.05 m/s, no numbers under it', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({'mock_data_enabled': false});
@@ -79,8 +79,11 @@ void main() {
     final slider = tester.widget<Slider>(find.byType(Slider));
     expect((slider.min, slider.max, slider.divisions), (0.1, 0.45, 7));
 
-    // Slider paints its own stops as small dots: each ruler label must sit
-    // centred under one.
+    // Simple: the speed beside the title, no ruler of small numbers.
+    expect(find.text('0.20'), findsNothing);
+
+    // Slider paints its own stops as small dots; tapping one picks that
+    // speed and saves it.
     final dots = <double>[];
     expect(
       find.byType(Slider),
@@ -91,29 +94,11 @@ void main() {
         return true;
       }),
     );
-    const labels = [
-      '0.10',
-      '0.15',
-      '0.20',
-      '0.25',
-      '0.30',
-      '0.35',
-      '0.40',
-      '0.45',
-    ];
-    expect(dots, hasLength(labels.length));
+    expect(dots, hasLength(8));
     final left = tester.getTopLeft(find.byType(Slider)).dx;
-    for (var i = 0; i < labels.length; i++) {
-      expect(
-        tester.getCenter(find.text(labels[i])).dx,
-        moreOrLessEquals(left + dots[i], epsilon: 0.5),
-        reason: labels[i],
-      );
-    }
-
-    // Tapping the track above a label picks that speed and saves it.
     final trackY = tester.getCenter(find.byType(Slider)).dy;
-    await tester.tapAt(Offset(tester.getCenter(find.text('0.20')).dx, trackY));
+    // 0.10, 0.15, 0.20: the third stop.
+    await tester.tapAt(Offset(left + dots[2], trackY));
     await tester.pump();
     expect(mission.manualLinearSpeed, 0.2);
     expect(find.text('0.20 m/s'), findsOneWidget);

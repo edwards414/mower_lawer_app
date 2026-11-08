@@ -12,6 +12,7 @@ import 'screens/home_screen.dart';
 import 'services/rosbridge_service.dart';
 import 'services/ros_service.dart';
 import 'services/weather_service.dart';
+import 'utils/app_style.dart';
 import 'widgets/iphone_12_template.dart';
 import 'widgets/relay_lifecycle_gate.dart';
 import 'widgets/retry_rosbridge_on_resume.dart';
@@ -66,7 +67,8 @@ class MowerApp extends StatelessWidget {
           create: (ctx) =>
               RobotRegistry(rosbridge: ctx.read<RosbridgeService>())..load(),
           update: (_, info, registry) =>
-              registry!..noteReportedRobotId(info.stale ? null : info.info?.robotId),
+              registry!
+                ..noteReportedRobotId(info.stale ? null : info.info?.robotId),
         ),
         ChangeNotifierProxyProvider<MissionMockProvider, RobotFleetProvider>(
           create: (ctx) =>
@@ -111,14 +113,7 @@ class MowerApp extends StatelessWidget {
             ),
           );
         },
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF167A4A),
-            brightness: Brightness.light,
-          ),
-          scaffoldBackgroundColor: const Color(0xFFECEFF1),
-          useMaterial3: true,
-        ),
+        theme: AppStyle.theme(),
         home: const HomeScreen(),
       ),
     );

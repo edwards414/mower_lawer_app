@@ -3,32 +3,43 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import '../utils/app_icons.dart';
+import '../utils/app_style.dart';
 
-import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
-import '../providers/recorder_provider.dart';
 import '../services/screen_wake.dart';
-import 'map_record_bar.dart';
-import 'webrtc_camera_view.dart';
 
-/// Manual mode, laid over the map page: the two joysticks and cruise (定速),
-/// the live front camera and the recording controls. It draws no map of its
-/// own (the page underneath stays the one map), and only its controls take
-/// touches, so the map still answers everywhere else.
+/// The joysticks, always on the map page: left for forward / back, right for
+/// turning, 定速 between them. There is no manual mode to enter. While the
+/// robot cannot be driven the sticks stay where they are, locked, with the
+/// reason written on them; tapping a locked stick asks [onLockedTap] what to
+/// do (during mowing: the way to stop the task). It draws no map of its own
+/// and only the sticks take touches, so the map still answers everywhere else.
 class ManualControlOverlay extends StatefulWidget {
   const ManualControlOverlay({
     super.key,
     required this.mission,
-    required this.onExit,
-    this.recorder,
+    this.bottomInset = 0,
+    this.hidden = false,
+    this.onLockedTap,
+    this.onMovingChanged,
     this.screenWake = const PlatformScreenWake(),
   });
 
   final MissionMockProvider mission;
-  final VoidCallback onExit;
 
-  /// Topic (rosbag) recorder; null hides the record button.
-  final RecorderProvider? recorder;
+  /// Room left free under the sticks.
+  final double bottomInset;
+
+  /// Takes the sticks off the map (the page is not shown, a drawing tool is
+  /// in use). Hiding them stops the robot first.
+  final bool hidden;
+
+  /// A locked stick was tapped; given [MissionMockProvider.manualDriveBlockReason].
+  final ValueChanged<String>? onLockedTap;
+
+  /// Whether the sticks are sending motion: the page keeps the robot in view
+  /// and the map still while they do.
+  final ValueChanged<bool>? onMovingChanged;
 
   /// Holds the screen on while cruising (定速), and only then.
   final ScreenWake screenWake;
@@ -38,26 +49,29 @@ class ManualControlOverlay extends StatefulWidget {
   static double _stickSize(Size size) =>
       size.shortestSide < 360 ? 100.0 : 124.0;
 
-  /// How high the joysticks reach above the bottom safe area, plus a gap.
-  /// Whatever else sits at the map's bottom edge (its attribution) keeps
-  /// above this, out from under a thumb.
+  /// The gap between the bottom of the map and the bottom of the sticks.
+  static const double stickGap = 14;
+
+  /// The caption pill over each stick, with its gap.
+  static const double _captionExtent = 26;
+
+  /// How high the joysticks (with their captions) reach above [bottomInset],
+  /// plus a gap. Whatever else sits at the map's bottom edge keeps above
+  /// this, out from under a thumb.
   static double controlsClearance(Size size) =>
-      _stickMargin + _stickSize(size) + 8;
+      stickGap + _stickSize(size) + _captionExtent + 8;
 
   @override
-  State<ManualControlOverlay> createState() => _ManualControlOverlayState();
+  State<ManualControlOverlay> createState() => ManualControlOverlayState();
 }
 
-class _ManualControlOverlayState extends State<ManualControlOverlay>
+class ManualControlOverlayState extends State<ManualControlOverlay>
     with WidgetsBindingObserver {
   static const _publishInterval = Duration(milliseconds: 100);
   // The linear full-deflection speed is the 設定 page's slider
   // (MissionMockProvider.manualLinearSpeed).
   static const _angularSpeed = 0.75;
   static const _deadband = 0.04;
-  static const _layoutMotion = Duration(milliseconds: 220);
-  // Height of the exit button, the tallest thing in the top-left row.
-  static const _exitRow = 44.0;
   // The 定速 button, and its gap to the right stick.
   static const _cruiseSize = 56.0;
   static const _cruiseGap = 12.0;
@@ -74,10 +88,6 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
   late final _pillState = Listenable.merge([_moving, _cruise]);
   // Whether this overlay asked for the screen to stay on.
   bool _screenKeptOn = false;
-  // The camera starts as a small picture-in-picture; a tap enlarges it.
-  bool _cameraExpanded = false;
-  // The zone / no-go / channel picker is tucked behind one button.
-  bool _recordPickerOpen = false;
   int _joystickResetEpoch = 0;
 
   bool get _hasMotion => _linearX.abs() > 0.001 || _angularZ.abs() > 0.001;
@@ -87,6 +97,20 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _moving.addListener(_reportMoving);
+  }
+
+  void _reportMoving() => widget.onMovingChanged?.call(_moving.value);
+
+  @override
+  void didUpdateWidget(ManualControlOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Whatever takes the sticks away stops the robot first; a finger still
+    // on a stick has to come off and touch again.
+    if (widget.hidden && !oldWidget.hidden) {
+      _stopAll(rebuild: false);
+      _moving.value = false;
+    }
   }
 
   @override
@@ -103,16 +127,23 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _stopAll(rebuild: false);
+    _moving.removeListener(_reportMoving);
     _moving.dispose();
     _cruise.dispose();
     super.dispose();
   }
 
+  /// Stops the robot and drops the sticks back to centre. The page calls it
+  /// before anything covers the sticks (a sheet, a dialog), since a finger
+  /// held on a stick would otherwise keep driving underneath.
+  void halt() => _stopAll();
+
   @override
   Widget build(BuildContext context) {
+    if (widget.hidden) return const SizedBox.shrink();
     final pad = MediaQuery.paddingOf(context);
-    // Follows the mission (can-drive, recording, battery). The map is not in
-    // here, so rebuilding on every pose tick stays cheap.
+    // Follows the mission (can-drive, lock reason). The map is not in here,
+    // so rebuilding on every pose tick stays cheap.
     return ListenableBuilder(
       listenable: widget.mission,
       builder: (context, _) => LayoutBuilder(
@@ -125,185 +156,132 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
   Widget _buildControls(Size size, EdgeInsets pad) {
     final mission = widget.mission;
     final canDrive = mission.canDriveManually;
-    final recording = mission.recordingType != null;
-    final pendingSave = mission.hasPendingRecordSave;
-    final isPortrait = size.height >= size.width;
+    final lockReason = mission.manualDriveBlockReason;
     final joystickSize = ManualControlOverlay._stickSize(size);
-    final bottom = pad.bottom + ManualControlOverlay._stickMargin;
+    final bottom = widget.bottomInset + ManualControlOverlay.stickGap;
     // Snackbars float above the joysticks instead of covering them.
     final snackClearance = bottom + joystickSize + 12;
-    final topInset = pad.top + 12;
-    // Held off the sides a notch or a rounded corner takes (landscape).
-    final sideL = math.max(12.0, pad.left);
-    final sideR = math.max(12.0, pad.right);
+    final stickLeft = math.max(ManualControlOverlay._stickMargin, pad.left);
     final stickRight = math.max(ManualControlOverlay._stickMargin, pad.right);
+    final lockLabel = lockReason == null
+        ? null
+        : mission.manualDriveLockedByMission
+        ? '$lockReason\n點一下看選項'
+        : lockReason;
 
-    final camera = _cameraRect(size, topInset, sideR, isPortrait);
-    // The recording controls sit under the exit row; in portrait they run the
-    // full width, so they also clear the camera.
-    final bandTop =
-        (isPortrait
-            ? math.max(topInset + _exitRow, camera.bottom)
-            : topInset + _exitRow) +
-        8;
-    final recorder = widget.recorder;
-    final idle = !recording && !pendingSave;
-    final Widget? bar = !idle
-        ? MapRecordBar(mission: mission, clearBottom: snackClearance)
-        : _recordPickerOpen
-        ? _RecordTypeBar(
-            enabled: canDrive && !mission.recordCommandPending,
-            rtkHint: mission.recordStartRtkHint,
-            onPick: (type) => unawaited(_startRecording(type, snackClearance)),
-          )
-        : null;
+    Widget stick(_JoystickAxis axis, String caption) {
+      final linear = axis == _JoystickAxis.vertical;
+      return RepaintBoundary(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // On a pill of its own: the map under it may be light or dark.
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(999),
+                boxShadow: AppStyle.floatShadow,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 2,
+                ),
+                child: Text(
+                  caption,
+                  style: const TextStyle(
+                    color: AppStyle.ink,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Stack(
+              children: [
+                _ManualJoystick(
+                  key: ValueKey(
+                    '${linear ? 'linear' : 'angular'}-$_joystickResetEpoch',
+                  ),
+                  size: joystickSize,
+                  axis: axis,
+                  enabled: canDrive,
+                  onStart: linear ? _onLinearStickTouched : null,
+                  onChanged: linear ? _setLinearAxis : _setAngularAxis,
+                ),
+                if (lockLabel != null)
+                  Positioned.fill(
+                    child: _StickLock(
+                      label: lockLabel,
+                      onTap: widget.onLockedTap == null
+                          ? null
+                          : () => widget.onLockedTap!(lockReason!),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
 
     return Stack(
       children: [
-        // Camera: a small picture-in-picture; a tap enlarges it.
-        AnimatedPositioned.fromRect(
-          duration: _layoutMotion,
-          curve: Curves.easeInOut,
-          rect: camera,
-          child: _CameraPane(
-            mission: mission,
-            expanded: _cameraExpanded,
-            banner: isPortrait,
-            onTap: () => setState(() => _cameraExpanded = !_cameraExpanded),
-          ),
-        ),
-
-        // Exit and manual status, top left.
+        // What the sticks are doing, while they do something.
         Positioned(
-          top: topInset,
-          left: sideL,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _GlassIconButton(
-                icon: AppIcons.x,
-                tooltip: '退出手動模式',
-                onPressed: _exitManual,
-              ),
-              const SizedBox(width: 8),
-              ListenableBuilder(
+          left: 0,
+          right: 0,
+          bottom:
+              bottom + joystickSize + ManualControlOverlay._captionExtent + 8,
+          child: IgnorePointer(
+            child: Center(
+              child: ListenableBuilder(
                 listenable: _pillState,
-                builder: (context, _) => _ManualStatusPill(
-                  connected: canDrive,
-                  moving: _moving.value,
-                  cruiseSpeed: _cruise.value,
-                  battery: mission.batteryPercent,
-                ),
+                builder: (context, _) => _moving.value || _cruising
+                    ? _ManualStatusPill(
+                        connected: canDrive,
+                        moving: _moving.value,
+                        cruiseSpeed: _cruise.value,
+                      )
+                    : const SizedBox.shrink(),
               ),
-            ],
+            ),
           ),
         ),
-
-        // Recording controls: the boundary picker button and the topic
-        // recorder, then the picker, or the REC bar while recording.
-        AnimatedPositioned(
-          duration: _layoutMotion,
-          curve: Curves.easeInOut,
-          top: bandTop,
-          left: sideL,
-          right: isPortrait ? sideR : null,
-          width: isPortrait ? null : math.min(size.width * 0.5, 360.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (idle)
-                    _RecordPickerButton(
-                      open: _recordPickerOpen,
-                      onPressed: () => setState(
-                        () => _recordPickerOpen = !_recordPickerOpen,
-                      ),
-                    ),
-                  if (idle && recorder != null) const SizedBox(width: 8),
-                  if (recorder != null)
-                    _BagRecordButton(
-                      recorder: recorder,
-                      onPressed: () => unawaited(
-                        _toggleBagRecording(recorder, snackClearance),
-                      ),
-                    ),
-                ],
-              ),
-              if (bar != null) ...[const SizedBox(height: 8), bar],
-            ],
-          ),
-        ),
-
         // Driving controls (bottom corners), each in its own layer so a stick
         // move repaints only itself.
         Positioned(
-          left: math.max(ManualControlOverlay._stickMargin, pad.left),
+          left: stickLeft,
           bottom: bottom,
-          child: RepaintBoundary(
-            child: _ManualJoystick(
-              key: ValueKey('linear-$_joystickResetEpoch'),
-              size: joystickSize,
-              axis: _JoystickAxis.vertical,
-              enabled: canDrive,
-              onStart: _onLinearStickTouched,
-              onChanged: _setLinearAxis,
-            ),
-          ),
+          child: stick(_JoystickAxis.vertical, '前進 / 後退'),
         ),
         Positioned(
           right: stickRight,
           bottom: bottom,
-          child: RepaintBoundary(
-            child: _ManualJoystick(
-              key: ValueKey('angular-$_joystickResetEpoch'),
-              size: joystickSize,
-              axis: _JoystickAxis.horizontal,
-              enabled: canDrive,
-              onChanged: _setAngularAxis,
-            ),
-          ),
+          child: stick(_JoystickAxis.horizontal, '轉向'),
         ),
         // Cruise (定速), just inside the right stick: the right thumb reaches
         // it while the left one holds the stick forward.
-        Positioned(
-          right: stickRight + joystickSize + _cruiseGap,
-          bottom: bottom + (joystickSize - _cruiseSize) / 2,
-          child: RepaintBoundary(
-            child: ValueListenableBuilder<double?>(
-              valueListenable: _cruise,
-              builder: (context, speed, _) => _CruiseButton(
-                size: _cruiseSize,
-                cruising: speed != null,
-                // Cancelling is never blocked.
-                enabled: canDrive || speed != null,
-                onPressed: () => _toggleCruise(snackClearance),
+        if (lockReason == null || _cruising)
+          Positioned(
+            right: stickRight + joystickSize + _cruiseGap,
+            bottom: bottom + (joystickSize - _cruiseSize) / 2,
+            child: RepaintBoundary(
+              child: ValueListenableBuilder<double?>(
+                valueListenable: _cruise,
+                builder: (context, speed, _) => _CruiseButton(
+                  size: _cruiseSize,
+                  cruising: speed != null,
+                  // Cancelling is never blocked.
+                  enabled: canDrive || speed != null,
+                  onPressed: () => _toggleCruise(snackClearance),
+                ),
               ),
             ),
           ),
-        ),
       ],
     );
-  }
-
-  /// The camera's box: a small picture-in-picture at the top right. Enlarged
-  /// it is a full-width banner in portrait, a bigger corner view in landscape;
-  /// the robot, kept mid-screen by the map, stays in view either way.
-  Rect _cameraRect(Size size, double topInset, double sideR, bool isPortrait) {
-    if (isPortrait) {
-      if (_cameraExpanded) {
-        return Rect.fromLTWH(0, 0, size.width, size.height * 0.25);
-      }
-      final w = math.min(size.width * 0.34, 140.0);
-      return Rect.fromLTWH(size.width - sideR - w, topInset, w, w * 9 / 16);
-    }
-    // Enlarged it stops short of the middle, where the robot is kept.
-    final w = _cameraExpanded
-        ? math.min(size.width * 0.42, size.width / 2 - 32 - sideR)
-        : math.min(size.width * 0.22, 190.0);
-    return Rect.fromLTWH(size.width - sideR - w, topInset, w, w * 9 / 16);
   }
 
   void _setLinearAxis(Offset value) {
@@ -429,8 +407,8 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
     _publishTimer = null;
   }
 
-  /// Every way out of driving (backgrounding, the gate closing, ✕, dispose)
-  /// lands here, so each one also ends a cruise.
+  /// Every way out of driving (backgrounding, the gate closing, the sticks
+  /// hidden or covered, dispose) lands here, so each one also ends a cruise.
   void _stopAll({bool rebuild = true}) {
     _endCruise();
     _linearX = 0.0;
@@ -443,439 +421,44 @@ class _ManualControlOverlayState extends State<ManualControlOverlay>
       setState(() {});
     }
   }
-
-  Future<void> _startRecording(
-    RecordObjectType type,
-    double clearBottom,
-  ) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final error = await widget.mission.startRecording(type);
-    if (error != null) {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(error),
-          behavior: SnackBarBehavior.floating,
-          margin: EdgeInsets.fromLTRB(16, 0, 16, clearBottom),
-        ),
-      );
-    } else if (mounted) {
-      setState(() => _recordPickerOpen = false);
-    }
-  }
-
-  Future<void> _toggleBagRecording(
-    RecorderProvider recorder,
-    double clearBottom,
-  ) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final result = recorder.status.recording
-        ? await recorder.stopRecording()
-        : await recorder.startRecording();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(result.ok ? result.message : '錄製失敗：${result.message}'),
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.fromLTRB(16, 0, 16, clearBottom),
-      ),
-    );
-  }
-
-  /// Leaves manual mode. A recording in progress is kept: its bar on the map
-  /// still saves or cancels it.
-  void _exitManual() {
-    _stopAll();
-    widget.onExit();
-  }
 }
 
-/// The front camera as a picture-in-picture that a tap enlarges, in its own
-/// layer so video frames never repaint the rest of the page.
-class _CameraPane extends StatelessWidget {
-  const _CameraPane({
-    required this.mission,
-    required this.expanded,
-    required this.banner,
-    required this.onTap,
-  });
+/// Covers a locked stick: a lock and the reason, right where the thumb goes.
+class _StickLock extends StatelessWidget {
+  const _StickLock({required this.label, required this.onTap});
 
-  final MissionMockProvider mission;
-  final bool expanded;
-
-  /// Enlarged, the view spans the top of the screen (portrait): square at the
-  /// top edge, rounded at the bottom.
-  final bool banner;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final flush = expanded && banner;
-    return RepaintBoundary(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeInOut,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: const Color(0xFF111827),
-            borderRadius: flush
-                ? const BorderRadius.vertical(bottom: Radius.circular(18))
-                : BorderRadius.circular(14),
-            boxShadow: flush
-                ? null
-                : const [
-                    BoxShadow(
-                      color: Color(0x66000000),
-                      blurRadius: 10,
-                      offset: Offset(0, 3),
-                    ),
-                  ],
-          ),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              WebrtcCameraView(
-                feed: CameraFeed.front,
-                whepUrl: mission.whepUrl(CameraFeed.front),
-                authHeaders: mission.whepHeaders,
-                iceServersUrl: mission.whepIceServersUrl,
-                noUrlDetail: mission.cameraUnavailableReason,
-                showStats: expanded,
-              ),
-              Positioned(
-                right: 6,
-                bottom: 6,
-                child: Icon(
-                  expanded ? AppIcons.minimize2 : AppIcons.maximize2,
-                  color: Colors.white,
-                  size: 16,
-                  shadows: const [Shadow(color: Colors.black87, blurRadius: 4)],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Opens the zone / no-go / channel picker. One small button keeps the map
-/// clear while driving.
-class _RecordPickerButton extends StatelessWidget {
-  const _RecordPickerButton({required this.open, required this.onPressed});
-
-  final bool open;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    const fg = Color(0xFFE0E0E0);
-    return Tooltip(
-      message: '記錄工作區、禁入區或通道的邊界',
-      child: Material(
-        color: Colors.black.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(18),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(18),
-          onTap: onPressed,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  AppIcons.mapPinPen,
-                  color: Color(0xFF46D28B),
-                  size: 18,
-                ),
-                const SizedBox(width: 6),
-                const Text(
-                  '記錄邊界',
-                  style: TextStyle(
-                    color: fg,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(width: 2),
-                Icon(
-                  open ? AppIcons.chevronUp : AppIcons.chevronDown,
-                  color: fg,
-                  size: 16,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Topic (rosbag) recording toggle: grey "錄話題" when idle, red REC + elapsed
-/// while mower_recorder is running. Driven by /mower_recorder/status.
-class _BagRecordButton extends StatelessWidget {
-  const _BagRecordButton({required this.recorder, required this.onPressed});
-
-  final RecorderProvider recorder;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: recorder,
-      builder: (context, _) {
-        final status = recorder.status;
-        final pending = recorder.commandPending;
-        final recording = status.recording;
-        final String label;
-        if (pending) {
-          label = recording ? '停止中…' : '啟動中…';
-        } else if (recording) {
-          final mins = (status.elapsedS ~/ 60).toString().padLeft(2, '0');
-          final secs = (status.elapsedS.toInt() % 60).toString().padLeft(
-            2,
-            '0',
-          );
-          label = 'REC $mins:$secs';
-        } else {
-          label = '錄話題';
-        }
-        const red = Color(0xFFE55353);
-        final fg = recording ? Colors.white : const Color(0xFFE0E0E0);
-        return Tooltip(
-          message: recording ? '停止錄製話題' : '開始錄製話題',
-          child: Opacity(
-            opacity: pending ? 0.6 : 1,
-            child: Material(
-              color: recording
-                  ? red.withValues(alpha: 0.85)
-                  : Colors.black.withValues(alpha: 0.5),
-              borderRadius: BorderRadius.circular(18),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(18),
-                onTap: pending ? null : onPressed,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 8,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        recording ? AppIcons.square : AppIcons.disc,
-                        color: recording ? Colors.white : red,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        label,
-                        style: TextStyle(
-                          color: fg,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// Pre-record picker: pick what to trace, then drive the perimeter.
-class _RecordTypeBar extends StatelessWidget {
-  const _RecordTypeBar({
-    required this.enabled,
-    required this.rtkHint,
-    required this.onPick,
-  });
-
-  final bool enabled;
-
-  /// Why the robot will refuse a start for want of RTK fixed, as the phone
-  /// sees it now; advance notice only, the chips stay enabled.
-  final String? rtkHint;
-  final ValueChanged<RecordObjectType> onPick;
-
-  @override
-  Widget build(BuildContext context) {
-    return Opacity(
-      opacity: enabled ? 1.0 : 0.5,
-      child: Material(
-        color: Colors.black.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(18),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Padding(
-                padding: EdgeInsets.only(left: 4, bottom: 6),
-                child: Text(
-                  '開始記錄（開車繞一圈邊界）',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-              if (rtkHint case final hint?)
-                Padding(
-                  key: const ValueKey('record-start-rtk-hint'),
-                  padding: const EdgeInsets.only(left: 4, right: 4, bottom: 6),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(
-                        AppIcons.triangleAlert,
-                        size: 14,
-                        color: Color(0xFFFFC107),
-                      ),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          hint,
-                          style: const TextStyle(
-                            color: Color(0xFFFFC107),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              Row(
-                children: [
-                  Expanded(
-                    child: _RecordChip(
-                      icon: AppIcons.squareDashed,
-                      label: '工作區',
-                      color: const Color(0xFF35B861),
-                      onTap: enabled
-                          ? () => onPick(RecordObjectType.zone)
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: _RecordChip(
-                      icon: AppIcons.ban,
-                      label: '禁入區',
-                      color: const Color(0xFFE55353),
-                      onTap: enabled
-                          ? () => onPick(RecordObjectType.risk)
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: _RecordChip(
-                      icon: AppIcons.spline,
-                      label: '通道',
-                      color: const Color(0xFF25AFC6),
-                      onTap: enabled
-                          ? () => onPick(RecordObjectType.channel)
-                          : null,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _RecordChip extends StatelessWidget {
-  const _RecordChip({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  final IconData icon;
   final String label;
-  final Color color;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    // Brighten the icon/text so they read clearly over the (busy) map.
-    final fg = Color.lerp(color, Colors.white, 0.32)!;
-    return InkWell(
-      borderRadius: BorderRadius.circular(13),
+    // A frosted cover over the stick: readable on any map.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+      child: DecoratedBox(
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.32),
-          borderRadius: BorderRadius.circular(13),
-          border: Border.all(color: color.withValues(alpha: 0.95), width: 1.4),
+          shape: BoxShape.circle,
+          color: Colors.white.withValues(alpha: 0.86),
+          boxShadow: AppStyle.floatShadow,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: fg, size: 20),
-            const SizedBox(height: 4),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(AppIcons.lock, color: AppStyle.muted, size: 20),
+              const SizedBox(height: 4),
+              Text(
                 label,
-                style: TextStyle(
-                  color: fg,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w900,
-                  shadows: const [Shadow(color: Colors.black87, blurRadius: 4)],
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: AppStyle.ink,
+                  fontSize: 12,
+                  height: 1.25,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _GlassIconButton extends StatelessWidget {
-  const _GlassIconButton({
-    required this.icon,
-    required this.tooltip,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: Colors.black.withValues(alpha: 0.5),
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onPressed,
-          child: SizedBox(
-            width: 44,
-            height: 44,
-            child: Icon(icon, color: Colors.white, size: 24),
+            ],
           ),
         ),
       ),
@@ -915,9 +498,6 @@ class _ManualJoystickState extends State<_ManualJoystick> {
 
   @override
   Widget build(BuildContext context) {
-    final color = widget.enabled
-        ? const Color(0xFF46D28B)
-        : const Color(0xFF90A4AE);
     final radius = widget.size / 2;
     final knobSize = widget.size * 0.42;
     final knobOffset = Offset(
@@ -935,14 +515,16 @@ class _ManualJoystickState extends State<_ManualJoystick> {
         child: SizedBox(
           width: widget.size,
           height: widget.size,
+          // Frosted white base, green knob: the home page's colours.
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.36),
+              color: Colors.white.withValues(alpha: 0.42),
               shape: BoxShape.circle,
               border: Border.all(
-                color: Colors.white.withValues(alpha: 0.36),
-                width: 1.4,
+                color: Colors.white.withValues(alpha: 0.9),
+                width: 1.5,
               ),
+              boxShadow: AppStyle.floatShadow,
             ),
             child: Stack(
               children: [
@@ -951,7 +533,7 @@ class _ManualJoystickState extends State<_ManualJoystick> {
                     width: widget.axis == _JoystickAxis.vertical ? 4 : 62,
                     height: widget.axis == _JoystickAxis.vertical ? 62 : 4,
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.3),
+                      color: AppStyle.ink.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -967,15 +549,13 @@ class _ManualJoystickState extends State<_ManualJoystick> {
                     width: knobSize,
                     height: knobSize,
                     decoration: BoxDecoration(
-                      color: color,
+                      color: widget.enabled ? null : const Color(0xFFB0BEC5),
+                      gradient: widget.enabled ? AppStyle.heroGradient : null,
                       shape: BoxShape.circle,
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x66000000),
-                          blurRadius: 12,
-                          offset: Offset(0, 5),
-                        ),
-                      ],
+                      border: Border.all(color: Colors.white, width: 3),
+                      boxShadow: AppStyle.glow(
+                        widget.enabled ? AppStyle.green : Colors.black,
+                      ),
                     ),
                   ),
                 ),
@@ -1039,41 +619,49 @@ class _CruiseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const green = Color(0xFF46D28B);
-    final fg = cruising ? const Color(0xFF0B2A18) : Colors.white;
-    final shape = RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(18),
-      side: BorderSide(
-        color: cruising ? Colors.white : Colors.white.withValues(alpha: 0.36),
-        width: 1.4,
-      ),
-    );
+    // White like the map's buttons; green (the home page's gradient) while
+    // cruising.
+    final radius = BorderRadius.circular(18);
     return Tooltip(
       message: cruising ? '取消定速' : '定速：鎖定左搖桿目前的前進速度',
       child: Opacity(
         opacity: enabled ? 1.0 : 0.48,
-        child: Material(
-          color: cruising ? green : Colors.black.withValues(alpha: 0.5),
-          shape: shape,
-          child: InkWell(
-            customBorder: shape,
-            onTap: enabled ? onPressed : null,
-            child: SizedBox.square(
-              dimension: size,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(AppIcons.gauge, color: cruising ? fg : green, size: 22),
-                  const SizedBox(height: 2),
-                  Text(
-                    '定速',
-                    style: TextStyle(
-                      color: fg,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            color: cruising ? null : Colors.white,
+            gradient: cruising ? AppStyle.heroGradient : null,
+            boxShadow: cruising
+                ? AppStyle.glow(AppStyle.green)
+                : AppStyle.floatShadow,
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            borderRadius: radius,
+            child: InkWell(
+              borderRadius: radius,
+              onTap: enabled ? onPressed : null,
+              child: SizedBox.square(
+                dimension: size,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      AppIcons.gauge,
+                      color: cruising ? AppStyle.lime : AppStyle.green,
+                      size: 22,
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 2),
+                    Text(
+                      '定速',
+                      style: TextStyle(
+                        color: cruising ? Colors.white : AppStyle.ink,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -1088,7 +676,6 @@ class _ManualStatusPill extends StatelessWidget {
     required this.connected,
     required this.moving,
     this.cruiseSpeed,
-    this.battery,
   });
 
   final bool connected;
@@ -1096,9 +683,6 @@ class _ManualStatusPill extends StatelessWidget {
 
   /// The locked speed while cruising (定速), in m/s.
   final double? cruiseSpeed;
-
-  /// Battery percent, when known: still worth seeing while driving.
-  final double? battery;
 
   @override
   Widget build(BuildContext context) {
@@ -1110,11 +694,12 @@ class _ManualStatusPill extends StatelessWidget {
               ? '手動輸出中'
               : '手動待命'
         : '機器人未就緒';
-    final color = connected ? const Color(0xFF46D28B) : const Color(0xFFFFC857);
+    final color = connected ? AppStyle.green : AppStyle.amber;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: AppStyle.floatShadow,
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -1133,23 +718,12 @@ class _ManualStatusPill extends StatelessWidget {
             const SizedBox(width: 6),
             Text(
               label,
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
+              style: const TextStyle(
+                color: AppStyle.ink,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
               ),
             ),
-            if (battery != null) ...[
-              const SizedBox(width: 8),
-              Text(
-                '${battery!.round()}%',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ],
           ],
         ),
       ),

@@ -19,6 +19,10 @@
 #   IOS_DIST_P12_BASE64             optional: base64 of an Apple Distribution
 #                                   certificate + private key (.p12)
 #   IOS_DIST_P12_PASSWORD           optional: its password
+#   GOOGLE_MAPS_API_KEY             optional: Map Tiles API key for the
+#                                   Google satellite base map (restricted to
+#                                   com.edwards.mower); without it the app
+#                                   shows the NLSC aerial photo
 #
 # See docs/RELEASE.md.
 name: iOS TestFlight
@@ -120,10 +124,15 @@ jobs:
           p12-password: ${{ secrets.IOS_DIST_P12_PASSWORD }}
 
       - name: Generate Xcode configuration
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
         run: |
+          # The dart-define lands in Generated.xcconfig, which the archive
+          # below builds with.
           flutter build ios --release --config-only --no-codesign \
             --build-name="${{ steps.version.outputs.build_name }}" \
-            --build-number="${{ steps.version.outputs.build_number }}"
+            --build-number="${{ steps.version.outputs.build_number }}" \
+            --dart-define=GOOGLE_MAPS_API_KEY="$GOOGLE_MAPS_API_KEY"
 
       - name: Archive (unsigned)
         # Signed at export, with the distribution certificate; see the header.

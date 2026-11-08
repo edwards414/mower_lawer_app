@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../utils/app_icons.dart';
+import '../utils/app_style.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
@@ -10,7 +11,6 @@ import '../models/paired_robot.dart';
 import '../providers/mission_mock_provider.dart';
 import '../providers/robot_info_provider.dart';
 import '../providers/robot_registry.dart';
-import '../services/backend_client.dart';
 import '../services/rosbridge_service.dart';
 
 const _kGreen = Color(0xFF167A4A);
@@ -99,11 +99,7 @@ class _RobotSettingsSectionState extends State<RobotSettingsSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
-          '我的機器人',
-          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
-        ),
-        const SizedBox(height: 10),
+        const AppSectionTitle('我的機器人'),
         if (robots.isEmpty)
           _EmptyHint(mission: mission, locked: locked)
         else
@@ -112,15 +108,12 @@ class _RobotSettingsSectionState extends State<RobotSettingsSection> {
               key: ValueKey(r.id),
               robot: r,
               active: registry.active?.id == r.id,
-              route: registry.active?.id == r.id ? registry.activeRoute : '',
               connected: mission.rosConnected,
               online: mission.robotOnline,
               reportedId: registry.reportedRobotId,
               mismatch:
                   registry.active?.id == r.id && registry.identityMismatch,
               infoName: registry.active?.id == r.id ? info.info?.robotId : null,
-              backendStatus: registry.statusOf(r.id),
-              backendError: registry.statusErrorOf(r.id),
               // Re-routing the active robot reconnects; other robots are free.
               locked: registry.active?.id == r.id && locked,
             ),
@@ -137,16 +130,6 @@ class _RobotSettingsSectionState extends State<RobotSettingsSection> {
           onPressed: () => _pasteCode(context),
           icon: const Icon(AppIcons.clipboardPaste),
           label: const Text('手動輸入配對碼'),
-        ),
-        const SizedBox(height: 10),
-        const Text(
-          'QR code 在機器人上執行 `sudo mower-pair` 取得。掃描後 App 會記住這台機器人，'
-          '每次連線都用配對密鑰驗證；解除配對或在機器人上 `mower-pair --rotate` 會使舊配對失效。',
-          style: TextStyle(
-            color: _kGrey,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
         ),
       ],
     );
@@ -204,13 +187,12 @@ class _RobotSettingsSectionState extends State<RobotSettingsSection> {
   }
 }
 
+/// The home page's panels; the robot in use has a green edge.
 BoxDecoration _cardDecoration({bool active = false}) => BoxDecoration(
   color: Colors.white,
-  borderRadius: BorderRadius.circular(8),
+  borderRadius: BorderRadius.circular(20),
   border: active ? Border.all(color: _kGreen, width: 1.5) : null,
-  boxShadow: const [
-    BoxShadow(color: Color(0x12000000), blurRadius: 18, offset: Offset(0, 8)),
-  ],
+  boxShadow: AppStyle.panelShadow,
 );
 
 class _EmptyHint extends StatelessWidget {
@@ -227,20 +209,14 @@ class _EmptyHint extends StatelessWidget {
       decoration: _cardDecoration(),
       child: Column(
         children: [
-          const Icon(AppIcons.bot, size: 40, color: _kGrey),
-          const SizedBox(height: 8),
+          const AppIconTile(AppIcons.bot, color: AppStyle.muted),
+          const SizedBox(height: 10),
           const Text(
             '還沒有配對的機器人',
-            style: TextStyle(fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            '在機器人上執行 sudo mower-pair，掃描印出的 QR code。',
-            textAlign: TextAlign.center,
             style: TextStyle(
-              color: _kGrey,
+              color: AppStyle.ink,
+              fontSize: 16,
               fontWeight: FontWeight.w700,
-              fontSize: 12,
             ),
           ),
           const SizedBox(height: 14),
@@ -248,7 +224,6 @@ class _EmptyHint extends StatelessWidget {
             saved: RosbridgeService.validateRobotIp(host) == null ? host : '',
             allowEmpty: false,
             locked: locked,
-            helper: '未配對時直接連這個 IP 的 rosbridge（開發用）。',
             onSave: (ip) async {
               final messenger = ScaffoldMessenger.of(context);
               final error = await mission.updateRobotIp(ip);
@@ -271,65 +246,25 @@ class _RobotCard extends StatelessWidget {
     super.key,
     required this.robot,
     required this.active,
-    required this.route,
     required this.connected,
     required this.online,
     required this.reportedId,
     required this.mismatch,
     required this.infoName,
-    required this.backendStatus,
-    required this.backendError,
     required this.locked,
   });
 
   final PairedRobot robot;
   final bool active;
 
-  /// 'direct' / 'lan' / 'relay' for the active robot, '' otherwise.
-  final String route;
   final bool connected;
   final bool online;
   final String? reportedId;
   final bool mismatch;
   final String? infoName;
-  final RobotStatus? backendStatus;
-  final String? backendError;
 
   /// Changing the 直連 IP now would disturb a live operation.
   final bool locked;
-
-  String get _routeLabel {
-    if (active && route == 'direct') return '直連 ${robot.directAddress}';
-    if (active && route == 'lan') return 'LAN ${robot.lanAddress}';
-    if (active && route == 'relay') return '遠端 relay';
-    if (active && robot.hasDirect && route.isEmpty) return '偵測直連中…';
-    if (active && robot.hasRelay && robot.hasLan) return '偵測 LAN 中…';
-    if (robot.usesLan) return 'LAN ${robot.lanAddress}';
-    if (robot.hasRelay) return '遠端 relay';
-    return '沒有位址';
-  }
-
-  String? get _backendLine {
-    final s = backendStatus;
-    if (s != null) {
-      final seen = s.lastSeen;
-      final ago = seen == null
-          ? ''
-          : ' · ${_ago(DateTime.now().difference(seen))}';
-      final lan = s.lan.isNotEmpty ? ' · LAN ${s.lan}' : '';
-      return s.online ? '後台：在線$ago$lan' : '後台：離線$ago';
-    }
-    final e = backendError;
-    if (e != null) return '後台：$e';
-    return null;
-  }
-
-  static String _ago(Duration d) {
-    if (d.inSeconds < 60) return '${d.inSeconds} 秒前';
-    if (d.inMinutes < 60) return '${d.inMinutes} 分鐘前';
-    if (d.inHours < 48) return '${d.inHours} 小時前';
-    return '${d.inDays} 天前';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -361,47 +296,47 @@ class _RobotCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(AppIcons.bot, color: active ? _kGreen : _kGrey),
-              const SizedBox(width: 10),
+              AppIconTile(
+                AppIcons.bot,
+                color: active ? _kGreen : AppStyle.muted,
+              ),
+              const SizedBox(width: 12),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      robot.displayName,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 16,
-                      ),
-                    ),
-                    Text(
-                      '${robot.id} · $_routeLabel',
-                      style: const TextStyle(
-                        color: _kGrey,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12,
-                      ),
-                    ),
-                    if (_backendLine != null)
-                      Text(
-                        _backendLine!,
-                        style: TextStyle(
-                          color: backendStatus?.online == true
-                              ? _kGreen
-                              : _kGrey,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                        ),
-                      ),
-                  ],
+                child: Text(
+                  robot.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppStyle.ink,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 17,
+                  ),
                 ),
               ),
-              Text(
-                status,
-                style: TextStyle(
-                  color: statusColor,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 12,
+              const SizedBox(width: 8),
+              // Status on a tag of its colour.
+              Flexible(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    child: Text(
+                      status,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: statusColor,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -411,10 +346,6 @@ class _RobotCard extends StatelessWidget {
             saved: robot.directAddress,
             allowEmpty: true,
             locked: locked,
-            helper:
-                '填區網 IP 或 Tailscale IP（100.x，手機要開 Tailscale）。'
-                '連線時先試這個位址，連不上自動改走 LAN / 遠端；清空即停用。'
-                '${robot.directIsTailscale ? 'Tailscale 只走遙控，影像仍走遠端。' : ''}',
             onSave: (ip) async {
               final messenger = ScaffoldMessenger.of(context);
               await registry.update(robot.id, directAddress: ip);
@@ -502,7 +433,6 @@ class _DirectIpField extends StatefulWidget {
     required this.saved,
     required this.allowEmpty,
     required this.locked,
-    required this.helper,
     required this.onSave,
   });
 
@@ -514,7 +444,6 @@ class _DirectIpField extends StatefulWidget {
 
   /// Reconnecting now would disturb a live operation.
   final bool locked;
-  final String helper;
 
   /// Applies the trimmed address; returns an error message or null.
   final Future<String?> Function(String ip) onSave;
@@ -590,7 +519,6 @@ class _DirectIpFieldState extends State<_DirectIpField> {
                   errorText: _error,
                   isDense: true,
                   prefixIcon: const Icon(AppIcons.router),
-                  border: const OutlineInputBorder(),
                 ),
               ),
             ),
@@ -599,19 +527,17 @@ class _DirectIpFieldState extends State<_DirectIpField> {
               padding: const EdgeInsets.only(top: 2),
               child: FilledButton(
                 onPressed: _canSave ? _save : null,
-                child: Text(_saving ? '儲存中' : '儲存'),
+                // Why it cannot save, without a line of small print.
+                child: Text(
+                  widget.locked
+                      ? '任務中'
+                      : _saving
+                      ? '儲存中'
+                      : '儲存',
+                ),
               ),
             ),
           ],
-        ),
-        const SizedBox(height: 6),
-        Text(
-          widget.locked ? '任務、記錄或手動控制進行中，結束後才能改連線。' : widget.helper,
-          style: const TextStyle(
-            color: _kGrey,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
         ),
       ],
     );

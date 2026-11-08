@@ -2,36 +2,31 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import '../utils/app_icons.dart';
+import '../utils/app_style.dart';
 import 'package:provider/provider.dart';
 
-import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 import '../providers/phone_location_provider.dart';
-import '../providers/recorder_provider.dart';
-import '../providers/weather_provider.dart';
 import '../providers/robot_fleet_provider.dart';
-import '../providers/robot_info_provider.dart';
-import '../providers/robot_registry.dart';
-import '../models/robot_info.dart';
 import 'recorder_screen.dart';
 import 'robots_screen.dart';
 import '../widgets/add_object_sheet.dart';
-import '../widgets/execution_control_sheet.dart';
+import '../widgets/front_camera_pip.dart';
 import '../widgets/manual_control_overlay.dart';
 import '../widgets/manual_speed_setting.dart';
-import '../widgets/map_objects_sheet.dart';
-import '../widgets/map_record_bar.dart';
 import '../widgets/mission_map_canvas.dart';
-import '../widgets/mission_next_step.dart';
-import '../widgets/mission_mode_bar.dart';
+import '../widgets/map_task_controls.dart';
+import '../services/google_map_tiles.dart';
 import '../widgets/satellite_map_view.dart';
 import '../widgets/operation_log_sheet.dart';
-import '../widgets/planning_control_sheet.dart';
 import '../widgets/robot_info_popup.dart';
 import '../widgets/robot_version_card.dart';
 import '../widgets/site_library_sheet.dart';
 import '../widgets/top_status_pill.dart';
+import 'home_dashboard.dart';
+import 'imagery_alignment_screen.dart';
 import 'self_check_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -82,159 +77,63 @@ class _MowerDashboardShell extends StatefulWidget {
 }
 
 class _MowerDashboardShellState extends State<_MowerDashboardShell> {
-  static const _mapTab = 1;
-  static const _settingsTab = 2;
+  static const _homePage = 0;
+  static const _mapPage = 1;
 
-  int _selectedIndex = 0;
+  /// No tab bar: the home page's 進入機器 opens the map, and the map has its
+  /// own buttons back home and to 設定.
+  int _page = _homePage;
   final _mapKey = GlobalKey<_MissionMapScreenState>();
 
-  /// Manual mode of the map page (joysticks and camera over the map). Held
-  /// here so the navigation bar can step aside while it is on.
-  final _driveMode = ValueNotifier<bool>(false);
-  MissionMockProvider? _mission;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _mission = context.read<MissionMockProvider>();
+  /// Leaving the map stops the robot: its joysticks go with it.
+  void _showPage(int page) {
+    if (page != _mapPage) _mapKey.currentState?.haltDriving();
+    setState(() => _page = page);
   }
 
-  @override
-  void dispose() {
-    if (_driveMode.value) {
-      _mission?.stopManualControl();
-    }
-    _driveMode.dispose();
-    super.dispose();
-  }
-
-  /// Ends manual mode: the robot is told to stop first, then the page drops
-  /// the controls.
-  void _leaveManualMode() {
-    if (!_driveMode.value) return;
-    _mission?.stopManualControl();
-    _driveMode.value = false;
-  }
-
-  /// Switches tab. Leaving the map ends manual mode.
-  void _selectTab(int index) {
-    if (index != _mapTab) _leaveManualMode();
-    setState(() => _selectedIndex = index);
+  /// 設定 is a page of its own over the current one. The robot stops first:
+  /// the page covers the joysticks (and a cruise that drives on its own).
+  void _openSettings() {
+    _mapKey.currentState?.haltDriving();
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const _SettingsPage()));
   }
 
   @override
   Widget build(BuildContext context) {
-    // Manual mode is full-screen: the bottom nav steps aside (the in-page ✕
-    // button still exits, so the user is never trapped).
-    return ValueListenableBuilder<bool>(
-      valueListenable: _driveMode,
-      // Back leaves manual mode before it leaves the app.
-      builder: (context, driving, _) => PopScope(
-        canPop: !driving,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop) _leaveManualMode();
-        },
-        child: Scaffold(
-          backgroundColor: const Color(0xFFF6F7F8),
-          body: IndexedStack(
-            index: _selectedIndex,
-            children: [
-              _DashboardHomePage(
-                onShowVersions: () => _selectTab(_settingsTab),
-                onOpenSettings: () => _selectTab(_settingsTab),
-                onOpenRun: () {
-                  context.read<MissionMockProvider>().selectMode(
-                    MissionMode.run,
-                  );
-                  // A panel the operator collapsed earlier would hide the run
-                  // controls this button promises.
-                  _mapKey.currentState?.revealPanel();
-                  _selectTab(_mapTab);
-                },
-              ),
-              // Operating pages are blocked while the robot's API version is
-              // outside what this app supports (see RobotInfoProvider).
-              CompatibilityGate(
-                onShowVersions: () => _selectTab(_settingsTab),
-                child: MissionMapScreen(key: _mapKey, driveMode: _driveMode),
-              ),
-              _SettingsTab(visible: _selectedIndex == _settingsTab),
-            ],
-          ),
-          bottomNavigationBar: driving
-              ? null
-              : NavigationBar(
-                  height: 70,
-                  selectedIndex: _selectedIndex,
-                  labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-                  indicatorColor: const Color(0xFFE3F5EA),
-                  onDestinationSelected: _selectTab,
-                  destinations: const [
-                    NavigationDestination(
-                      icon: Icon(AppIcons.house),
-                      label: '首頁',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(AppIcons.map),
-                      label: '地圖',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(AppIcons.settings),
-                      label: '設定',
-                    ),
-                  ],
-                ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DashboardHomePage extends StatelessWidget {
-  const _DashboardHomePage({
-    this.onShowVersions,
-    this.onOpenSettings,
-    this.onOpenRun,
-  });
-
-  final VoidCallback? onShowVersions;
-
-  /// Switches to the 設定 tab, where the robot settings live.
-  final VoidCallback? onOpenSettings;
-
-  /// Opens the map on its run panel (navigation only; never sends a command).
-  final VoidCallback? onOpenRun;
-
-  @override
-  Widget build(BuildContext context) {
-    final incompatible = context.select<RobotInfoProvider, bool>(
-      (p) =>
-          p.compatibility == RobotCompatibility.robotTooOld ||
-          p.compatibility == RobotCompatibility.appTooOld,
-    );
-    final mismatch = context.select<RobotRegistry, bool>(
-      (r) => r.identityMismatch,
-    );
-    return ColoredBox(
-      color: const Color(0xFFF6F7F8),
-      child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
-          physics: const BouncingScrollPhysics(),
+    // Android's back from the map goes home, not out of the app.
+    return PopScope(
+      canPop: _page == _homePage,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _showPage(_homePage);
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF6F7F8),
+        body: IndexedStack(
+          index: _page,
           children: [
-            _DashboardHeader(onOpenSettings: onOpenSettings),
-            const SizedBox(height: 16),
-            if (mismatch) ...[
-              IdentityMismatchNotice(onOpenSettings: onOpenSettings),
-              const SizedBox(height: 10),
-            ],
-            if (incompatible) ...[
-              CompatibilityNotice(onShowVersions: onShowVersions),
-              const SizedBox(height: 10),
-            ],
-            _MainStatusCard(onOpenRun: onOpenRun),
-            const SizedBox(height: 10),
-            const _WeatherStrip(),
+            DashboardHomePage(
+              onShowVersions: _openSettings,
+              onOpenSettings: _openSettings,
+              onOpenRun: () {
+                // The map comes up with the selected zone's buttons out.
+                _mapKey.currentState?.revealPanel();
+                _showPage(_mapPage);
+              },
+            ),
+            // Operating pages are blocked while the robot's API version is
+            // outside what this app supports (see RobotInfoProvider).
+            CompatibilityGate(
+              onShowVersions: _openSettings,
+              onHome: () => _showPage(_homePage),
+              child: MissionMapScreen(
+                key: _mapKey,
+                active: _page == _mapPage,
+                onHome: () => _showPage(_homePage),
+                onSettings: _openSettings,
+              ),
+            ),
           ],
         ),
       ),
@@ -242,465 +141,15 @@ class _DashboardHomePage extends StatelessWidget {
   }
 }
 
-class _DashboardHeader extends StatelessWidget {
-  const _DashboardHeader({this.onOpenSettings});
-
-  final VoidCallback? onOpenSettings;
-
-  @override
-  Widget build(BuildContext context) {
-    final robotName = context.select<RobotRegistry, String?>(
-      (r) => r.active?.displayName,
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          '我的割草機',
-          style: TextStyle(
-            color: Color(0xFF17211C),
-            fontSize: 24,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-        // Ink paints on the nearest Material, which sits under the page's opaque
-        // ColoredBox; a transparent one here keeps the tap feedback visible.
-        Material(
-          type: MaterialType.transparency,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: onOpenSettings,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      robotName ?? '尚未配對機器人',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xFF50605A),
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  const Icon(AppIcons.chevronDown, size: 20),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// The one card the home page is about: is the robot up, how much battery,
-/// what it is doing, and the way into the map to act on it.
-class _MainStatusCard extends StatelessWidget {
-  const _MainStatusCard({this.onOpenRun});
-
-  final VoidCallback? onOpenRun;
+/// The app's one settings page, opened from the map or the home header.
+class _SettingsPage extends StatelessWidget {
+  const _SettingsPage();
 
   @override
   Widget build(BuildContext context) {
-    final mission = context.watch<MissionMockProvider>();
-    final online = mission.robotOnline && !mission.mockDataEnabled;
-    final statusLabel = mission.mockDataEnabled
-        ? 'Demo 模式'
-        : online
-        ? '機器人在線'
-        : mission.rosConnected
-        ? '機器人離線'
-        : '等待連線';
-    final detail = mission.mockDataEnabled
-        ? '手動開啟的模擬資料 · 不控制真機'
-        : online
-        ? 'ROS 即時資料 · heartbeat 正常'
-        : mission.rosConnected
-        ? 'rosbridge 已連線 · heartbeat 不新鮮'
-        : '等待 rosbridge 與真實資料';
-
-    final battery = mission.batteryPercent;
-    final zone = _selectedZone(mission);
-    final progress = mission.coverageProgress.clamp(0.0, 1.0).toDouble();
-    final active =
-        mission.navStatus == NavMockStatus.executing ||
-        mission.navStatus == NavMockStatus.paused;
-    final progressKnown =
-        mission.mockDataEnabled || (!active && progress >= 1.0);
-    final totalArea = zone == null ? null : _polygonAreaM2(zone.points);
-    final completed = totalArea == null || !progressKnown
-        ? null
-        : (totalArea * progress).round();
-    final remaining = totalArea == null || !progressKnown
-        ? null
-        : (totalArea - (completed ?? 0)).round();
-    final executing = mission.navStatus == NavMockStatus.executing;
-
-    return _DashboardCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const SizedBox(
-                width: 84,
-                height: 54,
-                child: CustomPaint(painter: _MowerMiniPainter()),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            statusLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: online
-                                  ? const Color(0xFF168848)
-                                  : const Color(0xFF607D8B),
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 7),
-                        _StatusDot(active: online),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      detail,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xFF8A9691),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              SizedBox(
-                width: 74,
-                child: Text(
-                  battery == null ? '--' : '${battery.round()}%',
-                  style: const TextStyle(
-                    color: Color(0xFF17211C),
-                    fontSize: 28,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: battery == null
-                            ? null
-                            : (battery / 100).clamp(0.0, 1.0),
-                        minHeight: 10,
-                        backgroundColor: const Color(0xFFE6ECE9),
-                        color: const Color(0xFF168848),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      mission.mockDataEnabled
-                          ? 'Demo 模擬電量'
-                          : battery == null
-                          ? '尚未收到新鮮的 /battery_state'
-                          : '電量 · ROS 即時',
-                      style: const TextStyle(
-                        color: Color(0xFF8A9691),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 14),
-            child: Divider(height: 1, color: Color(0xFFE6ECE9)),
-          ),
-          Row(
-            children: [
-              _IconBubble(
-                icon: AppIcons.sprout,
-                color: const Color(0xFF168848),
-                background: const Color(0xFFE4F6EC),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      zone?.name ?? '尚未選擇區域',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xFF17211C),
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      executing ? '自動割草中' : mission.navStatusLabel(),
-                      style: TextStyle(
-                        color: executing
-                            ? const Color(0xFF168848)
-                            : const Color(0xFF607D8B),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(
-                width: 64,
-                height: 64,
-                child: CustomPaint(
-                  painter: _ProgressRingPainter(
-                    progress: progressKnown ? progress : 0,
-                  ),
-                  child: Center(
-                    child: Text(
-                      progressKnown ? '${(progress * 100).round()}%' : '—',
-                      style: const TextStyle(
-                        color: Color(0xFF17211C),
-                        fontSize: 15,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              _MissionMetric(
-                label: '總草坪面積',
-                value: totalArea == null ? '--' : '${totalArea.round()} m²',
-              ),
-              const _VerticalDivider(),
-              _MissionMetric(
-                label: '已完成',
-                value: completed == null ? '--' : '$completed m²',
-              ),
-              const _VerticalDivider(),
-              _MissionMetric(
-                label: '剩餘',
-                value: remaining == null ? '--' : '$remaining m²',
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: onOpenRun,
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-              ),
-              icon: Icon(active ? AppIcons.circlePlay : AppIcons.map),
-              label: Text(active ? '查看執行進度' : '前往地圖執行任務'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  static MissionZone? _selectedZone(MissionMockProvider mission) {
-    for (final zone in mission.zones) {
-      if (zone.id == mission.selectedZoneId) {
-        return zone;
-      }
-    }
-    return null;
-  }
-
-  static double _polygonAreaM2(List<MapPoint> points) {
-    if (points.length < 3) {
-      return 0;
-    }
-    var twiceArea = 0.0;
-    for (var i = 0; i < points.length; i += 1) {
-      final current = points[i];
-      final next = points[(i + 1) % points.length];
-      twiceArea += current.x * next.y - next.x * current.y;
-    }
-    return twiceArea.abs() / 2;
-  }
-}
-
-/// Weather as one quiet line: it informs the decision, it is not the page.
-class _WeatherStrip extends StatelessWidget {
-  const _WeatherStrip();
-
-  @override
-  Widget build(BuildContext context) {
-    final weather = context.watch<WeatherProvider>();
-    final snapshot = weather.snapshot;
-    final loadingWithoutData = weather.isLoading && snapshot == null;
-    final title = loadingWithoutData
-        ? '天氣載入中'
-        : snapshot?.conditionLabel ?? weather.errorMessage ?? '等待天氣資料';
-    final detail = snapshot == null
-        ? null
-        : '體感 ${snapshot.apparentTemperatureC.round()}° · '
-              '濕度 ${snapshot.relativeHumidity}% · '
-              '風 ${snapshot.windSpeedKmh.toStringAsFixed(1)} km/h';
-
-    return _DashboardCard(
-      child: Row(
-        children: [
-          Icon(
-            snapshot == null
-                ? AppIcons.cloud
-                : _weatherIcon(snapshot.weatherCode),
-            color: const Color(0xFF1E88A8),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF17211C),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                if (detail != null)
-                  Text(
-                    detail,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFF8A9691),
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                // Own line so a stale snapshot is never hidden by an
-                // ellipsis; also carries the Open-Meteo credit.
-                Text(
-                  snapshot == null
-                      ? 'Open-Meteo · 讀取目前作業位置'
-                      : 'Open-Meteo · ${_formatUpdateTime(snapshot.fetchedAt)}更新',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF8A9691),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          if (weather.isLoading)
-            const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2.2),
-            )
-          else
-            Text(
-              snapshot == null ? '--°' : '${snapshot.temperatureC.round()}°',
-              style: const TextStyle(
-                color: Color(0xFF17211C),
-                fontSize: 24,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  static IconData _weatherIcon(int code) {
-    return switch (code) {
-      0 || 1 => AppIcons.sun,
-      2 || 3 => AppIcons.cloud,
-      45 || 48 => AppIcons.cloudFog,
-      51 || 53 || 55 || 56 || 57 => AppIcons.cloudDrizzle,
-      61 || 63 || 65 || 66 || 67 || 80 || 81 || 82 => AppIcons.droplet,
-      71 || 73 || 75 || 77 || 85 || 86 => AppIcons.snowflake,
-      95 || 96 || 99 => AppIcons.cloudLightning,
-      _ => AppIcons.cloud,
-    };
-  }
-}
-
-class _MissionMetric extends StatelessWidget {
-  const _MissionMetric({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF8A9691),
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 4),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              value,
-              style: const TextStyle(
-                color: Color(0xFF17211C),
-                fontSize: 18,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
-        ],
-      ),
+    return Scaffold(
+      appBar: AppBar(title: const Text('設定')),
+      body: const _SettingsTab(visible: true),
     );
   }
 }
@@ -712,77 +161,17 @@ class _DashboardCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The home page's panels: white, rounded, on a soft shadow.
     return DecoratedBox(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 18,
-            offset: Offset(0, 8),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: AppStyle.panelShadow,
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: child,
       ),
-    );
-  }
-}
-
-class _IconBubble extends StatelessWidget {
-  const _IconBubble({
-    required this.icon,
-    required this.color,
-    required this.background,
-  });
-
-  final IconData icon;
-  final Color color;
-  final Color background;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(color: background, shape: BoxShape.circle),
-      child: SizedBox(
-        width: 42,
-        height: 42,
-        child: Icon(icon, color: color, size: 23),
-      ),
-    );
-  }
-}
-
-class _StatusDot extends StatelessWidget {
-  const _StatusDot({required this.active});
-
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: active ? const Color(0xFF168848) : const Color(0xFFB0BEC5),
-        shape: BoxShape.circle,
-      ),
-      child: const SizedBox(width: 11, height: 11),
-    );
-  }
-}
-
-class _VerticalDivider extends StatelessWidget {
-  const _VerticalDivider();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 1,
-      height: 42,
-      margin: const EdgeInsets.symmetric(horizontal: 10),
-      color: const Color(0xFFE6ECE9),
     );
   }
 }
@@ -798,36 +187,63 @@ class _SettingsTab extends StatelessWidget {
     final mission = context.watch<MissionMockProvider>();
 
     // The app's one settings page: robots and their 直連 IP are edited right
-    // here, not on a separate page.
+    // here, not on a separate page. Grouped like the home page's cards.
+    void push(Widget page) => Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => page));
     return ColoredBox(
-      color: const Color(0xFFF6F7F8),
+      color: AppStyle.bg,
       child: SafeArea(
+        top: false,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
           physics: const BouncingScrollPhysics(),
           children: [
-            const Text(
-              '設定',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 16),
             RobotSettingsSection(visible: visible),
-            const SizedBox(height: 16),
-            const _DashboardCard(child: ManualSpeedSetting()),
-            const SizedBox(height: 10),
+            const SizedBox(height: 26),
+            const AppSectionTitle('駕駛與工具'),
             _DashboardCard(
-              child: _SettingsActionRow(
-                icon: AppIcons.video,
-                title: '錄製 / Bag',
-                detail: '錄製狀態、清單、上傳 R2',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const RecorderScreen()),
-                ),
+              child: Column(
+                children: [
+                  const ManualSpeedSetting(),
+                  const Divider(height: 22),
+                  _SettingsActionRow(
+                    icon: AppIcons.video,
+                    title: '錄製 / Bag',
+                    onTap: () => push(const RecorderScreen()),
+                  ),
+                  const Divider(height: 14, indent: 50),
+                  _SettingsActionRow(
+                    icon: AppIcons.list,
+                    title: '操作日誌',
+                    onTap: () => push(
+                      Scaffold(
+                        appBar: AppBar(title: const Text('操作日誌')),
+                        body: const SingleChildScrollView(
+                          padding: EdgeInsets.all(16),
+                          child: OperationLogSheet(),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Only builds with a Google key show Google's photo to
+                  // align.
+                  if (GoogleMapTiles.shared.configured) ...[
+                    const Divider(height: 14, indent: 50),
+                    _SettingsActionRow(
+                      icon: AppIcons.crosshair,
+                      title: '衛星圖對位',
+                      onTap: () =>
+                          push(ImageryAlignmentScreen(mission: mission)),
+                    ),
+                  ],
+                ],
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 26),
+            const AppSectionTitle('機器人軟體'),
             const _DashboardCard(child: RobotVersionCard()),
-            const SizedBox(height: 10),
+            const SizedBox(height: 26),
             _DashboardCard(child: _AdvancedSection(mission: mission)),
           ],
         ),
@@ -856,15 +272,12 @@ class _AdvancedSection extends StatelessWidget {
           tilePadding: EdgeInsets.zero,
           childrenPadding: const EdgeInsets.only(top: 4),
           expandedCrossAxisAlignment: CrossAxisAlignment.start,
-          leading: const Icon(AppIcons.settings, color: Color(0xFF167A4A)),
+          leading: const AppIconTile(AppIcons.settings, color: AppStyle.muted),
           title: const Text(
             '進階',
-            style: TextStyle(fontWeight: FontWeight.w900),
-          ),
-          subtitle: const Text(
-            'Demo 模式、資料來源',
             style: TextStyle(
-              color: Color(0xFF78909C),
+              color: AppStyle.ink,
+              fontSize: 16,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -877,17 +290,10 @@ class _AdvancedSection extends StatelessWidget {
                   : AppIcons.wifiOff,
               title: '資料來源',
               detail: mission.mockDataEnabled
-                  ? 'Demo（與真機資料隔離）'
+                  ? 'Demo'
                   : mission.rosConnected
-                  ? 'ROS 已連線 · ${mission.robotOnline ? '機器人在線' : 'heartbeat 不新鮮'}'
-                  : '等待 ROS 真實資料',
-            ),
-            _InfoRow(
-              icon: AppIcons.shieldCheck,
-              title: '安全狀態',
-              detail: mission.mockDataEnabled
-                  ? 'Demo 不代表真機安全'
-                  : '尚未提供安全狀態 topic',
+                  ? (mission.robotOnline ? '機器人在線' : '已連線')
+                  : '等待連線',
             ),
             _InfoRow(
               icon: AppIcons.link,
@@ -905,47 +311,35 @@ class _SettingsActionRow extends StatelessWidget {
   const _SettingsActionRow({
     required this.icon,
     required this.title,
-    required this.detail,
     required this.onTap,
   });
 
   final IconData icon;
   final String title;
-  final String detail;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(12),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
           children: [
-            Icon(icon, color: const Color(0xFF167A4A)),
+            AppIconTile(icon),
             const SizedBox(width: 12),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                  Text(
-                    detail,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFF78909C),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
+              child: Text(
+                title,
+                style: const TextStyle(
+                  color: AppStyle.ink,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
-            const Icon(AppIcons.chevronRight, color: Color(0xFF78909C)),
+            const Icon(AppIcons.chevronRight, color: AppStyle.muted, size: 20),
           ],
         ),
       ),
@@ -954,56 +348,171 @@ class _SettingsActionRow extends StatelessWidget {
 }
 
 class MissionMapScreen extends StatefulWidget {
-  const MissionMapScreen({super.key, required this.driveMode});
+  const MissionMapScreen({
+    super.key,
+    this.active = true,
+    this.onHome,
+    this.onSettings,
+  });
 
-  /// Whether the page is in manual mode: the joysticks and the live camera
-  /// over this same map, with the bottom panel and the navigation bar out of
-  /// the way. Owned by the shell, which hides the bar while it is on.
-  final ValueNotifier<bool> driveMode;
+  /// Whether this page is the one on screen. The joysticks leave (and stop
+  /// the robot) while the home page is shown.
+  final bool active;
+
+  /// The top corners' buttons: back to the home page, and 設定. The robot
+  /// stops before either is called.
+  final VoidCallback? onHome;
+  final VoidCallback? onSettings;
 
   @override
   State<MissionMapScreen> createState() => _MissionMapScreenState();
 }
 
-class _MissionMapScreenState extends State<MissionMapScreen> {
+class _MissionMapScreenState extends State<MissionMapScreen>
+    with WidgetsBindingObserver {
   final _canvasKey = GlobalKey<MissionMapCanvasState>();
+  final _sticksKey = GlobalKey<ManualControlOverlayState>();
   Offset? _popupOffset;
-  bool _panelCollapsed = false;
   int? _dragVertexIndex;
 
-  /// Keep the map centred on the robot. Toggled by the follow button; dragging
-  /// the satellite map also turns it off.
+  /// The operator tapped the selected zone on the map, so its buttons
+  /// (設定, 生成路徑 / 開始割草) float above the right stick. A tap on empty
+  /// map puts them away.
+  bool _zoneFocused = false;
+
+  /// The phase at the last build: a recording that just ended focuses the
+  /// zone it made.
+  TaskPhase? _lastPhase;
+
+  /// Keep the map centred on the robot. Always the default, with no button:
+  /// dragging the satellite map pauses it, and it picks up again a few
+  /// seconds after the last drag, or at once when the sticks drive.
   bool _followRobot = true;
+
+  /// The joysticks are sending motion: the map keeps the robot in view and
+  /// holds still under the thumbs.
+  bool _sticksMoving = false;
+
+  /// The front camera picture-in-picture. Off until the operator turns it on:
+  /// with no viewer the robot does not stream it.
+  bool _cameraOn = false;
+  bool _cameraExpanded = false;
+
+  /// Where snackbars float: above the sticks and their buttons.
+  double _snackBottom = 0;
+
+  /// The phone's location was asked for once already this run.
+  bool _phoneLocationTried = false;
 
   @override
   void initState() {
     super.initState();
-    widget.driveMode.addListener(_onDriveModeChanged);
+    WidgetsBinding.instance.addObserver(this);
+    if (widget.active) _autoStartPhoneLocation();
+  }
+
+  @override
+  void didUpdateWidget(MissionMapScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active) _autoStartPhoneLocation();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Location allowed in the system settings meanwhile: on it goes, without
+    // asking again.
+    if (state == AppLifecycleState.resumed && _phoneLocationTried) {
+      final phone = context.read<PhoneLocationProvider>();
+      if (!phone.enabled) unawaited(phone.start(prompt: false));
+    }
   }
 
   @override
   void dispose() {
-    widget.driveMode.removeListener(_onDriveModeChanged);
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
-  void _onDriveModeChanged() => setState(() {});
-
-  /// Manual mode: joysticks and the live camera over this same map.
-  void _enterDrive() {
-    if (widget.driveMode.value) return;
-    if (_popupOffset != null) _dismissPopup();
-    widget.driveMode.value = true;
+  /// The phone's own position shows on the map whenever the phone allows it.
+  /// There is no button for it: the first time the map is shown it asks for
+  /// the permission once, and a no (or location off) leaves it off quietly.
+  void _autoStartPhoneLocation() {
+    if (_phoneLocationTried) return;
+    _phoneLocationTried = true;
+    // After this frame: it is called while the page builds.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final phone = context.read<PhoneLocationProvider>();
+      if (!phone.enabled) unawaited(phone.start());
+    });
   }
 
-  /// Leaves manual mode (the controls stop the robot themselves when they go).
-  void _exitDrive() => widget.driveMode.value = false;
+  /// Stops the robot and centres the sticks. Called before anything covers
+  /// them and when the page goes out of view.
+  void haltDriving() => _sticksKey.currentState?.halt();
 
-  /// Expands the bottom panel (used when another tab sends the user to it).
+  /// Shows the selected zone's buttons (used when another tab sends the user
+  /// here to run a mission).
   void revealPanel() {
-    if (_panelCollapsed) {
-      setState(() => _panelCollapsed = false);
+    if (!_zoneFocused) {
+      setState(() => _zoneFocused = true);
     }
+  }
+
+  /// 設定: the phase's panels in a sheet over the map.
+  void _openDetails() => _showSheet(const TaskDetailsSheet());
+
+  void _showSheet(Widget sheet) {
+    haltDriving();
+    _showAppSheet(context, sheet);
+  }
+
+  void _onSticksMoving(bool moving) {
+    if (moving == _sticksMoving || !mounted) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _setSticksMoving(moving);
+      });
+      return;
+    }
+    _setSticksMoving(moving);
+  }
+
+  /// Driving also turns following back on: the robot is what you steer.
+  void _setSticksMoving(bool moving) {
+    setState(() {
+      _sticksMoving = moving;
+      if (moving) _followRobot = true;
+    });
+  }
+
+  /// A locked stick was tapped. During mowing that is the way to stop the
+  /// task (phase 1: there is no takeover that keeps the mission); otherwise
+  /// it says why the sticks are locked.
+  void _onLockedStickTap(String reason) {
+    final mission = context.read<MissionMockProvider>();
+    if (mission.manualDriveLockedByMission) {
+      unawaited(confirmStopMowing(context, mission, fromSticks: true));
+      return;
+    }
+    final text = switch (reason) {
+      '示範模式' => '示範模式不會控制真的割草機，搖桿不能用',
+      '連線中斷' => '和割草機的連線中斷了，搖桿先鎖住，正在重新連線',
+      '等待確認停止' => '正在等機器人確認任務已停止，確認後搖桿就會解鎖',
+      '生成路徑中' => '正在生成路徑，完成後搖桿就會解鎖',
+      '請先放開搖桿' => '請先放開搖桿，再重新推一次',
+      _ => '搖桿暫時不能用：$reason',
+    };
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(text),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.fromLTRB(16, 0, 16, _snackBottom),
+        ),
+      );
   }
 
   /// Index of the edit-polygon vertex nearest to a screen point, within a
@@ -1049,27 +558,9 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     }
   }
 
-  void _openAddObject() =>
-      _showAppSheet(context, AddObjectSheet(onRecordingStarted: _enterDrive));
-
-  Future<void> _togglePhoneLocation() async {
-    final phone = context.read<PhoneLocationProvider>();
-    final messenger = ScaffoldMessenger.of(context);
-    await phone.toggle();
-    if (!mounted) return;
-    final message = switch (phone.status) {
-      PhoneLocationStatus.denied => '沒有定位權限，請到設定允許 App 取用位置',
-      PhoneLocationStatus.serviceDisabled => '手機的定位服務已關閉',
-      _ => null,
-    };
-    if (message == null) return;
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(message),
-        action: SnackBarAction(label: '開啟設定', onPressed: phone.openSettings),
-      ),
-    );
-  }
+  /// The one way to add a zone, no-go zone or channel. Recording starts on
+  /// the robot from there; the sticks are already on the map to drive it.
+  void _openAddObject() => _showSheet(const AddObjectSheet());
 
   void _dismissPopup() {
     context.read<RobotFleetProvider>().selectRobot(null);
@@ -1095,6 +586,26 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     return Offset(left, top);
   }
 
+  /// The camera's box: a small picture-in-picture under the right-hand
+  /// buttons; enlarged, as wide as the map beside the left-hand buttons
+  /// (portrait) or a bigger corner view (landscape).
+  Rect _cameraRect(Size size, EdgeInsets pad, bool isPortrait) {
+    final sideR = math.max(12.0, pad.right);
+    final w = isPortrait
+        // Enlarged it stops short of the left-hand buttons (the camera
+        // switch among them), so it can always be turned off.
+        ? _cameraExpanded
+              ? size.width - 70 - sideR
+              : math.min(size.width * 0.36, 150.0)
+        : _cameraExpanded
+        ? math.min(size.width * 0.42, size.width / 2 - 32 - sideR)
+        : math.min(size.width * 0.22, 190.0);
+    // Under the status pill (and a recording's chip); the right side has no
+    // buttons any more.
+    final top = isPortrait ? pad.top + 120 : pad.top + 10;
+    return Rect.fromLTWH(size.width - sideR - w, top, w, w * 9 / 16);
+  }
+
   @override
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
@@ -1107,60 +618,43 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
     final media = MediaQuery.of(context);
     final size = media.size;
     final isLandscape = size.width > size.height;
-    final panelHeight = isLandscape
-        ? math.min(size.height * 0.5, 220.0)
-        : math.min(size.height * 0.43, 370.0);
 
-    final driving = widget.driveMode.value;
-    final collapsedH = 48.0 + media.padding.bottom;
-    // Collapse the panel during draw / vertex-edit so more map is reachable.
-    final collapsed =
-        _panelCollapsed || mission.drawMode || mission.editVertexMode;
-    // The next-step banner adds its own height, so it never squeezes the
-    // panel content (and is left out on landscape, where there is no room).
-    final bannerExtra =
-        (!collapsed && !isLandscape && MissionNextStep.of(mission) != null)
-        ? kNextStepBannerExtent
-        : 0.0;
-    // Manual mode has no panel at all: the map gets the whole page.
-    final effectivePanelH = driving
-        ? 0.0
-        : collapsed
-        ? collapsedH
-        : panelHeight + bannerExtra;
-    // Going into manual mode swaps the layout at once; coming back lets the
-    // map ease down to the panel.
-    final layoutMotion = driving
-        ? Duration.zero
-        : const Duration(milliseconds: 300);
+    // No bar along the bottom: the sticks sit right above the tab bar, and
+    // the phase's buttons float above the right stick.
+    final phase = taskPhaseOf(mission);
+    final last = _lastPhase;
+    _lastPhase = phase;
+    if ((last == TaskPhase.recording || last == TaskPhase.pendingSave) &&
+        phase != TaskPhase.recording &&
+        phase != TaskPhase.pendingSave &&
+        selectedZoneOf(mission) != null) {
+      // A zone just saved: go straight on to its path.
+      _zoneFocused = true;
+    }
+    final sticksHidden =
+        !widget.active || mission.drawMode || mission.editVertexMode;
+    final sticksTop = ManualControlOverlay.controlsClearance(size);
+    final controlsShown =
+        !sticksHidden && taskControlsShown(phase, zoneFocused: _zoneFocused);
+    // Snackbars clear the sticks and the buttons over them.
+    _snackBottom = sticksHidden ? 12 : sticksTop + 70;
 
     // Paused while drawing / editing vertices so the map holds still under
-    // the finger. Manual mode always follows: the robot is what you steer.
+    // the finger. Driving always follows: the robot is what you steer.
     final following =
-        (_followRobot || driving) &&
+        (_followRobot || _sticksMoving) &&
         mission.shouldShowRobot &&
         !mission.drawMode &&
         !mission.editVertexMode;
 
     final selectedRobot = fleet.selectedRobot;
-    final popupOrigin =
-        (!driving && _popupOffset != null && selectedRobot != null)
+    final popupOrigin = (_popupOffset != null && selectedRobot != null)
         ? _clampedPopupOrigin(_popupOffset!, size)
         : null;
 
-    // The idle slot above the panel, taken by whichever bar owns the guidance
-    // (drawing, vertex editing, a recording) and otherwise by the way into
-    // manual mode.
-    final showManualEntry =
-        !mission.drawMode &&
-        !mission.editVertexMode &&
-        mission.recordingType == null &&
-        !mission.hasPendingRecordSave;
-
     return Scaffold(
       body: GestureDetector(
-        // Taps and long-presses on the map select things; not while driving.
-        onLongPressStart: driving ? null : _onLongPress,
+        onLongPressStart: _onLongPress,
         // Pan handlers exist ONLY in vertex-edit mode; otherwise they are null
         // so the PanGestureRecognizer doesn't compete with the panel's scroll.
         onPanStart: mission.editVertexMode
@@ -1186,55 +680,60 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                 }
               }
             : null,
-        onTapUp: driving
-            ? null
-            : (details) {
-                // Drawing takes precedence over robot-popup dismissal /
-                // selection, so the first tap after entering draw mode drops a
-                // vertex.
-                if (mission.drawMode) {
-                  if (details.localPosition.dy >
-                      size.height - effectivePanelH) {
-                    return;
-                  }
-                  final proj = _canvasKey.currentState?.lastProjection;
-                  if (proj != null) {
-                    mission.addDraftVertex(
-                      proj.unproject(details.localPosition),
-                    );
-                  }
-                  return;
-                }
-                // In vertex-edit a tap must not re-run selection; only dismiss
-                // a popup.
-                if (mission.editVertexMode) {
-                  if (fleet.selectedRobotId != null) _dismissPopup();
-                  return;
-                }
-                if (fleet.selectedRobotId != null) {
-                  _dismissPopup();
-                  return;
-                }
-                // Ignore taps that land on the bottom panel.
-                if (details.localPosition.dy > size.height - effectivePanelH) {
-                  return;
-                }
-                final proj = _canvasKey.currentState?.lastProjection;
-                if (proj == null) return;
-                final world = proj.unproject(details.localPosition);
-                final wRight = proj.unproject(
-                  details.localPosition + const Offset(22, 0),
-                );
-                final tol = math
-                    .sqrt(
-                      math.pow(wRight.x - world.x, 2) +
-                          math.pow(wRight.y - world.y, 2),
-                    )
-                    .toDouble();
-                if (!mission.selectObjectAt(world, channelTol: tol)) {
-                  mission.clearObjectSelection();
-                }
-              },
+        onTapUp: (details) {
+          // Drawing takes precedence over robot-popup dismissal / selection,
+          // so the first tap after entering draw mode drops a vertex.
+          if (mission.drawMode) {
+            if (details.localPosition.dy > size.height - 12) {
+              return;
+            }
+            final proj = _canvasKey.currentState?.lastProjection;
+            if (proj != null) {
+              mission.addDraftVertex(proj.unproject(details.localPosition));
+            }
+            return;
+          }
+          // In vertex-edit a tap must not re-run selection; only dismiss a
+          // popup.
+          if (mission.editVertexMode) {
+            if (fleet.selectedRobotId != null) _dismissPopup();
+            return;
+          }
+          if (fleet.selectedRobotId != null) {
+            _dismissPopup();
+            return;
+          }
+          // Taps in the band the sticks sit in are not map taps.
+          if (!sticksHidden &&
+              details.localPosition.dy > size.height - sticksTop) {
+            return;
+          }
+          final proj = _canvasKey.currentState?.lastProjection;
+          if (proj == null) return;
+          final world = proj.unproject(details.localPosition);
+          final wRight = proj.unproject(
+            details.localPosition + const Offset(22, 0),
+          );
+          final tol = math
+              .sqrt(
+                math.pow(wRight.x - world.x, 2) +
+                    math.pow(wRight.y - world.y, 2),
+              )
+              .toDouble();
+          if (!mission.selectObjectAt(world, channelTol: tol)) {
+            // Empty map puts the zone's buttons away.
+            mission.clearObjectSelection();
+            if (_zoneFocused) setState(() => _zoneFocused = false);
+            return;
+          }
+          // One selection: a zone tapped on the map is the zone that is
+          // planned and mown, and its buttons come up.
+          final id = mission.selectedObjectId;
+          if (mission.selectedObjectKind == 'zone' && id != null) {
+            mission.selectZone(id);
+            setState(() => _zoneFocused = true);
+          }
+        },
         child: Stack(
           children: [
             // The one map, in its own layer so nothing drawn above it (the
@@ -1249,12 +748,12 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
               // corners, resizing with it) so the framing and the followed
               // robot are centred in what is visible.
               AnimatedPositioned(
-                duration: layoutMotion,
+                duration: const Duration(milliseconds: 300),
                 curve: Curves.easeInOut,
                 left: 0,
                 top: 0,
                 right: 0,
-                bottom: driving ? 0 : effectivePanelH - 28,
+                bottom: 0,
                 child: RepaintBoundary(
                   child: SatelliteMapView(
                     mission: mission,
@@ -1264,11 +763,10 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                     followRobot: following,
                     onFollowRobotChanged: (on) =>
                         setState(() => _followRobot = on),
-                    lockPan: driving,
-                    bottomInset: driving
-                        ? ManualControlOverlay.controlsClearance(size)
-                        : 0,
-                    animateMarker: !driving,
+                    resumeFollowAfter: const Duration(seconds: 8),
+                    lockPan: _sticksMoving,
+                    bottomInset: sticksHidden ? 0 : sticksTop,
+                    animateMarker: !_sticksMoving,
                     aiEnhance: mission.aiBaseMap,
                   ),
                 ),
@@ -1281,132 +779,153 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                     mission: mission,
                     robots: fleet.robots,
                     selectedRobotId: fleet.selectedRobotId,
-                    bottomInset: effectivePanelH,
+                    bottomInset: 0,
                     // Its corner is where the left joystick sits.
-                    showScalePill: !driving,
+                    showScalePill: sticksHidden,
                     phonePosition: phoneWorld,
                     phoneAccuracyM: phone.accuracyM,
                     centerOn: following ? mission.robotPosition : null,
                   ),
                 ),
               ),
-            if (!driving) ...[
+            Positioned(
+              top: media.padding.top + 10,
+              // Clear of the buttons on the left; a narrow phone shrinks it.
+              left: 70,
+              right: 70,
+              child: const Center(
+                child: FittedBox(fit: BoxFit.scaleDown, child: TopStatusPill()),
+              ),
+            ),
+            // Every map button in one column down the left, the right side
+            // left to the map, the camera and the task buttons. Where one
+            // column does not fit above the sticks (landscape) it wraps into
+            // a second.
+            Positioned(
+              top: media.padding.top + 8,
+              left: math.max(12.0, media.padding.left),
+              bottom: sticksHidden ? 80 : sticksTop + 8,
+              child: Wrap(
+                direction: Axis.vertical,
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  if (widget.onHome != null)
+                    _MapButton(
+                      icon: AppIcons.house,
+                      tooltip: '回主畫面',
+                      onTap: () {
+                        haltDriving();
+                        widget.onHome!();
+                      },
+                    ),
+                  if (widget.onSettings != null)
+                    _MapButton(
+                      icon: AppIcons.settings,
+                      tooltip: '設定',
+                      onTap: () {
+                        haltDriving();
+                        widget.onSettings!();
+                      },
+                    ),
+                  _MapButton(
+                    icon: AppIcons.satellite,
+                    tooltip: mission.satelliteBaseMap ? '關閉衛星圖' : '打開衛星圖',
+                    on: mission.satelliteBaseMap,
+                    // Needs the map's GPS position to place the photo.
+                    onTap: mission.mapGeoAnchor == null
+                        ? null
+                        : mission.toggleSatelliteBaseMap,
+                  ),
+                  _MapButton(
+                    icon: _cameraOn ? AppIcons.video : AppIcons.videoOff,
+                    tooltip: _cameraOn ? '關閉前鏡頭' : '打開前鏡頭',
+                    on: _cameraOn,
+                    onTap: () => setState(() {
+                      _cameraOn = !_cameraOn;
+                      _cameraExpanded = false;
+                    }),
+                  ),
+                  _MapButton(
+                    icon: AppIcons.plus,
+                    tooltip: '新增物件',
+                    iconColor: const Color(0xFF1384E8),
+                    onTap: _openAddObject,
+                  ),
+                  _MapButton(
+                    icon: AppIcons.download,
+                    tooltip: '場地庫',
+                    onTap: () => _showSheet(const SiteLibrarySheet()),
+                  ),
+                ],
+              ),
+            ),
+            if (mission.drawMode)
               Positioned(
-                top: media.padding.top + 10,
                 left: 12,
                 right: 12,
-                child: const Center(child: TopStatusPill()),
-              ),
-              Positioned(
-                top: media.padding.top + 78,
-                left: 12,
-                child: _SatelliteToggle(
-                  on: mission.satelliteBaseMap,
-                  enabled: mission.mapGeoAnchor != null,
-                  onTap: mission.toggleSatelliteBaseMap,
+                bottom: 12,
+                child: _DrawControlBar(
+                  count: mission.draftPolygon.length,
+                  onUndo: mission.undoDraftVertex,
+                  onCancel: mission.cancelDraw,
+                  onCommit: mission.commitDraw,
                 ),
               ),
+            if (mission.editVertexMode)
               Positioned(
-                top: media.padding.top + 78 + 56,
                 left: 12,
-                child: _PhoneLocationToggle(
-                  on: phone.enabled,
-                  statusText: !phone.enabled
-                      ? null
-                      : phone.position == null
-                      ? '定位中…'
-                      : mission.mapGeoAnchor == null
-                      ? '地圖尚未對應 GPS，無法標示'
-                      : mission.shouldShowRobot
-                      ? '距割草機 ${_formatDistance(phoneWorld!, mission.robotPosition)}'
-                      : null,
-                  onTap: _togglePhoneLocation,
-                ),
-              ),
-              Positioned(
-                top: media.padding.top + 78 + 112,
-                left: 12,
-                child: _FollowRobotToggle(
-                  on: _followRobot,
-                  enabled: mission.shouldShowRobot,
-                  onTap: () => setState(() => _followRobot = !_followRobot),
-                ),
-              ),
-              Positioned(
-                top: media.padding.top + 78,
                 right: 12,
-                child: _MapActionRail(
-                  onAdd: _openAddObject,
-                  onSites: () =>
-                      _showAppSheet(context, const SiteLibrarySheet()),
-                  onLayers: () =>
-                      _showAppSheet(context, const _LayerToggleSheet()),
+                bottom: 12,
+                child: _VertexEditBar(
+                  count: mission.editPolygon.length,
+                  onCancel: mission.cancelVertexEdit,
+                  onCommit: mission.commitVertexEdit,
                 ),
               ),
-              if (mission.drawMode)
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: effectivePanelH + 12,
-                  child: _DrawControlBar(
-                    count: mission.draftPolygon.length,
-                    onUndo: mission.undoDraftVertex,
-                    onCancel: mission.cancelDraw,
-                    onCommit: mission.commitDraw,
-                  ),
+            // The joysticks: always on the map, over the bar's line.
+            Positioned.fill(
+              child: ManualControlOverlay(
+                key: _sticksKey,
+                mission: mission,
+                hidden: sticksHidden,
+                onLockedTap: _onLockedStickTap,
+                onMovingChanged: _onSticksMoving,
+              ),
+            ),
+            if (_cameraOn && widget.active)
+              AnimatedPositioned.fromRect(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeInOut,
+                rect: _cameraRect(size, media.padding, !isLandscape),
+                child: FrontCameraPip(
+                  mission: mission,
+                  expanded: _cameraExpanded,
+                  // Never flush with an edge any more: rounded all round.
+                  banner: false,
+                  onTap: () =>
+                      setState(() => _cameraExpanded = !_cameraExpanded),
                 ),
-              if (mission.editVertexMode)
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: effectivePanelH + 12,
-                  child: _VertexEditBar(
-                    count: mission.editPolygon.length,
-                    onCancel: mission.cancelVertexEdit,
-                    onCommit: mission.commitVertexEdit,
-                  ),
-                ),
-              if (mission.recordingType != null || mission.hasPendingRecordSave)
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: effectivePanelH + 12,
-                  child: MapRecordBar(onOpenManual: _enterDrive),
-                ),
-              // Portrait: centred above the panel (the tool columns sit at
-              // both sides of the map). Landscape leaves hardly any map above
-              // the panel, so it takes the top-right corner rather than
-              // cover the robot.
-              if (showManualEntry)
-                AnimatedPositioned(
-                  duration: layoutMotion,
-                  curve: Curves.easeInOut,
-                  left: isLandscape ? null : 0,
-                  right: isLandscape ? math.max(12.0, media.padding.right) : 0,
-                  top: isLandscape ? media.padding.top + 10 : null,
-                  bottom: isLandscape ? null : effectivePanelH + 12,
-                  child: isLandscape
-                      ? _ManualModeButton(onTap: _enterDrive)
-                      : Center(child: _ManualModeButton(onTap: _enterDrive)),
-                ),
-              // The bottom panel is not built at all in manual mode.
+              ),
+            // The phase's buttons, just above the right stick.
+            if (controlsShown)
               Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                  height: effectivePanelH,
-                  child: _MissionBottomPanel(
-                    isCollapsed: collapsed,
-                    onToggle: () =>
-                        setState(() => _panelCollapsed = !_panelCollapsed),
-                    onAddObject: _openAddObject,
-                  ),
+                right: math.max(18.0, media.padding.right),
+                bottom: sticksTop + 6,
+                child: MapTaskControls(
+                  phase: phase,
+                  onDetails: _openDetails,
+                  beforeModal: haltDriving,
+                  snackBottom: _snackBottom,
                 ),
               ),
-            ],
+            // A recording's time and points, under the robot status.
+            Positioned(
+              top: media.padding.top + 56,
+              left: 70,
+              right: 70,
+              child: const Center(child: MapRecordChip()),
+            ),
             if (popupOrigin != null && selectedRobot != null)
               Positioned(
                 left: popupOrigin.dx,
@@ -1417,359 +936,9 @@ class _MissionMapScreenState extends State<MissionMapScreen> {
                   onClose: _dismissPopup,
                 ),
               ),
-            // Manual mode: the joysticks, the camera and the recording
-            // controls float over the same map; only they take touches.
-            if (driving)
-              Positioned.fill(
-                child: ManualControlOverlay(
-                  mission: mission,
-                  recorder: context.read<RecorderProvider>(),
-                  onExit: _exitDrive,
-                ),
-              ),
           ],
         ),
       ),
-    );
-  }
-}
-
-/// The way into manual mode, floating just above the bottom panel.
-class _ManualModeButton extends StatelessWidget {
-  const _ManualModeButton({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: const Color(0xFF167A4A),
-      shape: const StadiumBorder(),
-      elevation: 6,
-      child: InkWell(
-        customBorder: const StadiumBorder(),
-        onTap: onTap,
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(AppIcons.gamepad2, color: Colors.white, size: 22),
-              SizedBox(width: 8),
-              Text(
-                '手動模式',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-String _formatUpdateTime(DateTime value) {
-  final diff = DateTime.now().difference(value);
-  if (diff.inMinutes < 1) {
-    return '剛剛';
-  }
-  if (diff.inHours < 1) {
-    return '${diff.inMinutes} 分鐘前';
-  }
-  if (diff.inHours < 24) {
-    return '${diff.inHours} 小時前';
-  }
-  final hour = value.hour.toString().padLeft(2, '0');
-  final minute = value.minute.toString().padLeft(2, '0');
-  return '$hour:$minute';
-}
-
-class _MowerMiniPainter extends CustomPainter {
-  const _MowerMiniPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final shadowPaint = Paint()..color = const Color(0x26000000);
-    final bodyPaint = Paint()..color = const Color(0xFFE7ECE8);
-    final trimPaint = Paint()..color = const Color(0xFF223029);
-    final greenPaint = Paint()..color = const Color(0xFF168848);
-    final orangePaint = Paint()..color = const Color(0xFFE26F22);
-
-    canvas.drawOval(
-      Rect.fromLTWH(size.width * 0.1, size.height * 0.68, size.width * 0.76, 9),
-      shadowPaint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          size.width * 0.12,
-          size.height * 0.28,
-          size.width * 0.68,
-          size.height * 0.34,
-        ),
-        const Radius.circular(16),
-      ),
-      bodyPaint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          size.width * 0.28,
-          size.height * 0.2,
-          size.width * 0.34,
-          size.height * 0.26,
-        ),
-        const Radius.circular(10),
-      ),
-      Paint()..color = const Color(0xFFB8C8C2),
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(size.width * 0.2, size.height * 0.55, 24, 13),
-        const Radius.circular(8),
-      ),
-      trimPaint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(size.width * 0.58, size.height * 0.52, 26, 15),
-        const Radius.circular(8),
-      ),
-      trimPaint,
-    );
-    canvas.drawCircle(
-      Offset(size.width * 0.73, size.height * 0.6),
-      7,
-      greenPaint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(size.width * 0.39, size.height * 0.16, 17, 7),
-        const Radius.circular(4),
-      ),
-      orangePaint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _MowerMiniPainter oldDelegate) => false;
-}
-
-class _ProgressRingPainter extends CustomPainter {
-  const _ProgressRingPainter({required this.progress});
-
-  final double progress;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = math.min(size.width, size.height) / 2 - 5;
-    final backgroundPaint = Paint()
-      ..color = const Color(0xFFE6ECE9)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 7
-      ..strokeCap = StrokeCap.round;
-    final progressPaint = Paint()
-      ..color = const Color(0xFF168848)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 7
-      ..strokeCap = StrokeCap.round;
-
-    canvas.drawCircle(center, radius, backgroundPaint);
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      -math.pi / 2,
-      math.pi * 2 * progress,
-      false,
-      progressPaint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _ProgressRingPainter oldDelegate) {
-    return progress != oldDelegate.progress;
-  }
-}
-
-class _SatelliteToggle extends StatelessWidget {
-  const _SatelliteToggle({
-    required this.on,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  final bool on;
-  final bool enabled;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final active = on && enabled;
-    return Material(
-      color: active
-          ? const Color(0xFF167A4A)
-          : Colors.black.withValues(alpha: 0.55),
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: enabled ? onTap : null,
-        child: SizedBox(
-          width: 46,
-          height: 46,
-          child: Icon(
-            on ? AppIcons.satellite : AppIcons.satellite,
-            color: enabled ? Colors.white : Colors.white38,
-            size: 24,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Keeps the map centred on the robot as it moves.
-class _FollowRobotToggle extends StatelessWidget {
-  const _FollowRobotToggle({
-    required this.on,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  final bool on;
-  final bool enabled;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final active = on && enabled;
-    return Tooltip(
-      message: on ? '停止跟隨割草機' : '跟隨割草機',
-      child: Material(
-        color: active
-            ? const Color(0xFF167A4A)
-            : Colors.black.withValues(alpha: 0.55),
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: enabled ? onTap : null,
-          child: SizedBox(
-            width: 46,
-            height: 46,
-            child: Icon(
-              AppIcons.crosshair,
-              color: enabled ? Colors.white : Colors.white38,
-              size: 24,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-String _formatDistance(MapPoint a, MapPoint b) {
-  final d = math.sqrt(math.pow(a.x - b.x, 2) + math.pow(a.y - b.y, 2));
-  return d < 1000 ? '${d.round()} m' : '${(d / 1000).toStringAsFixed(1)} km';
-}
-
-/// Shows / hides the phone's own position on the map, with a small status
-/// caption (locating, distance to the mower, or why it can't be placed).
-class _PhoneLocationToggle extends StatelessWidget {
-  const _PhoneLocationToggle({
-    required this.on,
-    required this.statusText,
-    required this.onTap,
-  });
-
-  final bool on;
-  final String? statusText;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Tooltip(
-          message: on ? '隱藏我的位置' : '顯示我的位置',
-          child: Material(
-            color: on
-                ? const Color(0xFF1A73E8)
-                : Colors.black.withValues(alpha: 0.55),
-            shape: const CircleBorder(),
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: onTap,
-              child: SizedBox(
-                width: 46,
-                height: 46,
-                child: Icon(
-                  on ? AppIcons.locateFixed : AppIcons.locate,
-                  color: Colors.white,
-                  size: 24,
-                ),
-              ),
-            ),
-          ),
-        ),
-        if (statusText != null) ...[
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Text(
-              statusText!,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-class _MapActionRail extends StatelessWidget {
-  const _MapActionRail({
-    required this.onAdd,
-    required this.onSites,
-    required this.onLayers,
-  });
-
-  final VoidCallback onAdd;
-  final VoidCallback onSites;
-  final VoidCallback onLayers;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _RoundIconButton(
-          icon: AppIcons.plus,
-          tooltip: '新增物件',
-          color: const Color(0xFF1384E8),
-          onTap: onAdd,
-        ),
-        const SizedBox(height: 10),
-        _RoundIconButton(
-          icon: AppIcons.library,
-          tooltip: '場地庫',
-          onTap: onSites,
-        ),
-        const SizedBox(height: 10),
-        _RoundIconButton(icon: AppIcons.layers, tooltip: '圖層', onTap: onLayers),
-      ],
     );
   }
 }
@@ -1800,58 +969,64 @@ class _DrawControlBar extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTapUp: (_) {},
-      child: Material(
-        color: Colors.black.withValues(alpha: 0.78),
-        borderRadius: BorderRadius.circular(18),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            children: [
-              const Icon(
-                AppIcons.mapPinPen,
-                color: Color(0xFFE5852F),
-                size: 18,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  '點地圖加頂點 · $count 點',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 13,
+      // A white card on a soft shadow, like the map's other panels.
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: AppStyle.floatShadow,
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          borderRadius: BorderRadius.circular(20),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                const Icon(
+                  AppIcons.mapPinPen,
+                  color: Color(0xFFE5852F),
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '點地圖加頂點 · $count 點',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppStyle.ink,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
                   ),
                 ),
-              ),
-              TextButton(
-                onPressed: count > 0 ? onUndo : null,
-                style: compact.copyWith(
-                  foregroundColor: WidgetStateProperty.all(Colors.white70),
-                ),
-                child: const Text('復原'),
-              ),
-              TextButton(
-                onPressed: onCancel,
-                style: compact.copyWith(
-                  foregroundColor: WidgetStateProperty.all(
-                    const Color(0xFFB0BEC5),
+                TextButton(
+                  onPressed: count > 0 ? onUndo : null,
+                  style: compact.copyWith(
+                    foregroundColor: WidgetStateProperty.all(AppStyle.ink),
                   ),
+                  child: const Text('復原'),
                 ),
-                child: const Text('取消'),
-              ),
-              const SizedBox(width: 4),
-              FilledButton(
-                onPressed: canSave ? onCommit : null,
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                TextButton(
+                  onPressed: onCancel,
+                  style: compact.copyWith(
+                    foregroundColor: WidgetStateProperty.all(AppStyle.muted),
+                  ),
+                  child: const Text('取消'),
                 ),
-                child: const Text('閉合儲存'),
-              ),
-            ],
+                const SizedBox(width: 4),
+                FilledButton(
+                  onPressed: canSave ? onCommit : null,
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('閉合儲存'),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1875,177 +1050,54 @@ class _VertexEditBar extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTapUp: (_) {},
-      child: Material(
-        color: Colors.black.withValues(alpha: 0.78),
-        borderRadius: BorderRadius.circular(18),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            children: [
-              const Icon(AppIcons.move, color: Color(0xFF1384E8), size: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  '拖曳頂點 · 長按刪除 · $count 點',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: onCancel,
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  foregroundColor: const Color(0xFFB0BEC5),
-                ),
-                child: const Text('取消'),
-              ),
-              const SizedBox(width: 4),
-              FilledButton(
-                onPressed: onCommit,
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: const Text('完成儲存'),
-              ),
-            ],
-          ),
+      // A white card on a soft shadow, like the map's other panels.
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: AppStyle.floatShadow,
         ),
-      ),
-    );
-  }
-}
-
-class _RoundIconButton extends StatelessWidget {
-  const _RoundIconButton({
-    required this.icon,
-    required this.tooltip,
-    required this.onTap,
-    this.color,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onTap;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) {
-    final foreground = color ?? const Color(0xFF263238);
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: Colors.white.withValues(alpha: 0.94),
-        shape: const CircleBorder(),
-        elevation: 7,
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onTap,
-          child: SizedBox(
-            width: 48,
-            height: 48,
-            child: Icon(icon, color: foreground, size: 26),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MissionBottomPanel extends StatelessWidget {
-  const _MissionBottomPanel({
-    required this.isCollapsed,
-    required this.onToggle,
-    required this.onAddObject,
-  });
-
-  final bool isCollapsed;
-  final VoidCallback onToggle;
-  final VoidCallback onAddObject;
-
-  @override
-  Widget build(BuildContext context) {
-    final mission = context.watch<MissionMockProvider>();
-
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x26000000),
-            blurRadius: 24,
-            offset: Offset(0, -8),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
-          // While the panel animates open it is briefly too short for the tab
-          // bar and banner; show only the handle until there is room.
-          child: LayoutBuilder(
-            builder: (context, constraints) => Column(
-              mainAxisSize: MainAxisSize.min,
+        child: Material(
+          type: MaterialType.transparency,
+          borderRadius: BorderRadius.circular(20),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
               children: [
-                // Tappable handle row
-                GestureDetector(
-                  onTap: onToggle,
-                  behavior: HitTestBehavior.opaque,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFD0D7DA),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        AnimatedRotation(
-                          turns: isCollapsed ? 0.5 : 0,
-                          duration: const Duration(milliseconds: 280),
-                          curve: Curves.easeInOut,
-                          child: const Icon(
-                            AppIcons.chevronDown,
-                            size: 18,
-                            color: Color(0xFFB0BEC5),
-                          ),
-                        ),
-                      ],
+                const Icon(AppIcons.move, color: Color(0xFF1384E8), size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '拖曳頂點 · 長按刪除 · $count 點',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppStyle.ink,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
                     ),
                   ),
                 ),
-                if (!isCollapsed && constraints.maxHeight >= 160) ...[
-                  const MissionModeBar(),
-                  MissionNextStepBanner(onAddObject: onAddObject),
-                  const SizedBox(height: 10),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      physics: const BouncingScrollPhysics(),
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 180),
-                        child: _ModePanel(
-                          key: ValueKey(mission.selectedMode),
-                          mode: mission.selectedMode,
-                        ),
-                      ),
-                    ),
+                TextButton(
+                  onPressed: onCancel,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    foregroundColor: AppStyle.muted,
                   ),
-                ],
+                  child: const Text('取消'),
+                ),
+                const SizedBox(width: 4),
+                FilledButton(
+                  onPressed: onCommit,
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('完成儲存'),
+                ),
               ],
             ),
           ),
@@ -2055,106 +1107,56 @@ class _MissionBottomPanel extends StatelessWidget {
   }
 }
 
-class _ModePanel extends StatelessWidget {
-  const _ModePanel({super.key, required this.mode});
-
-  final MissionMode mode;
-
-  @override
-  Widget build(BuildContext context) {
-    switch (mode) {
-      case MissionMode.objects:
-        return const MapObjectsSheet();
-      case MissionMode.plan:
-        return const PlanningControlSheet();
-      case MissionMode.run:
-        return const ExecutionControlSheet();
-      case MissionMode.logs:
-        return const OperationLogSheet();
-    }
-  }
-}
-
-class _LayerToggleSheet extends StatelessWidget {
-  const _LayerToggleSheet();
-
-  @override
-  Widget build(BuildContext context) {
-    final mission = context.watch<MissionMockProvider>();
-
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const _SheetHandle(),
-            const SizedBox(height: 18),
-            const Text(
-              '圖層',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 12),
-            _LayerSwitch(
-              title: '工作區',
-              value: mission.layers.zones,
-              onChanged: (value) => mission.updateLayer(zones: value),
-            ),
-            _LayerSwitch(
-              title: '禁入區',
-              value: mission.layers.risks,
-              onChanged: (value) => mission.updateLayer(risks: value),
-            ),
-            _LayerSwitch(
-              title: '通道',
-              value: mission.layers.channels,
-              onChanged: (value) => mission.updateLayer(channels: value),
-            ),
-            _LayerSwitch(
-              title: '覆蓋路徑',
-              value: mission.layers.coverage,
-              onChanged: (value) => mission.updateLayer(coverage: value),
-            ),
-            _LayerSwitch(
-              title: '風險線段',
-              value: mission.layers.invalidSegments,
-              onChanged: (value) => mission.updateLayer(invalidSegments: value),
-            ),
-            _LayerSwitch(
-              title: 'AI 強化衛星圖',
-              subtitle: '細節由 AI 推算，僅供參考，請勿依此描邊界',
-              value: mission.aiBaseMap,
-              onChanged: mission.setAiBaseMap,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _LayerSwitch extends StatelessWidget {
-  const _LayerSwitch({
-    required this.title,
-    this.subtitle,
-    required this.value,
-    required this.onChanged,
+/// A button in the map's left column, in the home page's style: white and
+/// round on a soft shadow; green while what it turns on is on; greyed out
+/// when it cannot be used.
+class _MapButton extends StatelessWidget {
+  const _MapButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.on = false,
+    this.iconColor,
   });
 
-  final String title;
-  final String? subtitle;
-  final bool value;
-  final ValueChanged<bool> onChanged;
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onTap;
+  final bool on;
+  final Color? iconColor;
 
   @override
   Widget build(BuildContext context) {
-    return SwitchListTile(
-      contentPadding: EdgeInsets.zero,
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
-      subtitle: subtitle == null ? null : Text(subtitle!),
-      value: value,
-      onChanged: onChanged,
+    final enabled = onTap != null;
+    final lit = on && enabled;
+    final foreground = !enabled
+        ? const Color(0xFFB0BEC5)
+        : lit
+        ? Colors.white
+        : iconColor ?? AppStyle.ink;
+    return Tooltip(
+      message: tooltip,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: lit ? null : Colors.white,
+          gradient: lit ? AppStyle.heroGradient : null,
+          boxShadow: lit ? AppStyle.glow(AppStyle.green) : AppStyle.floatShadow,
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onTap,
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: Icon(icon, color: foreground, size: 22),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -2169,14 +1171,9 @@ class _DemoModeTile extends StatelessWidget {
       contentPadding: EdgeInsets.zero,
       title: const Text(
         'Demo 模式',
-        style: TextStyle(fontWeight: FontWeight.w900),
-      ),
-      subtitle: Text(
-        mission.mockDataEnabled
-            ? '已明確隔離為 demo，不會送出真機任務'
-            : '關閉 demo，畫面只顯示 ROS 真實資料',
-        style: const TextStyle(
-          color: Color(0xFF78909C),
+        style: TextStyle(
+          color: AppStyle.ink,
+          fontSize: 15,
           fontWeight: FontWeight.w700,
         ),
       ),
@@ -2207,45 +1204,31 @@ class _InfoRow extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
         children: [
-          Icon(icon, color: const Color(0xFF167A4A)),
+          Icon(icon, color: AppStyle.muted, size: 20),
           const SizedBox(width: 12),
+          Text(
+            title,
+            style: const TextStyle(
+              color: AppStyle.ink,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(width: 12),
+          // The value on the same line, not a second line of small print.
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-                Text(
-                  detail,
-                  style: const TextStyle(
-                    color: Color(0xFF78909C),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
+            child: Text(
+              detail,
+              textAlign: TextAlign.right,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF78909C),
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _SheetHandle extends StatelessWidget {
-  const _SheetHandle();
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Container(
-        width: 42,
-        height: 4,
-        decoration: BoxDecoration(
-          color: const Color(0xFFD0D7DA),
-          borderRadius: BorderRadius.circular(2),
-        ),
       ),
     );
   }

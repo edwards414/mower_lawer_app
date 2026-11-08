@@ -17,9 +17,7 @@ void main() {
     final mission = _ManualMissionSpy();
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: ManualControlOverlay(mission: mission, onExit: () {}),
-        ),
+        home: Scaffold(body: ManualControlOverlay(mission: mission)),
       ),
     );
 
@@ -55,9 +53,7 @@ void main() {
     final mission = _ManualMissionSpy();
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: ManualControlOverlay(mission: mission, onExit: () {}),
-        ),
+        home: Scaffold(body: ManualControlOverlay(mission: mission)),
       ),
     );
 
@@ -93,9 +89,7 @@ void main() {
     final mission = _ManualMissionSpy();
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: ManualControlOverlay(mission: mission, onExit: () {}),
-        ),
+        home: Scaffold(body: ManualControlOverlay(mission: mission)),
       ),
     );
 
@@ -131,9 +125,7 @@ void main() {
     final mission = _ManualMissionSpy();
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: ManualControlOverlay(mission: mission, onExit: () {}),
-        ),
+        home: Scaffold(body: ManualControlOverlay(mission: mission)),
       ),
     );
 

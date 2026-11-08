@@ -60,7 +60,7 @@ void main() {
     await ros.close();
   });
 
-  testWidgets('satellite follow keeps the robot centred until dragged', (
+  testWidgets('satellite follow pauses for a drag, then picks up again', (
     tester,
   ) async {
     final (ros, mission) = await _missionWithRobotAt(tester, 36, 4);
@@ -75,6 +75,7 @@ void main() {
               anchor: const GeoAnchor(originLat: 25.0, originLon: 121.5),
               followRobot: follow,
               onFollowRobotChanged: (on) => setState(() => follow = on),
+              resumeFollowAfter: const Duration(seconds: 8),
             ),
           ),
         ),
@@ -101,6 +102,19 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(robot(), isNot(offsetMoreOrLessEquals(_centre, epsilon: 20)));
+
+    // Another drag before the wait is up starts it over.
+    await tester.pump(const Duration(seconds: 5));
+    await tester.dragFrom(const Offset(200, 560), const Offset(-60, 0));
+    await tester.pump(const Duration(seconds: 5));
+    expect(follow, isFalse);
+
+    // Left alone, it goes back to the robot by itself.
+    await tester.pump(const Duration(seconds: 4));
+    expect(follow, isTrue);
+    await tester.pump();
+    await tester.pump();
+    expect(robot(), offsetMoreOrLessEquals(_centre, epsilon: 0.5));
 
     await tester.pumpWidget(const SizedBox.shrink());
     mission.dispose();

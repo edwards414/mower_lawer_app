@@ -1,79 +1,91 @@
 import 'package:flutter/material.dart';
-import '../utils/app_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
+import '../utils/app_icons.dart';
+import '../utils/app_style.dart';
 
+/// The robot's state at the top of the map, in the home page's style: a
+/// white pill on a soft shadow, each item a coloured icon and a dark label.
 class TopStatusPill extends StatelessWidget {
   const TopStatusPill({super.key});
+
+  static const _ok = Color(0xFF19A763);
+  static const _idle = Color(0xFF8A9691);
 
   @override
   Widget build(BuildContext context) {
     final mission = context.watch<MissionMockProvider>();
+    final demo = mission.mockDataEnabled;
     final battery = mission.batteryPercent;
 
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.94),
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: const [
-          BoxShadow(
-            blurRadius: 18,
-            color: Color(0x22000000),
-            offset: Offset(0, 8),
-          ),
-        ],
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: AppStyle.floatShadow,
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
             _StatusItem(
               icon: AppIcons.network,
-              label: mission.mockDataEnabled
+              label: demo
                   ? 'Demo'
                   : mission.robotOnline
-                  ? 'Online'
+                  ? '在線'
                   : mission.rosConnected
-                  ? 'Offline'
-                  : 'Wait',
-              color: mission.mockDataEnabled
-                  ? const Color(0xFFE08C1A)
+                  ? '離線'
+                  : '連線中',
+              color: demo
+                  ? AppStyle.amber
                   : mission.robotOnline
-                  ? const Color(0xFF19A763)
-                  : const Color(0xFF607D8B),
+                  ? _ok
+                  : _idle,
             ),
-            const SizedBox(width: 10),
+            const _Divider(),
             _StatusItem(
               icon: AppIcons.route,
               label: mission.navStatusLabel(),
               color: mission.navStatus == NavMockStatus.executing
-                  ? const Color(0xFF167A4A)
-                  : const Color(0xFF607D8B),
+                  ? AppStyle.green
+                  : _idle,
             ),
-            const SizedBox(width: 10),
+            const _Divider(),
             _StatusItem(
               icon: AppIcons.locateFixed,
-              label: mission.mockDataEnabled
-                  ? 'Demo GPS'
+              label: demo || mission.hasFreshGpsFix ? 'GPS' : '無定位',
+              color: demo
+                  ? AppStyle.amber
                   : mission.hasFreshGpsFix
-                  ? 'GPS'
-                  : 'No fix',
-              color: mission.mockDataEnabled
-                  ? const Color(0xFFE08C1A)
-                  : mission.hasFreshGpsFix
-                  ? const Color(0xFF19A763)
-                  : const Color(0xFF607D8B),
+                  ? _ok
+                  : _idle,
             ),
-            const SizedBox(width: 10),
-            _BatteryStatus(battery: battery),
+            const _Divider(),
+            _StatusItem(
+              icon: _batteryIcon(battery),
+              label: battery == null ? '--' : '${battery.round()}%',
+              color: battery == null
+                  ? _idle
+                  : battery < 35
+                  ? AppStyle.amber
+                  : _ok,
+            ),
           ],
         ),
       ),
     );
+  }
+
+  static IconData _batteryIcon(double? value) {
+    if (value == null) return AppIcons.battery;
+    if (value < 20) return AppIcons.batteryWarning;
+    if (value < 60) return AppIcons.batteryMedium;
+    return AppIcons.batteryFull;
   }
 }
 
@@ -93,15 +105,15 @@ class _StatusItem extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 18, color: color),
-        const SizedBox(width: 4),
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 5),
         Text(
           label,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: color,
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
+          style: const TextStyle(
+            color: AppStyle.ink,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ],
@@ -109,47 +121,14 @@ class _StatusItem extends StatelessWidget {
   }
 }
 
-class _BatteryStatus extends StatelessWidget {
-  const _BatteryStatus({required this.battery});
-
-  final double? battery;
+class _Divider extends StatelessWidget {
+  const _Divider();
 
   @override
-  Widget build(BuildContext context) {
-    final battery = this.battery;
-    final color = battery == null
-        ? const Color(0xFF607D8B)
-        : battery < 35
-        ? const Color(0xFFE08C1A)
-        : const Color(0xFF19A763);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(
-          battery == null ? AppIcons.battery : _batteryIcon(battery),
-          size: 18,
-          color: color,
-        ),
-        const SizedBox(width: 4),
-        Text(
-          battery == null ? '--' : '${battery.toStringAsFixed(0)}%',
-          style: TextStyle(
-            color: color,
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      ],
-    );
-  }
-
-  IconData _batteryIcon(double value) {
-    if (value < 20) {
-      return AppIcons.batteryWarning;
-    }
-    if (value < 60) {
-      return AppIcons.batteryMedium;
-    }
-    return AppIcons.batteryFull;
-  }
+  Widget build(BuildContext context) => Container(
+    width: 1,
+    height: 14,
+    margin: const EdgeInsets.symmetric(horizontal: 10),
+    color: AppStyle.line,
+  );
 }

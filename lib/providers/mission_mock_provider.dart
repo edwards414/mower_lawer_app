@@ -326,6 +326,59 @@ class MissionMockProvider extends ChangeNotifier {
       !_navOperationActive &&
       !_recordCommandPending &&
       !_planningMutationPending;
+
+  /// Why the on-map joysticks are locked right now, in the operator's words;
+  /// null exactly when [canDriveManually]. Follows its terms one by one: a
+  /// lost link first (nothing else can be fixed without it), then the mission
+  /// ones, which the operator can do something about.
+  String? get manualDriveBlockReason {
+    if (canDriveManually) return null;
+    if (_connectionSettingsPending) return '連線設定中';
+    if (!mockDataEnabled && (!rosConnected || !robotOnline)) return '連線中斷';
+    if (_cancelRequestInFlight || _cancelPending) return '等待確認停止';
+    if (_navOperationActive) return '割草中';
+    if (_planningMutationPending) return '生成路徑中';
+    if (mockDataEnabled) return '示範模式';
+    if (_recordCommandPending) return '處理中';
+    if (!hasFreshTerminalNavStatus) return '確認導航狀態';
+    if (!_hasFreshManualCommandClock) return '等待機器人回應';
+    if (_manualSessionNeedsNeutral) return '請先放開搖桿';
+    return '暫時不能駕駛';
+  }
+
+  /// The joysticks are locked because a mission owns the robot (and no stop
+  /// is on its way yet): the operator has to stop the task to drive.
+  bool get manualDriveLockedByMission =>
+      !canDriveManually &&
+      _navOperationActive &&
+      !_cancelRequestInFlight &&
+      !_cancelPending;
+
+  /// What keeps 開始割草 disabled; null when [canStartMission].
+  String? get startBlockReason {
+    if (canStartMission) return null;
+    if (zones.isEmpty) return '還沒有工作區';
+    if (_navOperationActive) return '任務進行中';
+    if (_planningMutationPending) return '生成路徑中';
+    if (recordingType != null ||
+        _recordCommandPending ||
+        hasPendingRecordSave) {
+      return '記錄進行中';
+    }
+    if (manualControlActive) return '請先放開搖桿';
+    if (_connectionSettingsPending) return '連線設定中';
+    final missing = [
+      if (!canControlRobot) '機器人連線',
+      if (!hasFreshTerminalNavStatus) '導航狀態',
+      if (!_navigationAdmissionReady)
+        _navigationAdmissionBlockReason ?? '導航安全條件',
+      if (!hasFreshRobotPose) '定位',
+      if (!hasFreshGpsFix) 'GPS',
+      if (!coverageReady || !_selectedZoneHasCoveragePath) '覆蓋路徑',
+    ];
+    return missing.isEmpty ? '機器人尚未就緒' : '還不能開始：${missing.join('、')}';
+  }
+
   bool get canStartMission =>
       _localStartReady &&
       (mockDataEnabled || (_liveStartReady && _selectedZoneHasCoveragePath));
@@ -666,9 +719,8 @@ class MissionMockProvider extends ChangeNotifier {
   }
 
   /// Why [whepUrl] is empty, for the camera placeholder.
-  String get cameraUnavailableReason => _rosbridge.framed
-      ? '遠端連線尚未就緒'
-      : '尚未設定機器人 IP';
+  String get cameraUnavailableReason =>
+      _rosbridge.framed ? '遠端連線尚未就緒' : '尚未設定機器人 IP';
 
   /// Headers the camera's WHEP / TURN requests must carry (pairing
   /// signature through the backend, nothing on the LAN). A build-time
@@ -3816,9 +3868,7 @@ class MissionMockProvider extends ChangeNotifier {
       }
       _addLog(
         'ERROR',
-        response.message.isEmpty
-            ? '$label 開始結果未確認，正在查詢導航狀態'
-            : response.message,
+        response.message.isEmpty ? '$label 開始結果未確認，正在查詢導航狀態' : response.message,
       );
       if (_ambiguousStartCancelRequired) {
         _scheduleAmbiguousCancelRetry();
@@ -4555,6 +4605,9 @@ class MissionMockProvider extends ChangeNotifier {
   }
 
   void _restoreDemoData() {
+    // The demo lawn sits on the test site, so the satellite map has
+    // something real under it.
+    mapGeoAnchor = _demoGeoAnchor;
     zones = List<MissionZone>.of(_demoZones);
     riskZones = List<MissionZone>.of(_demoRiskZones);
     channels = List<ChannelPath>.of(_demoChannels);
@@ -4774,6 +4827,13 @@ double _yawFromQuaternion(Map<String, dynamic> q) {
 List<List<MapPoint>> _copyRows(List<List<MapPoint>> rows) {
   return rows.map((row) => List<MapPoint>.of(row)).toList();
 }
+
+/// The test site (its `/adapter/map_datum` origin).
+const _demoGeoAnchor = GeoAnchor(
+  originLat: 23.6939508,
+  originLon: 120.5376539,
+  source: 'demo',
+);
 
 const _demoZones = [
   MissionZone(

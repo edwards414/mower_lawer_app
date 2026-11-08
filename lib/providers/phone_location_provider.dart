@@ -7,8 +7,9 @@ import 'package:latlong2/latlong.dart';
 enum PhoneLocationStatus { off, locating, active, denied, serviceDisabled }
 
 /// The phone's own GPS fix, for showing "where am I" on the map next to the
-/// robot. Off until the user asks for it, so the location permission prompt
-/// only appears in response to that tap.
+/// robot. There is no switch for it: the map turns it on by itself whenever
+/// the phone allows it ([start], asking for the permission once), and leaves
+/// it off, quietly, when it does not.
 class PhoneLocationProvider extends ChangeNotifier {
   StreamSubscription<Position>? _sub;
   PhoneLocationStatus _status = PhoneLocationStatus.off;
@@ -29,17 +30,27 @@ class PhoneLocationProvider extends ChangeNotifier {
 
   Future<void> toggle() => enabled ? stop() : start();
 
-  Future<void> start() async {
+  /// Starts following the phone's position. With [prompt] false it never
+  /// asks for the permission: it only starts if the phone already allows it.
+  Future<void> start({bool prompt = true}) async {
     if (enabled) return;
     _set(PhoneLocationStatus.locating);
 
-    if (!await Geolocator.isLocationServiceEnabled()) {
-      _set(PhoneLocationStatus.serviceDisabled);
+    LocationPermission permission;
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _set(PhoneLocationStatus.serviceDisabled);
+        return;
+      }
+      permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied && prompt) {
+        permission = await Geolocator.requestPermission();
+      }
+    } catch (e) {
+      // No location support here (a platform without the plugin): stay off.
+      debugPrint('[PhoneLocation] unavailable: $e');
+      _set(PhoneLocationStatus.denied);
       return;
-    }
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
     }
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever ||

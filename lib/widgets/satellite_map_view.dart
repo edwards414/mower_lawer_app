@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -10,6 +11,8 @@ import '../models/geo_anchor.dart';
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 import '../services/ai_basemap_service.dart';
+import '../services/google_map_tiles.dart';
+import '../services/imagery_offset_store.dart';
 import 'base_station_marker.dart';
 import 'breathing_marker.dart';
 
@@ -26,11 +29,16 @@ class SatelliteMapView extends StatefulWidget {
     this.phoneAccuracyM,
     this.followRobot = false,
     this.onFollowRobotChanged,
+    this.resumeFollowAfter,
     this.lockPan = false,
     this.bottomInset = 0,
     this.animateMarker = true,
     this.aiEnhance = false,
     this.aiService,
+    this.googleTiles,
+    this.googleOffset,
+    this.nlscCompare = 0,
+    this.offsetStore,
   });
 
   final MissionMockProvider mission;
@@ -44,6 +52,12 @@ class SatelliteMapView extends StatefulWidget {
   /// following; a one-finger drag reports `false` to [onFollowRobotChanged].
   final bool followRobot;
   final ValueChanged<bool>? onFollowRobotChanged;
+
+  /// How long the map stays where a drag left it before it reports `true`
+  /// to [onFollowRobotChanged] again (timed from the last drag or fling, so
+  /// it never pulls away under a finger). Null: a drag ends following for
+  /// good.
+  final Duration? resumeFollowAfter;
 
   /// Zoom only: no one-finger pan, so a thumb brushing the map while driving
   /// cannot pull it off the robot.
@@ -63,6 +77,21 @@ class SatelliteMapView extends StatefulWidget {
 
   /// Injected for tests; by default one is created on first use.
   final AiBaseMapService? aiService;
+
+  /// Google's satellite tiles, used in place of NLSC's when the build has a
+  /// key. Injected for tests; by default [GoogleMapTiles.shared].
+  final GoogleMapTiles? googleTiles;
+
+  /// Where Google's photo is moved to; by default the one saved for the site
+  /// in [offsetStore]. The alignment page passes the one being set.
+  final ImageryOffset? googleOffset;
+
+  /// The NLSC photo laid over Google's at this opacity (0: not at all), to
+  /// align one with the other. Only while Google's tiles are up.
+  final double nlscCompare;
+
+  /// Injected for tests; by default [ImageryOffsetStore.shared].
+  final ImageryOffsetStore? offsetStore;
 
   /// NLSC (內政部國土測繪中心) PHOTO2 orthophoto: free under the Open
   /// Government Data License (attribution required), no token, Taiwan only.
@@ -85,6 +114,26 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
   /// A pinch or double-tap zoom is running; recentring now would fight it.
   bool _zooming = false;
   bool _recentreScheduled = false;
+
+  /// Counts down to following again after the user panned away.
+  Timer? _resumeFollow;
+
+  /// Google's tiles once a session is open; NLSC's until then (and for good
+  /// with no key, or when Google refuses).
+  GoogleTileSource? _google;
+  TileProvider? _googleProvider;
+
+  /// Google has not answered yet.
+  bool _googlePending = false;
+
+  /// The alignment saved for this site.
+  ImageryOffset _savedOffset = ImageryOffset.zero;
+  ImageryOffsetStore get _offsets =>
+      widget.offsetStore ?? ImageryOffsetStore.shared;
+
+  /// The AI tiles sharpen NLSC's photo; over Google's they would only hide
+  /// it, so they wait until Google has said no.
+  bool get _aiOn => widget.aiEnhance && _google == null && !_googlePending;
 
   AiBaseMapService? _ownAi;
   AiBaseMapService get _ai =>
@@ -115,13 +164,60 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
   GeoAnchor get anchor => widget.anchor;
 
   @override
+  void initState() {
+    super.initState();
+    _loadGoogle();
+    _offsets.addListener(_loadOffset);
+    _loadOffset();
+  }
+
+  /// The site's saved alignment; again whenever one is saved.
+  Future<void> _loadOffset() async {
+    final anchor = widget.anchor;
+    final offset = await _offsets.load(anchor);
+    if (!mounted || _otherSite(widget.anchor, anchor)) return;
+    if (offset != _savedOffset) setState(() => _savedOffset = offset);
+  }
+
+  @override
   void didUpdateWidget(SatelliteMapView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.followRobot) _scheduleRecentre();
+    if (_otherSite(widget.anchor, oldWidget.anchor)) {
+      _loadGoogle();
+      _loadOffset();
+    }
+  }
+
+  /// The datum is re-sent as a new object; only a move to another place
+  /// (more than ~100 m) changes Google's copyright and depth.
+  static bool _otherSite(GeoAnchor a, GeoAnchor b) =>
+      (a.originLat - b.originLat).abs() > 1e-3 ||
+      (a.originLon - b.originLon).abs() > 1e-3;
+
+  /// Opens Google's tiles for this site (its copyright and depth are per
+  /// place). The NLSC photo stays up meanwhile, and if it fails.
+  Future<void> _loadGoogle() async {
+    final tiles = widget.googleTiles ?? GoogleMapTiles.shared;
+    if (!tiles.configured) return;
+    final anchor = widget.anchor;
+    _googlePending = true;
+    final source = await tiles.sourceFor(_contentBounds());
+    if (!mounted || _otherSite(widget.anchor, anchor)) return;
+    setState(() {
+      _googlePending = false;
+      if (source != null) {
+        _google = source;
+        // A copy: flutter_map writes its User-Agent into the map it gets.
+        _googleProvider = NetworkTileProvider(headers: {...source.headers});
+      }
+    });
   }
 
   @override
   void dispose() {
+    _offsets.removeListener(_loadOffset);
+    _resumeFollow?.cancel();
     _mapController.dispose();
     for (final image in _aiTiles.values) {
       image.dispose();
@@ -133,9 +229,7 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
   /// Brings the AI tiles in line with [bounds]: drops the ones that left it
   /// and starts loading the missing ones (after this frame; never mid-build).
   void _syncAiTiles(LatLngBounds bounds) {
-    final wanted = widget.aiEnhance
-        ? SrTile.covering(bounds).toSet()
-        : const <SrTile>{};
+    final wanted = _aiOn ? SrTile.covering(bounds).toSet() : const <SrTile>{};
     if (setEquals(wanted, _aiWanted)) return;
     _aiWanted = wanted;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -204,8 +298,23 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
         if (widget.followRobot) _scheduleRecentre();
       case MapEventMoveStart(source: MapEventSource.dragStart):
         // A one-finger pan means the user wants to look somewhere else.
+        _resumeFollow?.cancel();
         if (widget.followRobot) widget.onFollowRobotChanged?.call(false);
+      case MapEventMoveEnd(source: MapEventSource.dragEnd) ||
+          MapEventFlingAnimationEnd():
+        _scheduleResumeFollow();
     }
+  }
+
+  void _scheduleResumeFollow() {
+    final after = widget.resumeFollowAfter;
+    _resumeFollow?.cancel();
+    if (after == null) return;
+    _resumeFollow = Timer(after, () {
+      if (mounted && !widget.followRobot) {
+        widget.onFollowRobotChanged?.call(true);
+      }
+    });
   }
 
   LatLng _ll(MapPoint p) => anchor.worldToLatLng(p.x, p.y);
@@ -404,6 +513,7 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
     _syncLayers();
 
     final bounds = _contentBounds();
+    final google = _google;
     _syncAiTiles(bounds);
     final aiOverlays = [
       for (final e in _aiTiles.entries)
@@ -445,11 +555,33 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
         ),
       ),
       children: [
-        TileLayer(
-          urlTemplate: SatelliteMapView.nlscTileUrl,
-          userAgentPackageName: 'com.example.mower_stdio',
-          maxNativeZoom: SatelliteMapView.nlscMaxNativeZoom,
-        ),
+        if (google != null)
+          GroundShift(
+            offset: widget.googleOffset ?? _savedOffset,
+            child: TileLayer(
+              // Keyed: a new session is a new set of tiles.
+              key: ValueKey(google.urlTemplate),
+              urlTemplate: google.urlTemplate,
+              tileProvider: _googleProvider,
+              maxNativeZoom: google.maxNativeZoom,
+              userAgentPackageName: 'com.example.mower_stdio',
+            ),
+          )
+        else
+          TileLayer(
+            urlTemplate: SatelliteMapView.nlscTileUrl,
+            userAgentPackageName: 'com.example.mower_stdio',
+            maxNativeZoom: SatelliteMapView.nlscMaxNativeZoom,
+          ),
+        if (google != null && widget.nlscCompare > 0)
+          Opacity(
+            opacity: widget.nlscCompare.clamp(0.0, 1.0),
+            child: TileLayer(
+              urlTemplate: SatelliteMapView.nlscTileUrl,
+              userAgentPackageName: 'com.example.mower_stdio',
+              maxNativeZoom: SatelliteMapView.nlscMaxNativeZoom,
+            ),
+          ),
         if (aiOverlays.isNotEmpty) OverlayImageLayer(overlayImages: aiOverlays),
         if (_gridLayer != null) _gridLayer!,
         if (_zoneLayer != null) _zoneLayer!,
@@ -497,7 +629,7 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
               ),
           ],
         ),
-        if (widget.aiEnhance && _aiLoading.isNotEmpty)
+        if (_aiOn && _aiLoading.isNotEmpty)
           Align(
             alignment: Alignment.bottomLeft,
             child: Padding(
@@ -514,17 +646,111 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
               ),
             ),
           ),
-        Padding(
-          padding: EdgeInsets.only(bottom: widget.bottomInset),
-          child: RichAttributionWidget(
-            attributions: [
-              const TextSourceAttribution('© 內政部國土測繪中心'),
-              if (widget.aiEnhance)
-                const TextSourceAttribution('AI 強化影像，細節僅供參考'),
-            ],
+        if (google != null)
+          _GoogleAttribution(
+            copyright: google.copyright,
+            bottom: widget.bottomInset + MediaQuery.paddingOf(context).bottom,
+          )
+        else
+          Padding(
+            padding: EdgeInsets.only(bottom: widget.bottomInset),
+            child: RichAttributionWidget(
+              attributions: [
+                const TextSourceAttribution('© 內政部國土測繪中心'),
+                if (_aiOn) const TextSourceAttribution('AI 強化影像，細節僅供參考'),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Draws a map layer moved by [offset] on the ground: Google's photo, placed
+/// where things really are. The map does not rotate (rotation is off), so a
+/// screen shift is all it takes.
+class GroundShift extends StatelessWidget {
+  const GroundShift({super.key, required this.offset, required this.child});
+
+  final ImageryOffset offset;
+  final Widget child;
+
+  /// Screen pixels for [offset] at [latitude] and [zoom] (Web Mercator,
+  /// 256 px tiles); screen y grows southward.
+  static Offset pixels(ImageryOffset offset, double latitude, double zoom) {
+    final metresPerPixel =
+        156543.03392 * math.cos(latitude * math.pi / 180) / math.pow(2, zoom);
+    return Offset(
+      offset.eastM / metresPerPixel,
+      -offset.northM / metresPerPixel,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (offset.isZero) return child;
+    final camera = MapCamera.of(context);
+    return Transform.translate(
+      offset: pixels(offset, camera.center.latitude, camera.zoom),
+      child: child,
+    );
+  }
+}
+
+/// Google's terms for its tiles: the Google Maps logo always in view (16-19
+/// dp tall, 10 dp clear on the left, right and top, 5 dp below, nothing over
+/// it) and the data copyright in full. Kept as small and out of the way as
+/// that allows: the smallest logo, the copyright in small print over it, in
+/// the corner above the left stick, where no button goes (a zone's task
+/// buttons float over the right stick).
+class _GoogleAttribution extends StatelessWidget {
+  const _GoogleAttribution({required this.copyright, required this.bottom});
+
+  final String copyright;
+  final double bottom;
+
+  /// Google's minimum.
+  static const double logoHeight = 16;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Align(
+        alignment: Alignment.bottomLeft,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(10, 10, 10, 5 + bottom),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 160),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (copyright.isNotEmpty) ...[
+                  Text(
+                    copyright,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.85),
+                      fontSize: 9,
+                      height: 1.2,
+                      shadows: const [Shadow(blurRadius: 2)],
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                ],
+                Semantics(
+                  label: 'Google Maps',
+                  image: true,
+                  child: Image.asset(
+                    'assets/images/google_maps_logo.png',
+                    height: logoHeight,
+                    excludeFromSemantics: true,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-      ],
+      ),
     );
   }
 }
@@ -608,12 +834,18 @@ class _AiLoadingChip extends StatelessWidget {
           const SizedBox(
             width: 14,
             height: 14,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.white,
+            ),
           ),
           const SizedBox(width: 8),
           Text(
             'AI 強化中 $done/$total',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ],
       ),
@@ -664,9 +896,7 @@ class PhoneLocationDot extends StatelessWidget {
         color: const Color(0xFF1A73E8),
         shape: BoxShape.circle,
         border: Border.all(color: Colors.white, width: 3),
-        boxShadow: const [
-          BoxShadow(color: Color(0x55000000), blurRadius: 4),
-        ],
+        boxShadow: const [BoxShadow(color: Color(0x55000000), blurRadius: 4)],
       ),
     );
   }

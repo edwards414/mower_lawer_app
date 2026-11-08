@@ -100,6 +100,8 @@ flutter:
   assets:
     # On-device AI base-map model (built by tools/sr/).
     - assets/models/sr_compact_nlsc_x4.tflite
+    # Google Maps logo, required over Google's satellite tiles.
+    - assets/images/google_maps_logo.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:
