@@ -170,11 +170,18 @@ void main() {
       },
     ),
     (
-      '✕ leaving manual mode',
+      'the panel opening over the sticks',
       (rig) async {
-        await rig.tester.tap(find.byTooltip('退出手動模式'));
+        rig.hidden.value = true;
         await rig.tester.pump();
-        expect(rig.exits, 1);
+        expect(_joysticks(), findsNothing);
+      },
+    ),
+    (
+      'a sheet or dialog about to cover the sticks',
+      (rig) async {
+        rig.key.currentState!.halt();
+        await rig.tester.pump();
       },
     ),
     (
@@ -223,7 +230,10 @@ class _Rig {
   final WidgetTester tester;
   final _ManualMissionSpy mission;
   final _FakeScreenWake wake;
-  int exits = 0;
+
+  /// The page's say over the sticks: hidden while its panel is open.
+  final hidden = ValueNotifier<bool>(false);
+  final key = GlobalKey<ManualControlOverlayState>();
 
   /// The speed [engage] locked.
   double locked = 0;
@@ -237,10 +247,14 @@ class _Rig {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: ManualControlOverlay(
-            mission: rig.mission,
-            onExit: () => rig.exits++,
-            screenWake: rig.wake,
+          body: ValueListenableBuilder<bool>(
+            valueListenable: rig.hidden,
+            builder: (context, hidden, _) => ManualControlOverlay(
+              key: rig.key,
+              mission: rig.mission,
+              hidden: hidden,
+              screenWake: rig.wake,
+            ),
           ),
         ),
       ),

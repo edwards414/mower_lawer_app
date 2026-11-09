@@ -12,6 +12,8 @@ class AppIcons {
   static const IconData arrowLeftRight = LucideIcons.arrowLeftRight300;
   static const IconData arrowRight = LucideIcons.arrowRight300;
   static const IconData arrowUpDown = LucideIcons.arrowUpDown300;
+  static const IconData arrowUp = LucideIcons.arrowUp300;
+  static const IconData arrowDown = LucideIcons.arrowDown300;
   static const IconData ban = LucideIcons.ban300;
   static const IconData battery = LucideIcons.battery300;
   static const IconData batteryCharging = LucideIcons.batteryCharging300;
@@ -67,6 +69,8 @@ class AppIcons {
   static const IconData link = LucideIcons.link300;
   static const IconData locate = LucideIcons.locate300;
   static const IconData locateFixed = LucideIcons.locateFixed300;
+  static const IconData list = LucideIcons.list300;
+  static const IconData lock = LucideIcons.lock300;
   static const IconData map = LucideIcons.map300;
   static const IconData mapPin = LucideIcons.mapPin300;
   static const IconData mapPinPen = LucideIcons.mapPinPen300;

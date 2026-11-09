@@ -27,6 +27,7 @@ flutter analyze / test ──► xcodebuild archive（不簽章）──► expo
    | `APP_STORE_CONNECT_PRIVATE_KEY` | `.p8` 檔全文（含 BEGIN/END 行） |
    | `IOS_DIST_P12_BASE64`（選用） | `base64 -i dist.p12`，Apple Distribution 憑證 + 私鑰 |
    | `IOS_DIST_P12_PASSWORD`（選用） | 上面的密碼 |
+   | `GOOGLE_MAPS_API_KEY`（選用） | Google Map Tiles API 金鑰（GCP 專案 `mower-app-maps-0428`，限 iOS `com.edwards.mower`、只開 Map Tiles API）。沒設時衛星圖用國土測繪中心航照 |
 
    用 gh CLI：
    ```bash
@@ -35,6 +36,16 @@ flutter analyze / test ──► xcodebuild archive（不簽章）──► expo
    gh secret set APP_STORE_CONNECT_PRIVATE_KEY < ~/Downloads/AuthKey_XXXXXXXXXX.p8
    ```
 3. App Store Connect 裡要先有這個 App（Bundle ID `com.edwards.mower`），TestFlight 才收得到 build。
+
+## 本機開發用的 Google 金鑰
+
+本機跑 Google 衛星圖：在 repo 根目錄放 `dart_defines.local.json`（已在 `.gitignore`）
+
+```json
+{"GOOGLE_MAPS_API_KEY": "..."}
+```
+
+再 `flutter run --dart-define-from-file=dart_defines.local.json`。不帶時一樣能跑，衛星圖用國土測繪中心航照。
 
 ## 與機器人版本的關係
 

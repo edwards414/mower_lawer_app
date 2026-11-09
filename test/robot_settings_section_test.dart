@@ -59,6 +59,10 @@ void main() {
     for (final gone in ['LAN 位址', '直連位址', '固定走 LAN', '自動選路']) {
       expect(find.text(gone), findsNothing, reason: gone);
     }
+    // No small print: no pairing how-to, address line or field help.
+    for (final gone in ['mower-pair', '後台', 'Tailscale', 'relay']) {
+      expect(find.textContaining(gone), findsNothing, reason: gone);
+    }
 
     // Nothing typed yet: nothing to save.
     final save = find.widgetWithText(FilledButton, '儲存');
@@ -75,8 +79,9 @@ void main() {
     await tester.enterText(field, '192.168.0.50');
     mission.setBusy(true);
     await tester.pump();
-    expect(tester.widget<FilledButton>(save).onPressed, isNull);
-    expect(find.text('任務、記錄或手動控制進行中，結束後才能改連線。'), findsOneWidget);
+    // The button says why, in place of a line of small print.
+    final busy = find.widgetWithText(FilledButton, '任務中');
+    expect(tester.widget<FilledButton>(busy).onPressed, isNull);
 
     mission.setBusy(false);
     await tester.pump();

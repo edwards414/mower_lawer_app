@@ -106,7 +106,7 @@ class _AddObjectSheetState extends State<AddObjectSheet> {
             const Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                '工作區、禁入區、通道：選擇後直接進入手動模式，開車沿邊界或路徑記錄。',
+                '工作區、禁入區、通道：選了之後，用地圖上的搖桿沿邊界或路徑開一圈。',
                 style: TextStyle(
                   color: Color(0xFF78909C),
                   fontSize: 12,
