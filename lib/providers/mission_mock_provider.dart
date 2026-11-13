@@ -19,6 +19,7 @@ import '../services/rosbridge_service.dart';
 class MissionMockProvider extends ChangeNotifier {
   static const _mockDataPreferenceKey = 'mock_data_enabled';
   static const _manualLinearSpeedPreferenceKey = 'manual_linear_speed_m_s';
+  static const _manualSingleStickPreferenceKey = 'manual_single_stick';
 
   /// Steps of the 手動搖桿速度 slider on the 設定 page, in m/s. The robot's
   /// velocity_command_guard answers anything above 0.5 m/s with a stop, and
@@ -53,6 +54,7 @@ class MissionMockProvider extends ChangeNotifier {
     _addLog('INFO', '等待 ROS 真實資料', notify: false);
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
     unawaited(_loadManualLinearSpeedPreference());
+    unawaited(_loadManualSingleStickPreference());
     unawaited(_connectRosbridge());
   }
 
@@ -285,6 +287,13 @@ class MissionMockProvider extends ChangeNotifier {
 
   /// Linear speed (m/s) the manual joystick sends at full deflection.
   double get manualLinearSpeed => _manualLinearSpeed;
+
+  bool _manualSingleStick = false;
+  bool _manualSingleStickChosen = false;
+
+  /// Whether the map page drives with one joystick (forward / back and
+  /// turning on the same stick) instead of the two. Chosen on the 設定 page.
+  bool get manualSingleStick => _manualSingleStick;
 
   List<MissionZone> zones = const [];
   List<MissionZone> riskZones = const [];
@@ -998,6 +1007,43 @@ class MissionMockProvider extends ChangeNotifier {
     } catch (error) {
       if (!_isDisposed) {
         _addLog('WARN', '讀取手動搖桿速度失敗，使用預設值: $error', notify: false);
+      }
+    }
+  }
+
+  Future<void> _loadManualSingleStickPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getBool(_manualSingleStickPreferenceKey);
+      // A pick made while this was loading wins over the stored value.
+      if (saved == null || _manualSingleStickChosen || _isDisposed) {
+        return;
+      }
+      if (saved != _manualSingleStick) {
+        _manualSingleStick = saved;
+        notifyListeners();
+      }
+    } catch (error) {
+      if (!_isDisposed) {
+        _addLog('WARN', '讀取搖桿模式失敗，使用雙搖桿: $error', notify: false);
+      }
+    }
+  }
+
+  /// Picks one joystick or two, and remembers it on this phone.
+  Future<void> setManualSingleStick(bool single) async {
+    if (single == _manualSingleStick && _manualSingleStickChosen) {
+      return;
+    }
+    _manualSingleStickChosen = true;
+    _manualSingleStick = single;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_manualSingleStickPreferenceKey, single);
+    } catch (error) {
+      if (!_isDisposed) {
+        _addLog('ERROR', '儲存搖桿模式失敗: $error');
       }
     }
   }

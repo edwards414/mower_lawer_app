@@ -82,19 +82,27 @@ void main() {
     expect(find.widgetWithText(TextField, '直連 IP'), findsOneWidget);
     expect(find.text('手動區網 IP'), findsNothing);
 
-    // 進階 sits below the fold of the 800x600 test surface.
+    // 進階 sits below the fold of the 800x600 test surface. The list is
+    // found once: scrolling that far takes 我的機器人 out of the tree.
+    final settingsList = find.byWidget(
+      tester.widget(
+        find
+            .ancestor(of: find.text('我的機器人'), matching: find.byType(Scrollable))
+            .first,
+      ),
+    );
     await tester.scrollUntilVisible(
       find.text('進階'),
       200,
-      scrollable: find
-          .ancestor(of: find.text('我的機器人'), matching: find.byType(Scrollable))
-          .first,
+      scrollable: settingsList,
     );
     await tester.ensureVisible(find.text('進階'));
     await tester.pump();
     await tester.tap(find.text('進階'));
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('Demo 模式'), findsOneWidget);
+    // One stick or two is picked on this page; two until someone picks.
+    expect(find.text('搖桿模式'), findsOneWidget);
 
     // Back to the map: the joysticks are always on it, no manual mode to
     // enter. Not connected, they are locked and say why. The camera stays

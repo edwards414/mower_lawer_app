@@ -9,7 +9,9 @@ import '../providers/mission_mock_provider.dart';
 import '../services/screen_wake.dart';
 
 /// The joysticks, always on the map page: left for forward / back, right for
-/// turning, 定速 between them. There is no manual mode to enter. While the
+/// turning, 定速 between them. With 單搖桿 chosen on the 設定 page
+/// ([MissionMockProvider.manualSingleStick]) there is one stick, in the right
+/// corner, that does both. There is no manual mode to enter. While the
 /// robot cannot be driven the sticks stay where they are, locked, with the
 /// reason written on them; tapping a locked stick asks [onLockedTap] what to
 /// do (during mowing: the way to stop the task). It draws no map of its own
@@ -72,6 +74,11 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
   // (MissionMockProvider.manualLinearSpeed).
   static const _angularSpeed = 0.75;
   static const _deadband = 0.04;
+  // One stick carries both axes, so a push straight ahead always has a little
+  // sideways in it: each axis starts later, and grows from zero from there.
+  static const _singleDeadband = 0.15;
+  // Cruising on one stick, pulling it back this far ends the cruise.
+  static const _singleCruiseBrake = 0.5;
   // The 定速 button, and its gap to the right stick.
   static const _cruiseSize = 56.0;
   static const _cruiseGap = 12.0;
@@ -89,6 +96,11 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
   // Whether this overlay asked for the screen to stay on.
   bool _screenKeptOn = false;
   int _joystickResetEpoch = 0;
+  // The layout the sticks were last built for (one stick or two).
+  late bool _single;
+  // The one stick was pulled back to end a cruise: it stays a brake, not
+  // reverse, until it comes back to the middle.
+  bool _singleBraking = false;
 
   bool get _hasMotion => _linearX.abs() > 0.001 || _angularZ.abs() > 0.001;
   bool get _cruising => _cruise.value != null;
@@ -98,13 +110,31 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _moving.addListener(_reportMoving);
+    _single = widget.mission.manualSingleStick;
+    widget.mission.addListener(_onMissionChanged);
   }
 
   void _reportMoving() => widget.onMovingChanged?.call(_moving.value);
 
+  /// Changing between one stick and two stops the robot first: the sticks on
+  /// screen are replaced, and a held one must be touched again.
+  void _onMissionChanged() {
+    final single = widget.mission.manualSingleStick;
+    if (single == _single) return;
+    _single = single;
+    // Nothing held (the usual case: the pick is made on another tab, or is
+    // the saved one loading at start): no stop to send.
+    if (_hasMotion || _cruising) _stopAll();
+  }
+
   @override
   void didUpdateWidget(ManualControlOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.mission != oldWidget.mission) {
+      oldWidget.mission.removeListener(_onMissionChanged);
+      widget.mission.addListener(_onMissionChanged);
+      _onMissionChanged();
+    }
     // Whatever takes the sticks away stops the robot first; a finger still
     // on a stick has to come off and touch again.
     if (widget.hidden && !oldWidget.hidden) {
@@ -126,6 +156,7 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.mission.removeListener(_onMissionChanged);
     _stopAll(rebuild: false);
     _moving.removeListener(_reportMoving);
     _moving.dispose();
@@ -169,8 +200,10 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
         ? '$lockReason\n點一下看選項'
         : lockReason;
 
+    final single = mission.manualSingleStick;
+
     Widget stick(_JoystickAxis axis, String caption) {
-      final linear = axis == _JoystickAxis.vertical;
+      final linear = axis != _JoystickAxis.horizontal;
       return RepaintBoundary(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -201,14 +234,16 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
             Stack(
               children: [
                 _ManualJoystick(
-                  key: ValueKey(
-                    '${linear ? 'linear' : 'angular'}-$_joystickResetEpoch',
-                  ),
+                  key: ValueKey('${axis.name}-$_joystickResetEpoch'),
                   size: joystickSize,
                   axis: axis,
                   enabled: canDrive,
                   onStart: linear ? _onLinearStickTouched : null,
-                  onChanged: linear ? _setLinearAxis : _setAngularAxis,
+                  onChanged: switch (axis) {
+                    _JoystickAxis.vertical => _setLinearAxis,
+                    _JoystickAxis.horizontal => _setAngularAxis,
+                    _JoystickAxis.both => _setBothAxes,
+                  },
                 ),
                 if (lockLabel != null)
                   Positioned.fill(
@@ -251,18 +286,22 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
         ),
         // Driving controls (bottom corners), each in its own layer so a stick
         // move repaints only itself.
-        Positioned(
-          left: stickLeft,
-          bottom: bottom,
-          child: stick(_JoystickAxis.vertical, '前進 / 後退'),
-        ),
+        if (!single)
+          Positioned(
+            left: stickLeft,
+            bottom: bottom,
+            child: stick(_JoystickAxis.vertical, '前進 / 後退'),
+          ),
         Positioned(
           right: stickRight,
           bottom: bottom,
-          child: stick(_JoystickAxis.horizontal, '轉向'),
+          child: single
+              ? stick(_JoystickAxis.both, '行駛')
+              : stick(_JoystickAxis.horizontal, '轉向'),
         ),
         // Cruise (定速), just inside the right stick: the right thumb reaches
-        // it while the left one holds the stick forward.
+        // it while the left one holds the stick forward (one stick: the other
+        // hand's thumb).
         if (lockReason == null || _cruising)
           Positioned(
             right: stickRight + joystickSize + _cruiseGap,
@@ -272,6 +311,7 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
                 valueListenable: _cruise,
                 builder: (context, speed, _) => _CruiseButton(
                   size: _cruiseSize,
+                  single: single,
                   cruising: speed != null,
                   // Cancelling is never blocked.
                   enabled: canDrive || speed != null,
@@ -293,10 +333,32 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
     _publishCurrent();
   }
 
+  /// The one stick (單搖桿): forward / back and turning together. Cruising,
+  /// it only steers, so a new touch does not end the cruise the way the left
+  /// stick's does; pulling it well back does (and 定速 again, as always).
+  void _setBothAxes(Offset value) {
+    _angularZ = _scaleSingleAxis(-value.dx, _angularSpeed);
+    if (value.dy.abs() < _singleDeadband) _singleBraking = false;
+    if (_cruising) {
+      if (value.dy >= _singleCruiseBrake) {
+        // Stops going forward; what the stick turns stays.
+        _singleBraking = true;
+        _cancelCruise();
+        return;
+      }
+    } else if (_singleBraking) {
+      _linearX = 0.0;
+    } else {
+      _linearX = _scaleSingleAxis(-value.dy, widget.mission.manualLinearSpeed);
+    }
+    _publishCurrent();
+  }
+
   /// A new touch on the left stick takes the speed back: the cruise ends with
-  /// a stop, and from there the stick drives as usual.
+  /// a stop, and from there the stick drives as usual. The one stick steers
+  /// the cruise instead (see [_setBothAxes]).
   void _onLinearStickTouched() {
-    if (_cruising) _cancelCruise();
+    if (_cruising && !_single) _cancelCruise();
   }
 
   /// The 定速 button: locks the forward speed the left stick holds right now,
@@ -313,7 +375,7 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
         ?..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
-            content: const Text('先把左搖桿往前推，再按定速'),
+            content: Text(_single ? '先把搖桿往前推，再按定速' : '先把左搖桿往前推，再按定速'),
             duration: const Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
             margin: EdgeInsets.fromLTRB(16, 0, 16, clearBottom),
@@ -366,6 +428,20 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
     return value.clamp(-1.0, 1.0).toDouble() * maxValue;
   }
 
+  /// [_scaleAxis] for the one stick: a wider deadband, and the rest of the
+  /// travel stretched over the full range so the speed starts from zero.
+  double _scaleSingleAxis(double value, double maxValue) {
+    final travel = value.abs();
+    if (travel < _singleDeadband) {
+      return 0.0;
+    }
+    final scaled = ((travel - _singleDeadband) / (1 - _singleDeadband)).clamp(
+      0.0,
+      1.0,
+    );
+    return value.sign * scaled * maxValue;
+  }
+
   void _publishCurrent() {
     if (!widget.mission.canDriveManually) {
       // The gate closed under a held stick. This event can beat the next timer
@@ -411,6 +487,7 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
   /// hidden or covered, dispose) lands here, so each one also ends a cruise.
   void _stopAll({bool rebuild = true}) {
     _endCruise();
+    _singleBraking = false;
     _linearX = 0.0;
     _angularZ = 0.0;
     _joystickResetEpoch += 1;
@@ -466,7 +543,7 @@ class _StickLock extends StatelessWidget {
   }
 }
 
-enum _JoystickAxis { vertical, horizontal }
+enum _JoystickAxis { vertical, horizontal, both }
 
 class _ManualJoystick extends StatefulWidget {
   const _ManualJoystick({
@@ -528,16 +605,11 @@ class _ManualJoystickState extends State<_ManualJoystick> {
             ),
             child: Stack(
               children: [
-                Center(
-                  child: Container(
-                    width: widget.axis == _JoystickAxis.vertical ? 4 : 62,
-                    height: widget.axis == _JoystickAxis.vertical ? 62 : 4,
-                    decoration: BoxDecoration(
-                      color: AppStyle.ink.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
+                // The way the stick moves: a bar, or a cross for both.
+                if (widget.axis != _JoystickAxis.horizontal)
+                  Center(child: _guideBar(width: 4, height: 62)),
+                if (widget.axis != _JoystickAxis.vertical)
+                  Center(child: _guideBar(width: 62, height: 4)),
                 AnimatedPositioned(
                   duration: _dragging
                       ? Duration.zero
@@ -567,6 +639,17 @@ class _ManualJoystickState extends State<_ManualJoystick> {
     );
   }
 
+  Widget _guideBar({required double width, required double height}) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: AppStyle.ink.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(2),
+      ),
+    );
+  }
+
   void _handlePanStart(DragStartDetails details) {
     widget.onStart?.call();
     _dragging = true;
@@ -588,6 +671,7 @@ class _ManualJoystickState extends State<_ManualJoystick> {
     next = switch (widget.axis) {
       _JoystickAxis.vertical => Offset(0, next.dy),
       _JoystickAxis.horizontal => Offset(next.dx, 0),
+      _JoystickAxis.both => next,
     };
     setState(() => _value = next);
     widget.onChanged(next);
@@ -602,17 +686,21 @@ class _ManualJoystickState extends State<_ManualJoystick> {
   }
 }
 
-/// Cruise (定速): locks the left stick's forward speed. Lit while cruising,
+/// Cruise (定速): locks the forward speed the stick holds. Lit while cruising,
 /// when a press ends it.
 class _CruiseButton extends StatelessWidget {
   const _CruiseButton({
     required this.size,
+    required this.single,
     required this.cruising,
     required this.enabled,
     required this.onPressed,
   });
 
   final double size;
+
+  /// One stick on the page, not two.
+  final bool single;
   final bool cruising;
   final bool enabled;
   final VoidCallback onPressed;
@@ -623,7 +711,11 @@ class _CruiseButton extends StatelessWidget {
     // cruising.
     final radius = BorderRadius.circular(18);
     return Tooltip(
-      message: cruising ? '取消定速' : '定速：鎖定左搖桿目前的前進速度',
+      message: cruising
+          ? '取消定速'
+          : single
+          ? '定速：鎖定搖桿目前的前進速度'
+          : '定速：鎖定左搖桿目前的前進速度',
       child: Opacity(
         opacity: enabled ? 1.0 : 0.48,
         child: DecoratedBox(
