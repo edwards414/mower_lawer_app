@@ -206,6 +206,8 @@ class _SettingsTab extends StatelessWidget {
               child: Column(
                 children: [
                   const ManualSpeedSetting(),
+                  const Divider(height: 14, indent: 50),
+                  const ManualStickLayoutSetting(),
                   const Divider(height: 22),
                   _SettingsActionRow(
                     icon: AppIcons.video,

@@ -84,3 +84,44 @@ class ManualSpeedSetting extends StatelessWidget {
     );
   }
 }
+
+/// One joystick or two, on the 設定 page. 雙搖桿: left for forward / back,
+/// right for turning. 單搖桿: both on the one stick.
+class ManualStickLayoutSetting extends StatelessWidget {
+  const ManualStickLayoutSetting({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final mission = context.watch<MissionMockProvider>();
+    return Row(
+      children: [
+        const AppIconTile(AppIcons.gamepad2),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Text(
+            '搖桿模式',
+            style: TextStyle(
+              color: AppStyle.ink,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        SegmentedButton<bool>(
+          showSelectedIcon: false,
+          style: const ButtonStyle(
+            visualDensity: VisualDensity.compact,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          segments: const [
+            ButtonSegment(value: false, label: Text('雙搖桿')),
+            ButtonSegment(value: true, label: Text('單搖桿')),
+          ],
+          selected: {mission.manualSingleStick},
+          onSelectionChanged: (picked) =>
+              unawaited(mission.setManualSingleStick(picked.first)),
+        ),
+      ],
+    );
+  }
+}
