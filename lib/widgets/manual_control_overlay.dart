@@ -10,8 +10,8 @@ import '../services/screen_wake.dart';
 
 /// The joysticks, always on the map page: left for forward / back, right for
 /// turning, 定速 between them. With 單搖桿 chosen on the 設定 page
-/// ([MissionMockProvider.manualSingleStick]) there is one stick, in the right
-/// corner, that does both. There is no manual mode to enter. While the
+/// ([MissionMockProvider.manualSingleStick]) there is one stick, in the middle
+/// of the bottom edge, that does both. There is no manual mode to enter. While the
 /// robot cannot be driven the sticks stay where they are, locked, with the
 /// reason written on them; tapping a locked stick asks [onLockedTap] what to
 /// do (during mowing: the way to stop the task). It draws no map of its own
@@ -292,19 +292,27 @@ class ManualControlOverlayState extends State<ManualControlOverlay>
             bottom: bottom,
             child: stick(_JoystickAxis.vertical, '前進 / 後退'),
           ),
-        Positioned(
-          right: stickRight,
-          bottom: bottom,
-          child: single
-              ? stick(_JoystickAxis.both, '行駛')
-              : stick(_JoystickAxis.horizontal, '轉向'),
-        ),
+        if (single)
+          // The one stick: in the middle of the bottom edge.
+          Positioned(
+            left: (size.width - joystickSize) / 2,
+            bottom: bottom,
+            child: stick(_JoystickAxis.both, '行駛'),
+          )
+        else
+          Positioned(
+            right: stickRight,
+            bottom: bottom,
+            child: stick(_JoystickAxis.horizontal, '轉向'),
+          ),
         // Cruise (定速), just inside the right stick: the right thumb reaches
-        // it while the left one holds the stick forward (one stick: the other
-        // hand's thumb).
+        // it while the left one holds the stick forward. With one stick it
+        // sits right beside it, for the other hand's thumb.
         if (lockReason == null || _cruising)
           Positioned(
-            right: stickRight + joystickSize + _cruiseGap,
+            right: single
+                ? (size.width - joystickSize) / 2 - _cruiseGap - _cruiseSize
+                : stickRight + joystickSize + _cruiseGap,
             bottom: bottom + (joystickSize - _cruiseSize) / 2,
             child: RepaintBoundary(
               child: ValueListenableBuilder<double?>(
