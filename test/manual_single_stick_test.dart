@@ -63,6 +63,14 @@ void main() {
     expect(_joysticks(), findsOneWidget);
     expect(find.text('行駛'), findsOneWidget);
     expect(find.text('轉向'), findsNothing);
+    // In the middle of the bottom edge, 定速 right beside it.
+    final view = tester.getSize(find.byType(Scaffold));
+    final at = tester.getRect(_joysticks());
+    expect(at.center.dx, view.width / 2);
+    expect(view.height - at.bottom, ManualControlOverlay.stickGap);
+    final cruise = tester.getRect(find.text('定速'));
+    expect(cruise.left, greaterThan(at.right));
+    expect(cruise.right, lessThan(view.width));
 
     final stick = await tester.startGesture(tester.getCenter(_joysticks()));
     // Up and to the right: forward, turning right (negative z).
