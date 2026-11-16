@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import '../models/image_mission_draft.dart';
+import '../models/map_camera.dart';
 import '../models/mission_mock.dart';
 import '../models/robot_fleet.dart';
 import '../providers/mission_mock_provider.dart';
@@ -178,6 +179,12 @@ class MissionMapCanvas extends StatefulWidget {
     this.phonePosition,
     this.phoneAccuracyM,
     this.centerOn,
+    this.camera,
+    this.lockPan = false,
+    this.onUserPan,
+    this.onGrabStart,
+    this.onGrabMove,
+    this.onGrabEnd,
   });
 
   final MissionMockProvider mission;
@@ -205,6 +212,26 @@ class MissionMapCanvas extends StatefulWidget {
   /// at the centre of the map area, zoomed out just enough that all content
   /// stays in view. Ignored when [worldBoundsOverride] is set.
   final MapPoint? centerOn;
+
+  /// When set, the map is the operator's to move: two fingers zoom, one
+  /// finger pans, and the size stays what it was left at instead of being
+  /// refitted as the robot moves. [centerOn] then only centres the view; it
+  /// never changes the zoom. Without it the map frames itself, untouchable.
+  final MapViewCamera? camera;
+
+  /// Zoom only: no one-finger pan, so a thumb brushing the map while driving
+  /// cannot pull it off the robot.
+  final bool lockPan;
+
+  /// A one-finger pan started: the operator wants to look somewhere else.
+  final VoidCallback? onUserPan;
+
+  /// A one-finger drag started at this point of the map. Returning true takes
+  /// the drag (a vertex is under the finger): it then goes to [onGrabMove]
+  /// and [onGrabEnd] instead of panning the map.
+  final bool Function(Offset local)? onGrabStart;
+  final ValueChanged<Offset>? onGrabMove;
+  final VoidCallback? onGrabEnd;
 
   @override
   MissionMapCanvasState createState() => MissionMapCanvasState();
@@ -267,8 +294,86 @@ class MissionMapCanvasState extends State<MissionMapCanvas>
     super.dispose();
   }
 
+  // ─── Camera gestures ───────────────────────────────────────────────────────
+
+  /// The drag in hand belongs to [MissionMapCanvas.onGrabStart]'s taker.
+  bool _grabbed = false;
+
+  /// The zoom when the pinch in hand began.
+  double? _pinchStartScale;
+
+  void _onScaleStart(ScaleStartDetails details) {
+    _grabbed =
+        details.pointerCount == 1 &&
+        (widget.onGrabStart?.call(details.localFocalPoint) ?? false);
+    _pinchStartScale = lastProjection?.scale;
+  }
+
+  void _onScaleUpdate(ScaleUpdateDetails details) {
+    if (_grabbed) {
+      if (details.pointerCount == 1) {
+        widget.onGrabMove?.call(details.localFocalPoint);
+      }
+      return;
+    }
+    final camera = widget.camera;
+    final proj = lastProjection;
+    final size = context.size;
+    if (camera == null || proj == null || size == null) return;
+    final viewCentre = size.center(Offset.zero);
+    if (details.pointerCount >= 2) {
+      final scale = ((_pinchStartScale ?? proj.scale) * details.scale)
+          .clamp(MapViewCamera.minScale, MapViewCamera.maxScale)
+          .toDouble();
+      setState(() {
+        if (widget.centerOn == null) {
+          // The point under the fingers stays under them.
+          final focal = details.localFocalPoint;
+          final held = proj.unproject(focal - details.focalPointDelta);
+          camera.center = MapPoint(
+            held.x - (focal.dx - viewCentre.dx) / scale,
+            held.y - (focal.dy - viewCentre.dy) / scale,
+          );
+        }
+        // Following: the robot stays in the middle, only the size changes.
+        camera.scale = scale;
+      });
+      return;
+    }
+    if (widget.lockPan || details.focalPointDelta == Offset.zero) return;
+    final centre = proj.unproject(viewCentre);
+    setState(() {
+      // The size the pan started at is now the operator's, too.
+      camera
+        ..scale = proj.scale
+        ..center = MapPoint(
+          centre.x - details.focalPointDelta.dx / proj.scale,
+          centre.y - details.focalPointDelta.dy / proj.scale,
+        );
+    });
+    if (widget.centerOn != null) widget.onUserPan?.call();
+  }
+
+  void _onScaleEnd(ScaleEndDetails details) {
+    if (_grabbed) widget.onGrabEnd?.call();
+    _grabbed = false;
+    _pinchStartScale = null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final paint = _buildPaint();
+    if (widget.camera == null) return paint;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onScaleStart: _onScaleStart,
+      onScaleUpdate: _onScaleUpdate,
+      onScaleEnd: _onScaleEnd,
+      child: paint,
+    );
+  }
+
+  Widget _buildPaint() {
     return CustomPaint(
       painter: _MissionMapPainter(
         mission: widget.mission,
@@ -284,6 +389,7 @@ class MissionMapCanvasState extends State<MissionMapCanvas>
         phonePosition: widget.phonePosition,
         phoneAccuracyM: widget.phoneAccuracyM,
         centerOn: widget.centerOn,
+        camera: widget.camera,
       ),
       child: const SizedBox.expand(),
     );
@@ -307,6 +413,7 @@ class _MissionMapPainter extends CustomPainter {
     this.phonePosition,
     this.phoneAccuracyM,
     this.centerOn,
+    this.camera,
   }) : super(repaint: Listenable.merge([mission, breathe]));
 
   final MissionMockProvider mission;
@@ -322,6 +429,11 @@ class _MissionMapPainter extends CustomPainter {
   final MapPoint? phonePosition;
   final double? phoneAccuracyM;
   final MapPoint? centerOn;
+  final MapViewCamera? camera;
+
+  /// The size the map opens at when there is nothing on it to fit yet (a
+  /// first recording): about 30 m across a phone.
+  static const double _emptyMapScale = 12;
 
   static const Rect _fallbackWorldBounds = Rect.fromLTWH(0, 12, 104, 128);
 
@@ -337,10 +449,13 @@ class _MissionMapPainter extends CustomPainter {
     final mapRect = Rect.fromLTWH(0, 0, size.width, mapHeight);
 
     _drawGrid(canvas, mapRect);
-    final projection = _projection(
-      mapRect,
-      worldBoundsOverride ?? _centeredOn(_worldBounds(), centerOn),
-    );
+    final camera = worldBoundsOverride == null ? this.camera : null;
+    final projection = camera == null
+        ? _projection(
+            mapRect,
+            worldBoundsOverride ?? _centeredOn(_worldBounds(), centerOn),
+          )
+        : _cameraProjection(mapRect, camera);
     final project = projection.project;
     onProjectionPainted?.call(projection);
 
@@ -563,6 +678,36 @@ class _MissionMapPainter extends CustomPainter {
     return MapProjection(scale: scale, offset: offset, worldBounds: worldBounds);
   }
 
+  /// The operator's view: [camera]'s size, centred on the followed robot or
+  /// else where the view was left. Until a size is chosen the map fits what
+  /// is drawn on it (not the robot or a trail being driven, so it does not
+  /// resize as they move). Writes back what it showed, so the view stays put
+  /// when following stops and the other map can open on the same place.
+  MapProjection _cameraProjection(Rect mapRect, MapViewCamera camera) {
+    final content = _contentBounds();
+    final bounds = content ?? _worldBounds();
+    final scale =
+        camera.scale ??
+        (content == null ? _emptyMapScale : _projection(mapRect, bounds).scale);
+    final centre =
+        centerOn ??
+        camera.center ??
+        (content == null && mission.shouldShowRobot
+            ? mission.robotPosition
+            : MapPoint(bounds.center.dx, bounds.center.dy));
+    camera.center = centre;
+    return MapProjection(
+      scale: scale,
+      offset:
+          mapRect.center -
+          Offset(
+            (centre.x - bounds.left) * scale,
+            (centre.y - bounds.top) * scale,
+          ),
+      worldBounds: bounds,
+    );
+  }
+
   static List<MapPoint> _gridCorners(MapGridLayer layer) {
     final w = layer.width * layer.resolution;
     final h = layer.height * layer.resolution;
@@ -572,19 +717,28 @@ class _MissionMapPainter extends CustomPainter {
     ];
   }
 
-  Rect _worldBounds() {
+  /// With [contentOnly], just what is drawn on the map to stay (no robot, no
+  /// trail being driven); null when there is not enough of it to frame.
+  Rect? _contentBounds() => _boundsOf(contentOnly: true);
+
+  Rect _worldBounds({bool contentOnly = false}) =>
+      _boundsOf(contentOnly: contentOnly) ?? _fallbackWorldBounds;
+
+  Rect? _boundsOf({required bool contentOnly}) {
     final overlay = alignmentOverlay;
     final points = <MapPoint>[
-      if (mission.shouldShowRobot && robots.isEmpty) mission.robotPosition,
-      for (final robot in robots) robot.position,
+      if (!contentOnly) ...[
+        if (mission.shouldShowRobot && robots.isEmpty) mission.robotPosition,
+        for (final robot in robots) robot.position,
+        // the trail being driven: on a first recording it is the only content
+        ...mission.recordTrail,
+      ],
       ?mission.baseStationPosition,
       for (final zone in mission.zones) ...zone.points,
       for (final risk in mission.riskZones) ...risk.points,
       for (final channel in mission.channels) ...channel.points,
       for (final row in mission.coverageRows) ...row,
       for (final segment in mission.invalidSegments) ...segment.points,
-      // the trail being driven: on a first recording it is the only content
-      ...mission.recordTrail,
       if (mission.freeSpaceLayer != null)
         ..._gridCorners(mission.freeSpaceLayer!),
       if (overlay != null) ...[
@@ -597,7 +751,7 @@ class _MissionMapPainter extends CustomPainter {
         overlay.worldOf(0, overlay.imageHeight.toDouble()),
       ],
     ];
-    if (points.length < 2) return _fallbackWorldBounds;
+    if (points.length < 2) return null;
 
     var minX = points.first.x;
     var maxX = points.first.x;

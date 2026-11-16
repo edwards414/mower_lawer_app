@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:mower_stdio/models/geo_anchor.dart';
+import 'package:mower_stdio/models/map_camera.dart';
 import 'package:mower_stdio/models/mission_mock.dart';
 import 'package:mower_stdio/providers/mission_mock_provider.dart';
 import 'package:mower_stdio/services/rosbridge_service.dart';
@@ -119,6 +120,116 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     mission.dispose();
     await ros.close();
+  });
+  testWidgets('canvas with a camera keeps its size; fingers zoom and pan it', (
+    tester,
+  ) async {
+    final (ros, mission) = await _missionWithRobotAt(tester, 36, 4);
+    final camera = MapViewCamera();
+    late MapProjection p;
+    var follow = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) => ListenableBuilder(
+            listenable: mission,
+            builder: (context, _) => MissionMapCanvas(
+              mission: mission,
+              bottomInset: 0,
+              camera: camera,
+              centerOn: follow ? mission.robotPosition : null,
+              onUserPan: () => setState(() => follow = false),
+              onProjectionPainted: (v) => p = v,
+            ),
+          ),
+        ),
+      ),
+    );
+    Offset robot() => p.project(mission.robotPosition);
+    final fitted = p.scale;
+    expect(robot(), offsetMoreOrLessEquals(_centre, epsilon: 0.5));
+
+    // The robot crossing the lawn re-centres the map but never resizes it.
+    ros.pushPose(2, 28);
+    await tester.pump();
+    expect(p.scale, fitted);
+    expect(robot(), offsetMoreOrLessEquals(_centre, epsilon: 0.5));
+
+    // Two fingers spreading zoom in, about the followed robot.
+    final a = await tester.startGesture(const Offset(350, 200));
+    final b = await tester.startGesture(const Offset(450, 200));
+    await a.moveBy(const Offset(-50, 0));
+    await b.moveBy(const Offset(50, 0));
+    await a.moveBy(const Offset(-50, 0));
+    await b.moveBy(const Offset(50, 0));
+    await tester.pump();
+    await a.up();
+    await b.up();
+    await tester.pump();
+    final zoomed = p.scale;
+    expect(zoomed, greaterThan(fitted * 1.5));
+    expect(follow, isTrue);
+    expect(robot(), offsetMoreOrLessEquals(_centre, epsilon: 0.5));
+
+    // The chosen size stays as the robot moves on.
+    ros.pushPose(30, 10);
+    await tester.pump();
+    expect(p.scale, zoomed);
+
+    // One finger pans, which ends following; the map then stays put.
+    await tester.dragFrom(const Offset(200, 500), const Offset(120, 0));
+    await tester.pump();
+    expect(follow, isFalse);
+    final left = robot();
+    expect(left, isNot(offsetMoreOrLessEquals(_centre, epsilon: 20)));
+    await tester.pump(const Duration(seconds: 30));
+    expect(follow, isFalse);
+    expect(robot(), offsetMoreOrLessEquals(left, epsilon: 0.5));
+    expect(p.scale, zoomed);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    mission.dispose();
+    await ros.close();
+  });
+
+  testWidgets('satellite opens where the shared camera was looking', (
+    tester,
+  ) async {
+    final (ros, mission) = await _missionWithRobotAt(tester, 36, 4);
+    // What the schematic map left behind: a spot on the lawn at ~z19.
+    final scale = MapViewCamera.scaleOfZoom(19, 25.0);
+    final camera = MapViewCamera()
+      ..scale = scale
+      ..center = const MapPoint(12, 9);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SatelliteMapView(
+          mission: mission,
+          anchor: const GeoAnchor(originLat: 25.0, originLon: 121.5),
+          camera: camera,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    // Not re-framed on the content: same place, same size, written back.
+    expect(camera.scale, closeTo(scale, scale * 0.01));
+    expect(camera.center!.x, closeTo(12, 0.05));
+    expect(camera.center!.y, closeTo(9, 0.05));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    mission.dispose();
+    await ros.close();
+  });
+
+  test('camera size converts to a satellite zoom and back', () {
+    for (final zoom in [16.0, 18.5, 22.0]) {
+      final scale = MapViewCamera.scaleOfZoom(zoom, 24.9);
+      expect(MapViewCamera.zoomOfScale(scale, 24.9), closeTo(zoom, 1e-9));
+    }
+    // z19 at Taiwan's latitude is about 27 cm per pixel.
+    expect(1 / MapViewCamera.scaleOfZoom(19, 25.0), closeTo(0.27, 0.01));
   });
 }
 
