@@ -3063,6 +3063,39 @@ class MissionMockProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The word a person reads for an object kind ('zone' | 'risk' | 'channel').
+  static String objectKindLabel(String kind) => switch (kind) {
+    'zone' => '工作區',
+    'risk' => '禁入區',
+    'channel' => '通道',
+    _ => kind,
+  };
+
+  /// Name of the selected object, or null when nothing is selected or the
+  /// selected object is gone (deleted on the robot, another site loaded).
+  String? get selectedObjectName {
+    final kind = selectedObjectKind;
+    final id = selectedObjectId;
+    if (kind == null || id == null) {
+      return null;
+    }
+    switch (kind) {
+      case 'zone':
+        for (final z in zones) {
+          if (z.id == id) return z.name;
+        }
+      case 'risk':
+        for (final z in riskZones) {
+          if (z.id == id) return z.name;
+        }
+      case 'channel':
+        for (final c in channels) {
+          if (c.id == id) return c.name;
+        }
+    }
+    return null;
+  }
+
   void clearObjectSelection() {
     if (selectedObjectKind == null && selectedObjectId == null) {
       return;
@@ -3096,10 +3129,15 @@ class MissionMockProvider extends ChangeNotifier {
     return false;
   }
 
+  /// Why planning objects cannot be changed right now, for the person who
+  /// just asked to.
+  static const String _planningBusyReason = '導航、記錄或規劃進行中，請先停止再試';
+
   /// Delete an object via the backend /edit_zone service, then re-plan.
-  Future<void> deleteObject(String kind, int id) async {
+  /// Returns null once the object is deleted, otherwise the reason it was not.
+  Future<String?> deleteObject(String kind, int id) async {
     if (mockDataEnabled) {
-      if (!_allowPlanningMutation('刪除規劃物件')) return;
+      if (!_allowPlanningMutation('刪除規劃物件')) return _planningBusyReason;
       // Explicit demo mode: update only the isolated in-memory scene.
       _removeObjectLocally(kind, id);
       _invalidateCoverageReadiness();
@@ -3108,10 +3146,10 @@ class MissionMockProvider extends ChangeNotifier {
       }
       _addLog('SUCCESS', '$kind #$id 已刪除（mock）');
       notifyListeners();
-      return;
+      return null;
     }
     if (!_beginPlanningMutation('刪除規劃物件')) {
-      return;
+      return _planningBusyReason;
     }
     try {
       _addLog('INFO', '刪除 $kind #$id');
@@ -3120,15 +3158,19 @@ class MissionMockProvider extends ChangeNotifier {
         args: {'op': 'delete', 'kind': kind, 'id': id, 'points': <dynamic>[]},
       );
       if (!r.success) {
-        _addLog('ERROR', r.message.isEmpty ? '刪除失敗' : r.message);
-        return;
+        final reason = r.message.isEmpty ? '刪除失敗' : r.message;
+        _addLog('ERROR', reason);
+        return reason;
       }
       _addLog('SUCCESS', r.message.isEmpty ? '$kind #$id 已刪除' : r.message);
       if (isObjectSelected(kind, id)) {
         clearObjectSelection();
       }
+      // Gone from the map at once; the robot republishes the same list.
+      _removeObjectLocally(kind, id);
       _invalidateCoverageReadiness();
       await _replanAfterEdit();
+      return null;
     } finally {
       _planningMutationPending = false;
       notifyListeners();
@@ -3423,24 +3465,48 @@ class MissionMockProvider extends ChangeNotifier {
   String drawKind = 'risk';
   List<MapPoint> draftPolygon = const [];
 
-  /// Enters hand-draw mode for a risk zone. Returns `null` when it started, or
-  /// the reason it did not (drawing and object recording share the bottom of
-  /// the map and cannot run together).
-  String? startDrawRisk() {
+  /// Fewest points the object being drawn needs: a channel is a line, the
+  /// others are areas.
+  int get drawMinPoints => drawKind == 'channel' ? 2 : 3;
+
+  /// Whether the drawn points close into an area (zone, no-go area).
+  bool get drawClosesShape => drawKind != 'channel';
+
+  /// Enters tap-to-draw mode for a 'zone', 'risk' or 'channel'. Returns `null`
+  /// when it started, or the reason it did not (drawing and object recording
+  /// share the bottom of the map and cannot run together).
+  String? startDraw(String kind) {
+    final label = objectKindLabel(kind);
     if (recordingType != null ||
         _recordCommandPending ||
         _pendingRecordSaveType != null) {
-      const reason = '記錄進行中或尚未儲存，請先儲存／取消記錄，再手繪危險區';
+      final reason = '記錄進行中或尚未儲存，請先儲存／取消記錄，再點出$label';
       _addLog('WARN', reason);
       return reason;
     }
+    editVertexMode = false;
+    editPolygon = const [];
     drawMode = true;
-    drawKind = 'risk';
+    drawKind = kind;
     draftPolygon = const [];
     clearObjectSelection();
-    _addLog('INFO', '開始繪製危險區：點地圖加頂點,至少 3 點後閉合儲存');
+    final min = drawMinPoints;
+    _addLog('INFO', '開始繪製$label：點地圖加點，至少 $min 點後儲存');
     notifyListeners();
     return null;
+  }
+
+  String? startDrawRisk() => startDraw('risk');
+
+  /// Moves a point of the shape being drawn (dragged on the map).
+  void moveDraftVertex(int index, MapPoint world) {
+    if (!drawMode || index < 0 || index >= draftPolygon.length) {
+      return;
+    }
+    final next = List<MapPoint>.of(draftPolygon);
+    next[index] = world;
+    draftPolygon = next;
+    notifyListeners();
   }
 
   void addDraftVertex(MapPoint p) {
@@ -3469,28 +3535,31 @@ class MissionMockProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> commitDraw() async {
+  /// Saves the drawn shape. Returns null once it is saved, otherwise the
+  /// reason it was not (the draft stays on the map to retry).
+  Future<String?> commitDraw() async {
     if (!drawMode) {
-      return;
+      return null;
     }
     final pts = List<MapPoint>.of(draftPolygon);
-    if (pts.length < 3) {
-      _addLog('WARN', '危險區至少需要 3 個點');
-      return;
-    }
     final kind = drawKind;
+    if (pts.length < drawMinPoints) {
+      final reason = '${objectKindLabel(kind)}至少需要 $drawMinPoints 個點';
+      _addLog('WARN', reason);
+      return reason;
+    }
     if (mockDataEnabled) {
-      if (!_allowPlanningMutation('新增規劃物件')) return;
+      if (!_allowPlanningMutation('新增規劃物件')) return _planningBusyReason;
       drawMode = false;
       draftPolygon = const [];
-      _addRiskLocally(pts);
+      _addObjectLocally(kind, pts);
       _invalidateCoverageReadiness();
       _addLog('SUCCESS', '已新增 $kind（mock）');
       notifyListeners();
-      return;
+      return null;
     }
     if (!_beginPlanningMutation('新增規劃物件')) {
-      return;
+      return _planningBusyReason;
     }
     drawMode = false;
     draftPolygon = const [];
@@ -3508,28 +3577,44 @@ class MissionMockProvider extends ChangeNotifier {
         },
       );
       if (!r.success) {
-        _addLog('ERROR', r.message.isEmpty ? '新增失敗' : r.message);
+        final reason = r.message.isEmpty ? '新增失敗' : r.message;
+        _addLog('ERROR', reason);
         // Restore the draft so the user can retry instead of losing the work.
         draftPolygon = pts;
+        drawKind = kind;
         drawMode = true;
         notifyListeners();
-        return;
+        return reason;
       }
       _addLog('SUCCESS', r.message.isEmpty ? '已新增 $kind' : r.message);
       _invalidateCoverageReadiness();
       await _replanAfterEdit();
+      return null;
     } finally {
       _planningMutationPending = false;
       notifyListeners();
     }
   }
 
-  void _addRiskLocally(List<MapPoint> pts) {
-    final id = riskZones.fold<int>(0, (m, z) => z.id > m ? z.id : m) + 1;
-    riskZones = [
-      ...riskZones,
-      MissionZone(id: id, name: 'Risk $id', points: pts),
-    ];
+  void _addObjectLocally(String kind, List<MapPoint> pts) {
+    switch (kind) {
+      case 'zone':
+        final id = zones.fold<int>(0, (m, z) => z.id > m ? z.id : m) + 1;
+        zones = [...zones, MissionZone(id: id, name: 'Zone $id', points: pts)];
+        _ensureSelectedZone();
+      case 'channel':
+        final id = channels.fold<int>(0, (m, c) => c.id > m ? c.id : m) + 1;
+        channels = [
+          ...channels,
+          ChannelPath(id: id, name: 'Channel $id', points: pts),
+        ];
+      default:
+        final id = riskZones.fold<int>(0, (m, z) => z.id > m ? z.id : m) + 1;
+        riskZones = [
+          ...riskZones,
+          MissionZone(id: id, name: 'Risk $id', points: pts),
+        ];
+    }
   }
 
   // ── Vertex editing of an existing object (P3) ───────────────────────────────

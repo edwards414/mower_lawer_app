@@ -21,7 +21,7 @@ class MapObjectsSheet extends StatelessWidget {
           title: '地圖物件',
           subtitle: mission.replanning
               ? '重新規劃中…'
-              : '$count items · 點一下選取,垃圾桶刪除',
+              : '$count 個物件 · 點清單或地圖上的物件來調整、刪除',
         ),
         const SizedBox(height: 10),
         ...mission.zones.map(
@@ -34,7 +34,7 @@ class MapObjectsSheet extends StatelessWidget {
             onTap: () => mission.selectObject('zone', zone.id),
             onEdit: () => mission.startVertexEdit('zone', zone.id),
             onDelete: () =>
-                _confirmDelete(context, mission, 'zone', zone.id, zone.name),
+                confirmDeleteObject(context, mission, 'zone', zone.id, zone.name),
           ),
         ),
         ...mission.riskZones.map(
@@ -47,7 +47,7 @@ class MapObjectsSheet extends StatelessWidget {
             onTap: () => mission.selectObject('risk', risk.id),
             onEdit: () => mission.startVertexEdit('risk', risk.id),
             onDelete: () =>
-                _confirmDelete(context, mission, 'risk', risk.id, risk.name),
+                confirmDeleteObject(context, mission, 'risk', risk.id, risk.name),
           ),
         ),
         ...mission.channels.map(
@@ -59,7 +59,7 @@ class MapObjectsSheet extends StatelessWidget {
             selected: mission.isObjectSelected('channel', channel.id),
             onTap: () => mission.selectObject('channel', channel.id),
             onEdit: () => mission.startVertexEdit('channel', channel.id),
-            onDelete: () => _confirmDelete(
+            onDelete: () => confirmDeleteObject(
               context,
               mission,
               'channel',
@@ -83,35 +83,60 @@ class MapObjectsSheet extends StatelessWidget {
       ],
     );
   }
+}
 
-  Future<void> _confirmDelete(
-    BuildContext context,
-    MissionMockProvider mission,
-    String kind,
-    int id,
-    String name,
-  ) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('刪除物件'),
-        content: Text('確定刪除「$name」?刪除後會自動重新規劃覆蓋路徑。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
+/// Asks before deleting a map object, deletes it, and says what happened:
+/// the one delete flow, shared by the object list and the bar that shows for
+/// an object selected on the map.
+Future<void> confirmDeleteObject(
+  BuildContext context,
+  MissionMockProvider mission,
+  String kind,
+  int id,
+  String name, {
+  double snackBottom = 12,
+}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final label = MissionMockProvider.objectKindLabel(kind);
+  final consequence = switch (kind) {
+    'zone' => '這個工作區和它的覆蓋路徑會一起移除。',
+    'risk' => '割草機之後可以進入這塊區域，覆蓋路徑會重新規劃。',
+    _ => '用到這條通道的跨區移動會改走別條或無法通行。',
+  };
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('刪除$label「$name」？'),
+      content: Text('$consequence刪除後無法復原。'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFD64545),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('刪除'),
-          ),
-        ],
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('刪除'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) {
+    return;
+  }
+  final error = await mission.deleteObject(kind, id);
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Text(error == null ? '已刪除「$name」' : '沒有刪除「$name」：$error'),
+        // Floats clear of the joysticks along the bottom of the map.
+        behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.fromLTRB(16, 0, 16, snackBottom),
       ),
     );
-    if (ok == true) {
-      await mission.deleteObject(kind, id);
-    }
-  }
 }
 
 class _SheetHeader extends StatelessWidget {

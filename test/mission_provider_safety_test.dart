@@ -742,7 +742,7 @@ void main() {
     const rtk = 'RTK 尚未 fixed，無法開始 zone 記錄（GPS status=0，RTK fixed 為 2）';
     ros.handlers['/record_zone_start'] = () =>
         _response('/record_zone_start', success: false, message: rtk);
-    await tester.tap(find.text('工作區'));
+    await tester.tap(find.text('工作區').first);
     await tester.pumpAndSettle();
     expect(ros.callCount['/record_zone_start'], 1);
     expect(find.text(rtk), findsOneWidget);
@@ -1098,7 +1098,7 @@ void main() {
     _emitLivePrerequisites(ros);
     ros.handlers['/record_zone_start'] = () =>
         _response('/record_zone_start', success: true);
-    await tester.tap(find.text('工作區'));
+    await tester.tap(find.text('工作區').first);
     await tester.pumpAndSettle();
 
     expect(provider.recordingType, RecordObjectType.zone);
@@ -1124,7 +1124,7 @@ void main() {
     _emitLivePrerequisites(ros);
     final response = Completer<RosbridgeServiceResponse>();
     ros.handlers['/record_zone_start'] = () => response.future;
-    await tester.tap(find.text('工作區'));
+    await tester.tap(find.text('工作區').first);
     await tester.pump();
     expect(provider.recordCommandPending, isTrue);
 
@@ -1893,6 +1893,66 @@ void main() {
     expect(ros.callCount['/boustrophedon_coverage/set_parameters'], isNull);
     expect(ros.callCount['/generate_coverage_path'], isNull);
     expect(ros.callCount['/edit_zone'], isNull);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test('live: a tapped-out channel is added through /edit_zone', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+    await _triggerNavPoll(ros);
+    expect(provider.canMutatePlanning, isTrue);
+
+    expect(provider.startDraw('channel'), isNull);
+    expect(provider.drawMinPoints, 2);
+    provider.addDraftVertex(const MapPoint(0, 0));
+    // One point is not a channel yet: refused with a reason, nothing sent.
+    expect(await provider.commitDraw(), contains('至少需要 2 個點'));
+    expect(ros.callCount['/edit_zone'], isNull);
+    expect(provider.drawMode, isTrue);
+
+    provider.addDraftVertex(const MapPoint(5, 0));
+    provider.moveDraftVertex(1, const MapPoint(6, 1));
+    expect(await provider.commitDraw(), isNull);
+    final call = ros.calls.singleWhere((c) => c.service == '/edit_zone');
+    expect(call.args['op'], 'add');
+    expect(call.args['kind'], 'channel');
+    expect(call.args['points'], [
+      {'x': 0.0, 'y': 0.0, 'z': 0.0},
+      {'x': 6.0, 'y': 1.0, 'z': 0.0},
+    ]);
+    expect(provider.drawMode, isFalse);
+
+    provider.dispose();
+    await ros.close();
+  });
+
+  test('live: a refused draw or delete says why and keeps the work', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+    await _triggerNavPoll(ros);
+    ros.handlers['/edit_zone'] = () =>
+        _response('/edit_zone', success: false, message: '找不到 zone id=7');
+
+    expect(provider.startDraw('zone'), isNull);
+    for (final p in const [MapPoint(0, 0), MapPoint(4, 0), MapPoint(4, 4)]) {
+      provider.addDraftVertex(p);
+    }
+    expect(await provider.commitDraw(), '找不到 zone id=7');
+    // The shape is still on the map, as a zone, to retry.
+    expect(provider.drawMode, isTrue);
+    expect(provider.drawKind, 'zone');
+    expect(provider.draftPolygon, hasLength(3));
+    provider.cancelDraw();
+
+    expect(await provider.deleteObject('zone', 7), '找不到 zone id=7');
 
     provider.dispose();
     await ros.close();
