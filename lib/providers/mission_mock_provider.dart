@@ -78,6 +78,13 @@ class MissionMockProvider extends ChangeNotifier {
   DateTime? _lastManualCommandClockAt;
   int? _lastManualCommandClockMicros;
   bool _manualSessionNeedsNeutral = false;
+
+  /// True from a non-zero manual velocity going out until the zero that ends
+  /// it has been attempted. Only then does the robot have a manual command
+  /// of ours to stop. A zero sent with nothing to stop is not harmless: the
+  /// robot reads any message from the joystick as a person taking over, and
+  /// cancels a running mission or refuses to start one.
+  bool _manualStopOwed = false;
   bool _recordCommandPending = false;
   bool _externalRecordCancelAttempted = false;
   bool _navCommandPending = false;
@@ -4407,11 +4414,7 @@ class MissionMockProvider extends ChangeNotifier {
   }) {
     final moving = linearX.abs() > 0.001 || angularZ.abs() > 0.001;
     if (!moving) {
-      final sent = _rosbridge.publish(
-        manualVelocityTopic,
-        type: _manualVelocityType,
-        message: _twistStampedMessage(linearX: 0, angularZ: 0),
-      );
+      final sent = _publishManualStopIfOwed();
       final wasActive = manualControlActive;
       manualControlActive = false;
       _manualSessionNeedsNeutral = false;
@@ -4453,6 +4456,7 @@ class MissionMockProvider extends ChangeNotifier {
       return false;
     }
 
+    _manualStopOwed = true;
     _hasLoggedManualDisconnected = false;
     _hasLoggedManualBlocked = false;
     if (manualControlActive != moving) {
@@ -4465,13 +4469,26 @@ class MissionMockProvider extends ChangeNotifier {
     return true;
   }
 
-  void stopManualControl() {
-    final wasActive = manualControlActive;
-    final sent = _rosbridge.publish(
+  /// Sends the zero that ends manual driving, if a non-zero velocity went out
+  /// since the last one. Returns false only when a stop was owed and could
+  /// not be sent. Either way nothing is owed afterwards: a stop that could
+  /// not go out has no connection to go out on, and the robot's guard stops
+  /// the wheels 0.25 s after our last command without it.
+  bool _publishManualStopIfOwed() {
+    if (!_manualStopOwed) {
+      return true;
+    }
+    _manualStopOwed = false;
+    return _rosbridge.publish(
       manualVelocityTopic,
       type: _manualVelocityType,
       message: _twistStampedMessage(linearX: 0, angularZ: 0),
     );
+  }
+
+  void stopManualControl() {
+    final wasActive = manualControlActive;
+    final sent = _publishManualStopIfOwed();
     manualControlActive = false;
     _manualSessionNeedsNeutral = false;
     _hasLoggedManualBlocked = false;

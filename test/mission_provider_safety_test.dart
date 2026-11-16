@@ -293,6 +293,59 @@ void main() {
     },
   );
 
+  test('a zero velocity goes out only to end manual driving', () async {
+    final ros = _FakeRosbridgeService();
+    final provider = MissionMockProvider(rosbridge: ros);
+    await _flushEvents();
+    _emitLivePrerequisites(ros);
+    await _flushEvents();
+
+    // Idle: every way of saying "stop" stays silent. The robot takes any
+    // joystick message for a person taking over.
+    provider.stopManualControl();
+    expect(
+      provider.publishManualVelocity(linearX: 0.0, angularZ: 0.0),
+      isTrue,
+    );
+    expect(ros.published, isEmpty);
+
+    // Driving, then one stop: exactly one zero, on the joystick topic, with
+    // the robot's clock and session like any other command.
+    expect(provider.publishManualVelocity(linearX: 0.2, angularZ: 0.0), isTrue);
+    expect(provider.publishManualVelocity(linearX: 0.2, angularZ: 0.1), isTrue);
+    expect(ros.published, hasLength(2));
+    provider.stopManualControl();
+    expect(ros.published, hasLength(3));
+    final stop = ros.published.last;
+    expect(stop.topic, '/app_joy_cmd');
+    expect(stop.message['header']['stamp'], {'sec': 123, 'nanosec': 456});
+    expect(
+      stop.message['header']['frame_id'],
+      'manual-session-v1:test-session',
+    );
+    final twist = stop.message['twist'] as Map;
+    expect((twist['linear'] as Map)['x'], 0.0);
+    expect((twist['angular'] as Map)['z'], 0.0);
+    expect(provider.manualControlActive, isFalse);
+
+    // Stopping again (the sticks hidden, the app backgrounded, ...) repeats
+    // nothing.
+    provider.stopManualControl();
+    provider.publishManualVelocity(linearX: 0.0, angularZ: 0.0);
+    expect(ros.published, hasLength(3));
+
+    // The released stick ends driving the same way.
+    expect(provider.publishManualVelocity(linearX: 0.2, angularZ: 0.0), isTrue);
+    expect(
+      provider.publishManualVelocity(linearX: 0.0, angularZ: 0.0),
+      isTrue,
+    );
+    expect(ros.published, hasLength(5));
+    provider.stopManualControl();
+    expect(ros.published, hasLength(5));
+    provider.dispose();
+  });
+
   test('stopping a zone sequence stops it before the current goal', () async {
     final ros = _FakeRosbridgeService();
     final provider = MissionMockProvider(rosbridge: ros);
@@ -349,20 +402,14 @@ void main() {
         isFalse,
       );
       expect(ros.published, isEmpty);
+      // Nothing of ours is moving the robot, so there is nothing to stop: a
+      // zero here would reach the robot as a takeover and cancel the mission.
       expect(
         provider.publishManualVelocity(linearX: 0.0, angularZ: 0.0),
         isTrue,
       );
-      expect(ros.published, hasLength(1));
-      expect(ros.published.single.message['header']['stamp'], {
-        'sec': 123,
-        'nanosec': 456,
-      });
-      expect(ros.published.single.topic, '/app_joy_cmd');
-      expect(
-        ros.published.single.message['header']['frame_id'],
-        'manual-session-v1:test-session',
-      );
+      provider.stopManualControl();
+      expect(ros.published, isEmpty);
 
       ros.handlers['/cancel_nav2'] = () =>
           _response('/cancel_nav2', success: false, message: 'cancel rejected');
