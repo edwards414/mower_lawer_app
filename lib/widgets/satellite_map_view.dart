@@ -8,6 +8,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/geo_anchor.dart';
+import '../models/map_camera.dart';
 import '../models/mission_mock.dart';
 import '../providers/mission_mock_provider.dart';
 import '../services/ai_basemap_service.dart';
@@ -39,6 +40,7 @@ class SatelliteMapView extends StatefulWidget {
     this.googleOffset,
     this.nlscCompare = 0,
     this.offsetStore,
+    this.camera,
   });
 
   final MissionMockProvider mission;
@@ -49,7 +51,9 @@ class SatelliteMapView extends StatefulWidget {
   final double? phoneAccuracyM;
 
   /// Keep the camera centred on the robot as it moves. Zoom gestures keep
-  /// following; a one-finger drag reports `false` to [onFollowRobotChanged].
+  /// following (and zoom about the robot, so the view does not slide off it
+  /// and snap back); a one-finger drag reports `false` to
+  /// [onFollowRobotChanged].
   final bool followRobot;
   final ValueChanged<bool>? onFollowRobotChanged;
 
@@ -92,6 +96,14 @@ class SatelliteMapView extends StatefulWidget {
 
   /// Injected for tests; by default [ImageryOffsetStore.shared].
   final ImageryOffsetStore? offsetStore;
+
+  /// The map page's shared view. When it already holds one (the schematic map
+  /// was up before), this map opens on the same place at the same size
+  /// instead of framing the content; every move is written back to it.
+  final MapViewCamera? camera;
+
+  static const double minZoom = 16;
+  static const double maxZoom = 22;
 
   /// NLSC (內政部國土測繪中心) PHOTO2 orthophoto: free under the Open
   /// Government Data License (attribution required), no token, Taiwan only.
@@ -169,6 +181,47 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
     _loadGoogle();
     _offsets.addListener(_loadOffset);
     _loadOffset();
+    // The opening view (a fit raises no event) belongs to the shared camera
+    // too.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _writeCamera();
+    });
+  }
+
+  /// Records where this map is looking, for the schematic map to open on.
+  void _writeCamera() {
+    final shared = widget.camera;
+    if (shared == null) return;
+    final MapCamera now;
+    try {
+      now = _mapController.camera;
+    } catch (_) {
+      // Not laid out yet.
+      return;
+    }
+    shared
+      ..center = anchor.latLngToWorld(now.center)
+      ..scale = MapViewCamera.scaleOfZoom(now.zoom, now.center.latitude);
+  }
+
+  /// Where to open, from the shared camera: its place (kept inside [bounds],
+  /// which the map's centre may not leave) and size. Null: frame the content.
+  ({LatLng center, double zoom})? _sharedOpening(LatLngBounds bounds) {
+    final shared = widget.camera;
+    final scale = shared?.scale;
+    final centre = shared?.center;
+    if (scale == null || centre == null) return null;
+    final at = widget.followRobot ? _ll(mission.robotPosition) : _ll(centre);
+    final inside = LatLng(
+      at.latitude.clamp(bounds.south, bounds.north).toDouble(),
+      at.longitude.clamp(bounds.west, bounds.east).toDouble(),
+    );
+    return (
+      center: inside,
+      zoom: MapViewCamera.zoomOfScale(scale, inside.latitude)
+          .clamp(SatelliteMapView.minZoom, SatelliteMapView.maxZoom)
+          .toDouble(),
+    );
   }
 
   /// The site's saved alignment; again whenever one is saved.
@@ -286,6 +339,7 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
   }
 
   void _onMapEvent(MapEvent event) {
+    _writeCamera();
     switch (event) {
       case MapEventMoveStart(source: MapEventSource.multiFingerGestureStart) ||
           MapEventDoubleTapZoomStart():
@@ -513,6 +567,7 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
     _syncLayers();
 
     final bounds = _contentBounds();
+    final opening = _sharedOpening(bounds);
     final google = _google;
     _syncAiTiles(bounds);
     final aiOverlays = [
@@ -530,19 +585,24 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
         // Open framed on the content; keep the map CENTRE locked to it (so
         // you can't pan away to arbitrary places), but allow zooming out to
         // see the surroundings (z16–z22, ~6 levels).
-        initialCameraFit: CameraFit.bounds(
-          bounds: widget.followRobot
-              ? _contentBounds(centreOnRobot: true)
-              : bounds,
-          padding: const EdgeInsets.all(24),
-        ),
+        // …unless the page was already looking somewhere (the schematic map
+        // was up): then open on that, so switching maps does not jump.
+        initialCameraFit: opening != null
+            ? null
+            : CameraFit.bounds(
+                bounds: widget.followRobot
+                    ? _contentBounds(centreOnRobot: true)
+                    : bounds,
+                padding: const EdgeInsets.all(24),
+              ),
         // Until the fit applies, start inside the constraint (the
         // controller asserts this when it is handed the options).
-        initialCenter: bounds.center,
+        initialCenter: opening?.center ?? bounds.center,
+        initialZoom: opening?.zoom ?? 13,
         cameraConstraint: CameraConstraint.containCenter(bounds: bounds),
         onMapEvent: _onMapEvent,
-        minZoom: 16,
-        maxZoom: 22,
+        minZoom: SatelliteMapView.minZoom,
+        maxZoom: SatelliteMapView.maxZoom,
         // Enable all gestures incl. mouse-wheel / trackpad zoom (works in
         // the desktop-run iOS sim); rotation off to keep north up. Locked
         // to zoom-only while driving.
@@ -551,6 +611,12 @@ class _SatelliteMapViewState extends State<SatelliteMapView> {
               ? InteractiveFlag.pinchZoom |
                     InteractiveFlag.doubleTapZoom |
                     InteractiveFlag.scrollWheelZoom
+              // While following, a pinch only zooms (about the robot in the
+              // middle); it does not also slide the map off it.
+              : widget.followRobot
+              ? InteractiveFlag.all &
+                    ~InteractiveFlag.rotate &
+                    ~InteractiveFlag.pinchMove
               : InteractiveFlag.all & ~InteractiveFlag.rotate,
         ),
       ),

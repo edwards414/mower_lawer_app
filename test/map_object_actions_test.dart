@@ -148,6 +148,60 @@ void main() {
 
     await h.dispose(tester);
   });
+  testWidgets('a dragged map stays put until 回到割草機 is pressed', (
+    tester,
+  ) async {
+    final h = await _Harness.pump(tester);
+    Offset robot() => h.screen(h.mission.robotPosition);
+    const centre = Offset(195, 422);
+    expect(find.byTooltip('回到割草機'), findsNothing);
+    expect(robot(), offsetMoreOrLessEquals(centre, epsilon: 0.5));
+
+    await tester.dragFrom(const Offset(200, 380), const Offset(90, 40));
+    await tester.pump();
+    expect(robot(), isNot(offsetMoreOrLessEquals(centre, epsilon: 20)));
+    expect(find.byTooltip('回到割草機'), findsOneWidget);
+
+    // It never goes back on its own: the lawn stays where it was dragged to
+    // (the demo robot keeps moving across it).
+    final corner = h.screen(const MapPoint(0, 0));
+    await tester.pump(const Duration(seconds: 30));
+    expect(
+      h.screen(const MapPoint(0, 0)),
+      offsetMoreOrLessEquals(corner, epsilon: 0.5),
+    );
+
+    await tester.tap(find.byTooltip('回到割草機'));
+    await tester.pump();
+    await tester.pump();
+    expect(robot(), offsetMoreOrLessEquals(centre, epsilon: 0.5));
+    expect(find.byTooltip('回到割草機'), findsNothing);
+
+    await h.dispose(tester);
+  });
+
+  testWidgets('starting to draw does not move or resize the map', (
+    tester,
+  ) async {
+    final h = await _Harness.pump(tester);
+    final before = h.screen(const MapPoint(0, 0));
+    final beforeFar = h.screen(const MapPoint(4, 4));
+
+    expect(h.mission.startDraw('risk'), isNull);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(
+      h.screen(const MapPoint(0, 0)),
+      offsetMoreOrLessEquals(before, epsilon: 0.5),
+    );
+    expect(
+      h.screen(const MapPoint(4, 4)),
+      offsetMoreOrLessEquals(beforeFar, epsilon: 0.5),
+    );
+
+    await h.dispose(tester);
+  });
 }
 
 class _Harness {

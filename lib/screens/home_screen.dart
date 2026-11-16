@@ -7,6 +7,7 @@ import '../utils/app_icons.dart';
 import '../utils/app_style.dart';
 import 'package:provider/provider.dart';
 
+import '../models/map_camera.dart';
 import '../providers/mission_mock_provider.dart';
 import '../providers/phone_location_provider.dart';
 import '../providers/robot_fleet_provider.dart';
@@ -387,10 +388,15 @@ class _MissionMapScreenState extends State<MissionMapScreen>
   /// zone it made.
   TaskPhase? _lastPhase;
 
-  /// Keep the map centred on the robot. Always the default, with no button:
-  /// dragging the satellite map pauses it, and it picks up again a few
-  /// seconds after the last drag, or at once when the sticks drive.
+  /// Keep the map centred on the robot. The default. Taking the map (a drag,
+  /// drawing, adjusting vertices) ends it, and the map then stays where it
+  /// was put: it comes back only by 回到割草機 or by driving with the sticks,
+  /// never on its own.
   bool _followRobot = true;
+
+  /// Where the page is looking, shared by the schematic and the satellite
+  /// map so switching between them keeps the place and the size.
+  final _camera = MapViewCamera();
 
   /// The joysticks are sending motion: the map keeps the robot in view and
   /// holds still under the thumbs.
@@ -663,16 +669,14 @@ class _MissionMapScreenState extends State<MissionMapScreen>
     // Snackbars clear the sticks and the buttons over them.
     _snackBottom = sticksHidden ? 12 : sticksTop + 70;
 
-    // Paused while drawing / editing vertices so the map holds still under
-    // the finger. Driving always follows: the robot is what you steer.
-    final following =
-        (_followRobot || _sticksMoving) &&
-        mission.shouldShowRobot &&
-        !mission.drawMode &&
-        !mission.editVertexMode;
-
-    // Draw and vertex-edit both drag points of the shape in hand.
+    // Draw and vertex-edit both drag points of the shape in hand, and take
+    // the map: it holds still under the finger, and stays there afterwards.
     final shaping = mission.drawMode || mission.editVertexMode;
+    if (shaping) _followRobot = false;
+    // Driving always follows: the robot is what you steer.
+    final following =
+        (_followRobot || _sticksMoving) && mission.shouldShowRobot && !shaping;
+
     // An object picked on the map gets its actions (調整, 刪除) right there,
     // unless another flow owns the map.
     final selectedName =
@@ -691,34 +695,6 @@ class _MissionMapScreenState extends State<MissionMapScreen>
     return Scaffold(
       body: GestureDetector(
         onLongPressStart: _onLongPress,
-        // Pan handlers exist ONLY while drawing or editing vertices; otherwise
-        // they are null so the PanGestureRecognizer doesn't compete with the
-        // map's own gestures.
-        onPanStart: shaping
-            ? (details) => setState(
-                () => _dragVertexIndex = _vertexAt(details.localPosition),
-              )
-            : null,
-        onPanUpdate: shaping
-            ? (details) {
-                if (_dragVertexIndex == null) return;
-                final proj = _canvasKey.currentState?.lastProjection;
-                if (proj == null) return;
-                final world = proj.unproject(details.localPosition);
-                if (mission.drawMode) {
-                  mission.moveDraftVertex(_dragVertexIndex!, world);
-                } else {
-                  mission.moveVertex(_dragVertexIndex!, world);
-                }
-              }
-            : null,
-        onPanEnd: shaping
-            ? (_) {
-                if (_dragVertexIndex != null) {
-                  setState(() => _dragVertexIndex = null);
-                }
-              }
-            : null,
         onTapUp: (details) {
           // Drawing takes precedence over robot-popup dismissal / selection,
           // so the first tap after entering draw mode drops a vertex.
@@ -811,7 +787,7 @@ class _MissionMapScreenState extends State<MissionMapScreen>
                     followRobot: following,
                     onFollowRobotChanged: (on) =>
                         setState(() => _followRobot = on),
-                    resumeFollowAfter: const Duration(seconds: 8),
+                    camera: _camera,
                     lockPan: _sticksMoving,
                     bottomInset: sticksHidden ? 0 : sticksTop,
                     animateMarker: !_sticksMoving,
@@ -833,6 +809,30 @@ class _MissionMapScreenState extends State<MissionMapScreen>
                     phonePosition: phoneWorld,
                     phoneAccuracyM: phone.accuracyM,
                     centerOn: following ? mission.robotPosition : null,
+                    // Two fingers zoom, one pans; the size stays as left.
+                    camera: _camera,
+                    lockPan: _sticksMoving,
+                    onUserPan: () => setState(() => _followRobot = false),
+                    // While shaping, a drag that starts on a point moves it;
+                    // any other drag still pans the map.
+                    onGrabStart: shaping
+                        ? (local) {
+                            _dragVertexIndex = _vertexAt(local);
+                            return _dragVertexIndex != null;
+                          }
+                        : null,
+                    onGrabMove: (local) {
+                      final index = _dragVertexIndex;
+                      final proj = _canvasKey.currentState?.lastProjection;
+                      if (index == null || proj == null) return;
+                      final world = proj.unproject(local);
+                      if (mission.drawMode) {
+                        mission.moveDraftVertex(index, world);
+                      } else {
+                        mission.moveVertex(index, world);
+                      }
+                    },
+                    onGrabEnd: () => _dragVertexIndex = null,
                   ),
                 ),
               ),
@@ -894,6 +894,15 @@ class _MissionMapScreenState extends State<MissionMapScreen>
                       _cameraExpanded = false;
                     }),
                   ),
+                  // Only while the map has been taken off the robot: the way
+                  // back to following it.
+                  if (!_followRobot && mission.shouldShowRobot && !shaping)
+                    _MapButton(
+                      icon: AppIcons.locateFixed,
+                      tooltip: '回到割草機',
+                      iconColor: AppStyle.green,
+                      onTap: () => setState(() => _followRobot = true),
+                    ),
                   _MapButton(
                     icon: AppIcons.plus,
                     tooltip: '新增物件',
