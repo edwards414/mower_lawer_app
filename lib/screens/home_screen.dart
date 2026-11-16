@@ -16,6 +16,7 @@ import '../widgets/add_object_sheet.dart';
 import '../widgets/front_camera_pip.dart';
 import '../widgets/manual_control_overlay.dart';
 import '../widgets/manual_speed_setting.dart';
+import '../widgets/map_objects_sheet.dart';
 import '../widgets/mission_map_canvas.dart';
 import '../widgets/map_task_controls.dart';
 import '../services/google_map_tiles.dart';
@@ -522,7 +523,9 @@ class _MissionMapScreenState extends State<MissionMapScreen>
   int? _vertexAt(Offset local, {double radius = 30.0}) {
     final proj = _canvasKey.currentState?.lastProjection;
     if (proj == null) return null;
-    final pts = context.read<MissionMockProvider>().editPolygon;
+    final mission = context.read<MissionMockProvider>();
+    // The shape in hand: the one being drawn, else the one being edited.
+    final pts = mission.drawMode ? mission.draftPolygon : mission.editPolygon;
     int? nearest;
     var best = radius;
     for (var i = 0; i < pts.length; i++) {
@@ -558,6 +561,25 @@ class _MissionMapScreenState extends State<MissionMapScreen>
       context.read<RobotFleetProvider>().selectRobot(nearest);
       setState(() => _popupOffset = positions[nearest]);
     }
+  }
+
+  /// Saves the shape being drawn; a refusal is said out loud (the draft stays
+  /// on the map to fix and retry).
+  Future<void> _commitDraw() async {
+    final mission = context.read<MissionMockProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    final label = MissionMockProvider.objectKindLabel(mission.drawKind);
+    final error = await mission.commitDraw();
+    if (!mounted) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(error == null ? '已新增$label' : '沒有儲存$label：$error'),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.fromLTRB(16, 0, 16, _snackBottom),
+        ),
+      );
   }
 
   /// The one way to add a zone, no-go zone or channel. Recording starts on
@@ -649,6 +671,18 @@ class _MissionMapScreenState extends State<MissionMapScreen>
         !mission.drawMode &&
         !mission.editVertexMode;
 
+    // Draw and vertex-edit both drag points of the shape in hand.
+    final shaping = mission.drawMode || mission.editVertexMode;
+    // An object picked on the map gets its actions (調整, 刪除) right there,
+    // unless another flow owns the map.
+    final selectedName =
+        (!shaping &&
+            widget.active &&
+            mission.recordingType == null &&
+            !mission.hasPendingRecordSave)
+        ? mission.selectedObjectName
+        : null;
+
     final selectedRobot = fleet.selectedRobot;
     final popupOrigin = (_popupOffset != null && selectedRobot != null)
         ? _clampedPopupOrigin(_popupOffset!, size)
@@ -657,25 +691,28 @@ class _MissionMapScreenState extends State<MissionMapScreen>
     return Scaffold(
       body: GestureDetector(
         onLongPressStart: _onLongPress,
-        // Pan handlers exist ONLY in vertex-edit mode; otherwise they are null
-        // so the PanGestureRecognizer doesn't compete with the panel's scroll.
-        onPanStart: mission.editVertexMode
+        // Pan handlers exist ONLY while drawing or editing vertices; otherwise
+        // they are null so the PanGestureRecognizer doesn't compete with the
+        // map's own gestures.
+        onPanStart: shaping
             ? (details) => setState(
                 () => _dragVertexIndex = _vertexAt(details.localPosition),
               )
             : null,
-        onPanUpdate: mission.editVertexMode
+        onPanUpdate: shaping
             ? (details) {
                 if (_dragVertexIndex == null) return;
                 final proj = _canvasKey.currentState?.lastProjection;
                 if (proj == null) return;
-                mission.moveVertex(
-                  _dragVertexIndex!,
-                  proj.unproject(details.localPosition),
-                );
+                final world = proj.unproject(details.localPosition);
+                if (mission.drawMode) {
+                  mission.moveDraftVertex(_dragVertexIndex!, world);
+                } else {
+                  mission.moveVertex(_dragVertexIndex!, world);
+                }
               }
             : null,
-        onPanEnd: mission.editVertexMode
+        onPanEnd: shaping
             ? (_) {
                 if (_dragVertexIndex != null) {
                   setState(() => _dragVertexIndex = null);
@@ -690,9 +727,18 @@ class _MissionMapScreenState extends State<MissionMapScreen>
               return;
             }
             final proj = _canvasKey.currentState?.lastProjection;
-            if (proj != null) {
-              mission.addDraftVertex(proj.unproject(details.localPosition));
+            if (proj == null) return;
+            // Tapping the start point closes an area, the way one finishes a
+            // shape drawn on paper.
+            final draft = mission.draftPolygon;
+            if (mission.drawClosesShape &&
+                draft.length >= mission.drawMinPoints &&
+                (proj.project(draft.first) - details.localPosition).distance <
+                    26) {
+              unawaited(_commitDraw());
+              return;
             }
+            mission.addDraftVertex(proj.unproject(details.localPosition));
             return;
           }
           // In vertex-edit a tap must not re-run selection; only dismiss a
@@ -868,10 +914,12 @@ class _MissionMapScreenState extends State<MissionMapScreen>
                 right: 12,
                 bottom: 12,
                 child: _DrawControlBar(
+                  kind: mission.drawKind,
                   count: mission.draftPolygon.length,
+                  minPoints: mission.drawMinPoints,
                   onUndo: mission.undoDraftVertex,
                   onCancel: mission.cancelDraw,
-                  onCommit: mission.commitDraw,
+                  onCommit: _commitDraw,
                 ),
               ),
             if (mission.editVertexMode)
@@ -921,6 +969,45 @@ class _MissionMapScreenState extends State<MissionMapScreen>
                   snackBottom: _snackBottom,
                 ),
               ),
+            // The picked object's actions: above the sticks, and above the
+            // zone's task buttons when those are up.
+            if (selectedName != null)
+              Positioned(
+                left: math.max(12.0, media.padding.left),
+                right: math.max(12.0, media.padding.right),
+                bottom: sticksHidden
+                    ? 12
+                    : sticksTop + (controlsShown ? 70 : 8),
+                child: _SelectionBar(
+                  kind: mission.selectedObjectKind!,
+                  name: selectedName,
+                  busy: mission.replanning,
+                  onEdit: () {
+                    haltDriving();
+                    mission.startVertexEdit(
+                      mission.selectedObjectKind!,
+                      mission.selectedObjectId!,
+                    );
+                  },
+                  onDelete: () {
+                    haltDriving();
+                    unawaited(
+                      confirmDeleteObject(
+                        context,
+                        mission,
+                        mission.selectedObjectKind!,
+                        mission.selectedObjectId!,
+                        selectedName,
+                        snackBottom: _snackBottom,
+                      ),
+                    );
+                  },
+                  onClose: () {
+                    mission.clearObjectSelection();
+                    if (_zoneFocused) setState(() => _zoneFocused = false);
+                  },
+                ),
+              ),
             // A recording's time and points, under the robot status.
             Positioned(
               top: media.padding.top + 56,
@@ -945,33 +1032,26 @@ class _MissionMapScreenState extends State<MissionMapScreen>
   }
 }
 
-class _DrawControlBar extends StatelessWidget {
-  const _DrawControlBar({
-    required this.count,
-    required this.onUndo,
-    required this.onCancel,
-    required this.onCommit,
-  });
+/// Colour and icon a map object kind is shown with everywhere.
+({Color color, IconData icon}) _kindStyle(String kind) => switch (kind) {
+  'zone' => (color: const Color(0xFF35B861), icon: AppIcons.squareDashed),
+  'channel' => (color: const Color(0xFF25AFC6), icon: AppIcons.spline),
+  _ => (color: const Color(0xFFE55353), icon: AppIcons.ban),
+};
 
-  final int count;
-  final VoidCallback onUndo;
-  final VoidCallback onCancel;
-  final VoidCallback onCommit;
+/// A white card on a soft shadow, like the map's other panels, that swallows
+/// taps (incl. its rounded-corner gaps) so they never reach the map behind.
+class _MapBar extends StatelessWidget {
+  const _MapBar({required this.padding, required this.child});
+
+  final EdgeInsets padding;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    final canSave = count >= 3;
-    final compact = TextButton.styleFrom(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      minimumSize: Size.zero,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-    // Swallow taps on the bar (incl. rounded-corner gaps) so they don't drop
-    // a map vertex behind it.
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTapUp: (_) {},
-      // A white card on a soft shadow, like the map's other panels.
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: Colors.white,
@@ -981,56 +1061,206 @@ class _DrawControlBar extends StatelessWidget {
         child: Material(
           type: MaterialType.transparency,
           borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            child: Row(
-              children: [
-                const Icon(
-                  AppIcons.mapPinPen,
-                  color: Color(0xFFE5852F),
-                  size: 18,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '點地圖加頂點 · $count 點',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppStyle.ink,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                TextButton(
-                  onPressed: count > 0 ? onUndo : null,
-                  style: compact.copyWith(
-                    foregroundColor: WidgetStateProperty.all(AppStyle.ink),
-                  ),
-                  child: const Text('復原'),
-                ),
-                TextButton(
-                  onPressed: onCancel,
-                  style: compact.copyWith(
-                    foregroundColor: WidgetStateProperty.all(AppStyle.muted),
-                  ),
-                  child: const Text('取消'),
-                ),
-                const SizedBox(width: 4),
-                FilledButton(
-                  onPressed: canSave ? onCommit : null,
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: const Text('閉合儲存'),
-                ),
-              ],
-            ),
+          child: Padding(padding: padding, child: child),
+        ),
+      ),
+    );
+  }
+}
+
+/// A bar's two lines: what is in hand, and the one thing to do next.
+class _BarTitle extends StatelessWidget {
+  const _BarTitle({required this.title, required this.hint});
+
+  final String title;
+  final String hint;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: AppStyle.ink,
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
           ),
         ),
+        Text(
+          hint,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: AppStyle.muted,
+            fontWeight: FontWeight.w600,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// What can be done with the object selected on the map, right where it was
+/// tapped: adjust its points, delete it, or let go of it.
+class _SelectionBar extends StatelessWidget {
+  const _SelectionBar({
+    required this.kind,
+    required this.name,
+    required this.busy,
+    required this.onEdit,
+    required this.onDelete,
+    required this.onClose,
+  });
+
+  final String kind;
+  final String name;
+
+  /// A re-plan is running: the object cannot be changed until it ends.
+  final bool busy;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = _kindStyle(kind);
+    final action = TextButton.styleFrom(
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      minimumSize: const Size(0, 40),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    return _MapBar(
+      padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
+      child: Row(
+        children: [
+          Icon(style.icon, color: style.color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _BarTitle(
+              title: name,
+              hint: busy
+                  ? '重新規劃中…'
+                  : '已選取${MissionMockProvider.objectKindLabel(kind)}',
+            ),
+          ),
+          TextButton.icon(
+            onPressed: busy ? null : onEdit,
+            style: action.copyWith(
+              foregroundColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.disabled)
+                    ? AppStyle.muted.withValues(alpha: 0.5)
+                    : AppStyle.ink,
+              ),
+            ),
+            icon: const Icon(AppIcons.move, size: 16),
+            label: const Text('調整'),
+          ),
+          TextButton.icon(
+            onPressed: busy ? null : onDelete,
+            style: action.copyWith(
+              foregroundColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.disabled)
+                    ? AppStyle.muted.withValues(alpha: 0.5)
+                    : AppStyle.danger,
+              ),
+            ),
+            icon: const Icon(AppIcons.trash2, size: 16),
+            label: const Text('刪除'),
+          ),
+          IconButton(
+            onPressed: onClose,
+            tooltip: '取消選取',
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(AppIcons.x, color: AppStyle.muted, size: 18),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DrawControlBar extends StatelessWidget {
+  const _DrawControlBar({
+    required this.kind,
+    required this.count,
+    required this.minPoints,
+    required this.onUndo,
+    required this.onCancel,
+    required this.onCommit,
+  });
+
+  final String kind;
+  final int count;
+  final int minPoints;
+  final VoidCallback onUndo;
+  final VoidCallback onCancel;
+  final VoidCallback onCommit;
+
+  @override
+  Widget build(BuildContext context) {
+    final canSave = count >= minPoints;
+    final closes = kind != 'channel';
+    final style = _kindStyle(kind);
+    // The one thing to do next, so the bar reads as a step, not a status.
+    final hint = count == 0
+        ? '點地圖放第一個點'
+        : !canSave
+        ? '再點 ${minPoints - count} 點'
+        : closes
+        ? '點起點閉合，或拖曳點修正'
+        : '繼續點，或按完成';
+    final compact = TextButton.styleFrom(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      minimumSize: const Size(0, 40),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    return _MapBar(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: Row(
+        children: [
+          Icon(style.icon, color: style.color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _BarTitle(
+              title: '畫${MissionMockProvider.objectKindLabel(kind)} · $count 點',
+              hint: hint,
+            ),
+          ),
+          TextButton(
+            onPressed: count > 0 ? onUndo : null,
+            style: compact.copyWith(
+              foregroundColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.disabled)
+                    ? AppStyle.muted.withValues(alpha: 0.5)
+                    : AppStyle.ink,
+              ),
+            ),
+            child: const Text('復原'),
+          ),
+          TextButton(
+            onPressed: onCancel,
+            style: compact.copyWith(
+              foregroundColor: WidgetStateProperty.all(AppStyle.muted),
+            ),
+            child: const Text('取消'),
+          ),
+          const SizedBox(width: 4),
+          FilledButton(
+            onPressed: canSave ? onCommit : null,
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              minimumSize: const Size(0, 40),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: Text(closes ? '閉合儲存' : '完成儲存'),
+          ),
+        ],
       ),
     );
   }

@@ -109,7 +109,7 @@ void main() {
 
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('工作區'));
+    await tester.tap(find.text('工作區').first);
     await tester.pumpAndSettle();
 
     expect(provider.recordingType, RecordObjectType.zone);
@@ -144,7 +144,7 @@ void main() {
 
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('禁入區'));
+    await tester.tap(find.text('禁入區').first);
     await tester.pumpAndSettle();
 
     expect(find.textContaining('無法開始記錄'), findsOneWidget);

@@ -843,19 +843,34 @@ class _MissionMapPainter extends CustomPainter {
     }
   }
 
-  /// In-progress hand-drawn polygon (P2): growing line + vertex dots, with a
-  /// faint closing edge back to the start once it is a polygon.
+  /// The shape being tapped out (P2), in its kind's colour: the line so far
+  /// and its points, plus — for an area — a faint fill and closing edge, and a
+  /// ringed start point that closes the shape when tapped.
   void _drawDraft(
     Canvas canvas,
     Offset Function(MapPoint point) project,
   ) {
     final pts = mission.draftPolygon;
     if (pts.isEmpty) return;
-    const c = Color(0xFFE55353);
+    final c = switch (mission.drawKind) {
+      'zone' => const Color(0xFF2DA653),
+      'channel' => const Color(0xFF25AFC6),
+      _ => const Color(0xFFE55353),
+    };
+    final closes = mission.drawClosesShape;
+    if (closes && pts.length >= 3) {
+      final fill = Path()..moveTo(project(pts.first).dx, project(pts.first).dy);
+      for (final p in pts.skip(1)) {
+        final o = project(p);
+        fill.lineTo(o.dx, o.dy);
+      }
+      fill.close();
+      canvas.drawPath(fill, Paint()..color = c.withValues(alpha: 0.14));
+    }
     if (pts.length >= 2) {
       _drawPolyline(canvas, pts, project, color: c, strokeWidth: 4);
     }
-    if (pts.length >= 3) {
+    if (closes && pts.length >= 3) {
       final close = Path()
         ..moveTo(project(pts.last).dx, project(pts.last).dy)
         ..lineTo(project(pts.first).dx, project(pts.first).dy);
@@ -869,25 +884,34 @@ class _MissionMapPainter extends CustomPainter {
     }
     for (final v in pts) {
       final o = project(v);
-      canvas.drawCircle(o, 5, Paint()..color = Colors.white);
+      canvas.drawCircle(o, 6, Paint()..color = Colors.white);
       canvas.drawCircle(
         o,
-        5,
+        6,
         Paint()
           ..color = c
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 2,
+          ..strokeWidth = 2.5,
       );
     }
-    // Emphasise the start vertex.
-    canvas.drawCircle(
-      project(pts.first),
-      8,
-      Paint()
-        ..color = c
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5,
-    );
+    if (closes) {
+      // The start point: tap it to close the shape once there are 3 points.
+      final ready = pts.length >= 3;
+      canvas.drawCircle(
+        project(pts.first),
+        ready ? 12 : 9,
+        Paint()
+          ..color = c
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = ready ? 3 : 2.5,
+      );
+      if (ready) {
+        canvas.drawCircle(project(pts.first), 4, Paint()..color = c);
+      }
+    } else {
+      // A channel has a direction: mark where it currently ends.
+      canvas.drawCircle(project(pts.last), 4, Paint()..color = c);
+    }
   }
 
   /// Bright outline + vertex dots over a selected object.
